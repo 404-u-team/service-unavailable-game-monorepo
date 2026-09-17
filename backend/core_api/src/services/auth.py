@@ -9,7 +9,10 @@ from src.repositories.users import User, UserRepository
 
 
 class AuthService:
-    """Auth сервис"""
+    """
+    Auth сервис
+    Отвечает за регистрацию, авторизацию, создание jwt токенов, обновление токенов
+    """
 
     password_hash = PasswordHash.recommended()
 
@@ -89,9 +92,9 @@ class AuthService:
         try:
             payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         except jwt.InvalidTokenError as error:
-            raise ValueError("Invalid refresh token") from error
+            raise ValueError("Неккоректный refresh_token") from error
         if payload.get("type") != "refresh" or not payload.get("sub"):
-            raise ValueError("Invalid refresh token")
+            raise ValueError("Неккоректный refresh_token")
         return self.create_tokens(UUID(payload["sub"]))
 
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -14,10 +15,6 @@ class LoginRequest(BaseModel):
 	password: str
 
 
-class RefreshRequest(BaseModel):
-	refresh_token: str
-
-
 class TokenResponse(BaseModel):
 	access_token: str
 	refresh_token: str
@@ -27,3 +24,6 @@ class UserResponse(BaseModel):
 	id: UUID
 	login: str
 	email: EmailStr
+	balance: int
+	created_at: datetime
+	updated_at: datetime

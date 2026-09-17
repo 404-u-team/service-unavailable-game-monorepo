@@ -32,7 +32,7 @@ class UserRepository:
                         """
                         INSERT INTO users (login, email, password_hash)
                         VALUES ($1, $2, $3)
-                        RETURNING id, login, email, password_hash
+                        RETURNING id, login, email, password_hash, balance, created_at, updated_at
                         """,
                         login,
                         email,
@@ -57,7 +57,8 @@ class UserRepository:
         """
         async with self.pool.acquire() as connection:
             row = await connection.fetchrow(
-                "SELECT id, login, email, password_hash FROM users WHERE login = $1",
+                "SELECT id, login, email, password_hash, balance, created_at, updated_at "
+                "FROM users WHERE login = $1",
                 login,
             )
         return User(*row) if row else None
