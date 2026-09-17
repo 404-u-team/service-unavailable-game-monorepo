@@ -3,6 +3,7 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 
@@ -12,3 +13,6 @@ class User:
     login: str
     email: str
     password_hash: str
+    balance: int
+    created_at: datetime
+    updated_at: datetime
