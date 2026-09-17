@@ -56,7 +56,7 @@ class AuthService:
         """
         user = await self.repository.find_by_login(login)
         if user is None or not self.password_hash.verify(password, user.password_hash):
-            raise ValueError("Invalid login or password")
+            raise ValueError("Неккоректный логин или пароль")
 
         tokens = self.create_tokens(user_id=user.id)
         return user, tokens
@@ -87,7 +87,7 @@ class AuthService:
             dict[str, str]: Новая пара access и refresh токенов.
 
         Raises:
-            ValueError: Токен недействителен или не является refresh-токеном.
+            ValueError: Неккоректный refresh_token
         """
         try:
             payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
