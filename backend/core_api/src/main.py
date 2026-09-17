@@ -4,6 +4,7 @@ import asyncpg
 from fastapi import FastAPI
 
 from src.api.routers.auth import router as auth_router
+from src.api.routers.health import router as health_router
 from src.api.routers import dependencies
 from src.config import settings
 
@@ -23,3 +24,4 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Core API", lifespan=lifespan)
 
 app.include_router(auth_router, prefix="/api")
+app.include_router(health_router, prefix="/api")
