@@ -8,5 +8,5 @@ pool: asyncpg.Pool | None = None
 
 async def get_connection_pool() -> AsyncIterator[asyncpg.Pool]:
     if pool is None:
-        raise RuntimeError("Database pool is not initialized")
+        raise RuntimeError("Пул подключений к БД не инициализирован")
     yield pool
