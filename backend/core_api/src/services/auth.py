@@ -5,6 +5,7 @@ import jwt
 from pwdlib import PasswordHash
 
 from src.config import settings
+from src.logging.wrappers import log_exception
 from src.repositories.users import User, UserRepository
 
 
@@ -19,8 +20,9 @@ class AuthService:
     def __init__(self, repository: UserRepository) -> None:
         self.repository = repository
 
-
-    async def register(self, login: str, email: str, password: str) -> tuple[User, dict]:
+    async def register(
+        self, login: str, email: str, password: str
+    ) -> tuple[User, dict]:
         """
         Регистрация пользователя
 
@@ -35,11 +37,12 @@ class AuthService:
         Raises:
             ValueError: Пользователь с таким логином или почтой уже существует.
         """
-        created_user = await self.repository.create(login, email, self.password_hash.hash(password))
+        created_user = await self.repository.create(
+            login, email, self.password_hash.hash(password)
+        )
         tokens = self.create_tokens(user_id=created_user.id)
         return created_user, tokens
 
-    
     async def authenticate(self, login: str, password: str) -> tuple[User, dict]:
         """
         Авторизация пользователя
@@ -72,8 +75,14 @@ class AuthService:
             dict[str, str]: Словарь с access и refresh токенами.
         """
         return {
-            "access_token": self._create_token(user_id, "access", timedelta(minutes=settings.access_token_expire_minutes)),
-            "refresh_token": self._create_token(user_id, "refresh", timedelta(days=settings.refresh_token_expire_days)),
+            "access_token": self._create_token(
+                user_id,
+                "access",
+                timedelta(minutes=settings.access_token_expire_minutes),
+            ),
+            "refresh_token": self._create_token(
+                user_id, "refresh", timedelta(days=settings.refresh_token_expire_days)
+            ),
         }
 
     def refresh_tokens(self, token: str) -> dict[str, str]:
@@ -90,13 +99,14 @@ class AuthService:
             ValueError: Неккоректный refresh_token
         """
         try:
-            payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+            payload = jwt.decode(
+                token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+            )
         except jwt.InvalidTokenError as error:
             raise ValueError("Неккоректный refresh_token") from error
         if payload.get("type") != "refresh" or not payload.get("sub"):
             raise ValueError("Неккоректный refresh_token")
         return self.create_tokens(UUID(payload["sub"]))
-
 
     @staticmethod
     def _create_token(user_id: UUID, token_type: str, lifetime: timedelta) -> str:
@@ -113,7 +123,13 @@ class AuthService:
         """
         now = datetime.now(UTC)
         return jwt.encode(
-            {"sub": str(user_id), "type": token_type, "iat": now, "exp": now + lifetime, "jti": str(uuid4())},
+            {
+                "sub": str(user_id),
+                "type": token_type,
+                "iat": now,
+                "exp": now + lifetime,
+                "jti": str(uuid4()),
+            },
             settings.jwt_secret,
             algorithm=settings.jwt_algorithm,
         )
