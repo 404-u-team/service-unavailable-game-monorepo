@@ -1,21 +1,36 @@
 <script lang="ts">
   import { t } from '../i18n.svelte';
   import { clock, num } from '../format';
-  let { title, values, ticks, secondary = [] }: { title: string; values: number[]; ticks: number[]; secondary?: number[] } = $props();
-  const data = $derived([...values, ...secondary]);
+  let { title, values, ticks, secondary = [], emptyText, format = num }: {
+    title: string; values: (number | null)[]; ticks: number[]; secondary?: number[];
+    emptyText?: string; format?: (value: number) => string;
+  } = $props();
+  const data = $derived([...values.filter((value) => value !== null), ...secondary]);
   const low = $derived(data.length ? Math.min(...data) : 0);
   const high = $derived(data.length ? Math.max(...data) : 0);
   const padding = $derived(Math.max((high - low) * .08, Math.abs(high) * .004, 0.1));
   const minimum = $derived(low < 0 ? low - padding : Math.max(0, low - padding));
   const maximum = $derived(high + padding);
   const point = (value: number, index: number) => `${values.length === 1 ? 320 : 60 + index / Math.max(1, values.length - 1) * 575},${170 - (value - minimum) / (maximum - minimum) * 151}`;
+  const series = $derived.by(() => {
+    const spans: string[][] = [];
+    let contiguous = false;
+    values.forEach((value, index) => {
+      if (value === null) { contiguous = false; return; }
+      if (!contiguous) spans.push([]);
+      spans[spans.length - 1].push(point(value, index));
+      contiguous = true;
+    });
+    return spans;
+  });
 </script>
 
-{#if values.length}
-  <svg viewBox="0 0 650 205" role="img" aria-label={t("{0}, {1} samples. Latest value {2}.", [title, values.length, num(values.at(-1) ?? 0)])}>
+{#if data.length}
+  {@const recorded = values.filter((value) => value !== null)}
+  <svg viewBox="0 0 650 205" role="img" aria-label={t("{0}, {1} samples. Latest value {2}.", [title, recorded.length, format(recorded.at(-1) ?? 0)])}>
     {#each [0, .25, .5, .75, 1] as item}
       <line x1="60" x2="635" y1={170 - item * 151} y2={170 - item * 151} />
-      <text x="51" y={174 - item * 151} text-anchor="end">{num(minimum + item * (maximum - minimum))}</text>
+      <text x="51" y={174 - item * 151} text-anchor="end">{format(minimum + item * (maximum - minimum))}</text>
     {/each}
     {#each [0, .25, .5, .75, 1] as item}
       <line x1={60 + item * 575} x2={60 + item * 575} y1="19" y2="170" />
@@ -23,12 +38,16 @@
         <text x={60 + item * 575} y="192" text-anchor={item === 1 ? 'end' : 'middle'}>{clock(ticks[Math.floor(item * (ticks.length - 1))] ?? 0)}</text>
       {/if}
     {/each}
-    {#if values.length === 1}<circle cx={point(values[0], 0).split(',')[0]} cy={point(values[0], 0).split(',')[1]} r="4" />{/if}
     {#if secondary.length}<polyline class="secondary" points={secondary.map(point).join(' ')} />{/if}
-    <polyline points={values.map(point).join(' ')} />
+    {#each series as span}
+      {#if span.length === 1}
+        {@const [x, y] = span[0].split(',')}
+        <circle cx={x} cy={y} r="4" />
+      {:else}<polyline points={span.join(' ')} />{/if}
+    {/each}
   </svg>
 {:else}
-  <div class="chart-empty grid-bg"><p class="muted">{t("Install Monitoring with Service history to view this chart.")}</p></div>
+  <div class="chart-empty grid-bg"><p class="muted">{emptyText ?? t("Install Monitoring with Service history to view this chart.")}</p></div>
 {/if}
 
 <style>

@@ -78,6 +78,7 @@ class SimulationTests(TestCase):
         state = game.model_dump(mode="json")
         state.pop("diagram")
         state["settings"].pop("show_objectives")
+        state["history"][0].pop("peak_utilization")
         loaded = Game.model_validate(state)
         self.assertEqual(loaded.production, game.production)
         self.assertEqual(loaded.diagram.positions, {})
@@ -85,6 +86,32 @@ class SimulationTests(TestCase):
         self.assertTrue(loaded.settings.show_objectives)
         self.assertEqual(database_capacity(config(component(loaded, "db"))), (45, 30))
         self.assertEqual(evaluate(loaded), evaluate(game))
+        self.assertEqual(loaded.history[0].peak_utilization, {})
+
+    def test_resource_history_records_only_components_covered_at_the_time(self):
+        game = fixture()
+        monitor(game, "api")
+        add_node(game, "live-only", "monitor", detail="Linked components")
+        link(game, "db", "live-only")
+        advance(game, 1)
+        self.assertEqual(set(game.history[-1].peak_utilization), {"api"})
+        self.assertGreater(game.history[-1].peak_utilization["api"], 0)
+        self.assertIn("db", evaluate(game).snapshot.components)
+        self.assertEqual(game.history[0].peak_utilization, {})
+
+        link(game, "db", "telemetry")
+        advance(game, 1)
+        self.assertEqual(set(game.history[-1].peak_utilization), {"api", "db"})
+        self.assertNotIn("db", game.history[1].peak_utilization)
+
+        game.production.edges = [
+            edge
+            for edge in game.production.edges
+            if (edge.source, edge.target) != ("db", "telemetry")
+        ]
+        advance(game, 1)
+        self.assertNotIn("db", game.history[-1].peak_utilization)
+        self.assertIn("db", game.history[2].peak_utilization)
 
     def test_clock_accounts_for_partial_ticks_without_browser_time(self):
         a = fixture()
@@ -422,3 +449,33 @@ class SimulationTests(TestCase):
         deploy(game, 3, uuid4(), deployment)
         self.assertEqual(component(game, "api").config, {})
         self.assertEqual(component(game, "api").position.x, 505)
+
+    def test_deployment_comparison_records_only_observable_resource_pressure(self):
+        for covered in (False, True):
+            with self.subTest(covered=covered):
+                game = fixture()
+                component(game, "db").config["cpu"] = 1.0
+                if covered:
+                    monitor(game, "db")
+                open_draft(game, 0)
+                candidate = game.draft.model_copy(deep=True)
+                next(node for node in candidate.nodes if node.id == "db").config[
+                    "connections"
+                ] = 700.0
+                edit_draft(game, 1, candidate)
+                deploy(game, 2, uuid4())
+                comparison = game.deployments[-1].comparison
+                self.assertEqual(comparison.before, comparison.after)
+                if covered:
+                    self.assertEqual(
+                        comparison.pressure_after.component, "Primary database"
+                    )
+                    self.assertGreater(comparison.pressure_after.utilization, 1)
+                    self.assertEqual(
+                        comparison.pressure_before, comparison.pressure_after
+                    )
+                else:
+                    self.assertIsNone(comparison.pressure_before)
+                    self.assertIsNone(comparison.pressure_after)
+                restored = Game.model_validate_json(game.model_dump_json())
+                self.assertEqual(restored.deployments[-1].comparison, comparison)

@@ -434,7 +434,8 @@
           {@const Icon = componentIcon[kind]}
           <div class="catalog-row">
             <button class="btn catalog-item" disabled={busy} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></button>
-            <Help label={t("About {0}", [t(catalog.components[kind].name)])} text={t(catalog.components[kind].description)}
+            <Help label={t("About {0}", [t(catalog.components[kind].name)])}
+              text={t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
               open={() => { helpKind = kind; dialog = 'reference'; }} />
           </div>
         {/each}

@@ -30,12 +30,17 @@
   let forecastError = $state('');
   let pending = $state(false);
   let range = $state('24');
+  let historyComponent = $state('');
   let forecastToken = 0;
   let lastReadiness = '';
   const metric = $derived(game.snapshot.metrics);
   const telemetry = $derived(Object.entries(game.snapshot.components));
   const pressured = $derived(telemetry.filter(([, item]) => ['failed', 'overloaded', 'warning'].includes(item.status)));
   const history = $derived(game.history.slice(-Number(range) * 6));
+  const historyComponents = $derived(game.production.nodes.filter((node) =>
+    history.some((point) => point.peak_utilization?.[node.id] !== undefined) ||
+    Object.values(game.snapshot.monitors).some((monitor) => monitor.history && monitor.covered.includes(node.id))));
+  const inspectedHistory = $derived(historyComponents.find((node) => node.id === historyComponent) ?? historyComponents[0]);
   const currentCampaign = $derived(catalog.campaigns[detail]);
   const currentFeature = $derived(game.features.find((item) => item.id === detail));
   const selectedFeature = $derived(game.features.find((item) => item.id === featureId));
@@ -208,6 +213,23 @@
         </div>
       {/each}
     </section>
+    {#if inspectedHistory}
+      <section class="panel pad stack">
+        <div class="row spread wrap">
+          <h2>{t('Resource load over time')}</h2>
+          <label class="field">
+            <span>{t('Component')}</span>
+            <select value={inspectedHistory.id} onchange={(event) => historyComponent = event.currentTarget.value}>
+              {#each historyComponents as node (node.id)}<option value={node.id}>{t(node.name)}</option>{/each}
+            </select>
+          </label>
+        </div>
+        <Chart title={t('Peak resource load for {0}', [t(inspectedHistory.name)])}
+          values={history.map((point) => point.peak_utilization?.[inspectedHistory.id] ?? null)}
+          ticks={history.map((point) => point.tick)} format={pct}
+          emptyText={t('Resume the simulation to record resource load for this component.')} />
+      </section>
+    {/if}
     <div class="split equal">
       <section class="panel pad stack">
         <h2>{t("Node health")}</h2>

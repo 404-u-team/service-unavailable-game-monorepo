@@ -142,6 +142,7 @@ class HistoryPoint(Model):
     audience: int
     balance: float
     metrics: Metrics
+    peak_utilization: dict[NodeId, float] = Field(default_factory=dict)
 
 
 class Incident(Model):
@@ -159,11 +160,19 @@ class Incident(Model):
     acknowledged: bool = False
 
 
+class ResourcePressure(Model):
+    component: Name
+    resource: str
+    utilization: float
+
+
 class DeploymentComparison(Model):
     before: Metrics
     after: Metrics
     daily_before: float
     daily_after: float
+    pressure_before: ResourcePressure | None = None
+    pressure_after: ResourcePressure | None = None
 
 
 class Deployment(Model):

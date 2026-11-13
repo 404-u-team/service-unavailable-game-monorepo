@@ -15,6 +15,7 @@
   let estimate = $state<Review>();
   let previewError = $state('');
   let estimating = $state(false);
+  let previewVersion = 0;
   let includeLegacy = $state(true);
   let values = $state<Record<string, Setting>>({});
   const initial = $derived({ name: component.name, values: Object.fromEntries(Object.entries(definition.fields).map(([key, field]) => [key, component.config[key] ?? field.default])) });
@@ -24,12 +25,26 @@
   function nextValues() {
     return { ...(includeLegacy ? legacy : {}), ...values };
   }
+
+  function resetPreview() {
+    previewVersion++;
+    estimate = undefined;
+    previewError = '';
+    estimating = false;
+  }
+
   async function getPreview() {
+    const version = ++previewVersion;
     estimating = true;
     previewError = '';
-    try { estimate = await preview(name, nextValues()); }
-    catch (reason) { previewError = apiMessage(reason); }
-    finally { estimating = false; }
+    try {
+      const result = await preview(name, nextValues());
+      if (version === previewVersion) estimate = result;
+    } catch (reason) {
+      if (version === previewVersion) previewError = apiMessage(reason);
+    } finally {
+      if (version === previewVersion) estimating = false;
+    }
   }
   const presets = [
     { name: 'Small S1 · 1 vCPU / 2 GB', cpu: 1, memory: 2 },
@@ -40,7 +55,7 @@
 </script>
 
 <Modal title={t("Component configuration")} subtitle={t(component.name)} {close}>
-  <form id="configure-component" class="stack" oninput={() => estimate = undefined} onchange={() => estimate = undefined}
+  <form id="configure-component" class="stack" oninput={resetPreview} onchange={resetPreview}
     onsubmit={(event) => { event.preventDefault(); apply(name, nextValues()); }}>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     <label class="field"><span>{t("Component name")}</span><input bind:value={name} maxlength="60" required /></label>

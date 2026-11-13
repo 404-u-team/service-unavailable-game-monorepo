@@ -130,6 +130,9 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await expect.poll(async () => (await state(page, id)).tutorial).toBe(4);
   await expect(page.getByRole('heading', { name: 'System telemetry' })).toBeVisible();
   await expect(page.getByRole('img', { name: /Request traffic/ })).toBeVisible();
+  await expect(page.getByRole('img', { name: /Peak resource load for Messenger API/ })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Component', exact: true }).selectOption('db');
+  await expect(page.getByRole('img', { name: /Peak resource load for Primary database/ })).toBeVisible();
   if (visualDir) await page.screenshot({ path: `${visualDir}/telemetry-1440.png` });
 });
 
@@ -167,6 +170,73 @@ test('C and D · campaign and product release change workload and finances', asy
   await navigate(page, 'Finance');
   await expect(page.getByRole('heading', { name: 'Expense breakdown' })).toBeVisible();
   if (visualDir) await page.screenshot({ path: `${visualDir}/finance-1440.png` });
+});
+
+test('database pool and hardware upgrades have distinct effects on a live save', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const editDatabase = async () => {
+    await page.goto(`/game/${id}?view=build&component=db`);
+    await page.getByRole('button', { name: 'Edit configuration' }).click();
+    return page.getByRole('dialog', { name: 'Component configuration' });
+  };
+
+  let config = await editDatabase();
+  await config.getByLabel('Database vCPU', { exact: true }).fill('1');
+  await config.getByRole('button', { name: 'Save to draft' }).click();
+  await expect(config).toBeHidden();
+  await page.getByRole('button', { name: 'Add node' }).click();
+  await page.getByRole('dialog', { name: 'Component library' }).getByRole('button', { name: 'Monitoring', exact: true }).click();
+  await connect(page, 'Primary database', 'Monitoring');
+  await deploy(page);
+  const constrained = await state(page, id);
+  expect(constrained.snapshot.components.db.status).toBe('overloaded');
+  expect(constrained.snapshot.components.api).toBeUndefined();
+
+  config = await editDatabase();
+  await config.getByLabel('Connection pool limit', { exact: true }).fill('700');
+  let releaseForecast!: () => void;
+  let forecastStarted!: () => void;
+  const heldForecast = new Promise<void>((resolve) => releaseForecast = resolve);
+  const intercepted = new Promise<void>((resolve) => forecastStarted = resolve);
+  await page.route('**/draft/review', async (route) => {
+    forecastStarted();
+    await heldForecast;
+    await route.continue();
+  }, { times: 1 });
+  await config.getByRole('button', { name: 'Preview cost and capacity' }).click();
+  await intercepted;
+  await config.getByLabel('Connection pool limit', { exact: true }).fill('800');
+  const stale = page.waitForResponse((response) => response.url().endsWith('/draft/review'));
+  releaseForecast();
+  await stale;
+  await expect(config.getByRole('heading', { name: 'Capacity forecast' })).toBeHidden();
+  await config.getByLabel('Connection pool limit', { exact: true }).fill('700');
+  await config.getByRole('button', { name: 'Preview cost and capacity' }).click();
+  await expect(config.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
+  await config.getByRole('button', { name: 'Save to draft' }).click();
+  await expect(config).toBeHidden();
+  await page.getByRole('button', { name: 'Review deployment' }).click();
+  await page.getByRole('button', { name: 'Deploy changes' }).click();
+  const results = page.getByRole('dialog', { name: 'Deployment complete' });
+  await expect(results.getByText(/Successful throughput barely changed\. Primary database/)).toBeVisible();
+  await results.getByRole('button', { name: 'Done' }).click();
+  const pool = await state(page, id);
+  expect(pool.snapshot.metrics).toEqual(constrained.snapshot.metrics);
+  expect(pool.economy.daily_infrastructure).toBe(constrained.economy.daily_infrastructure);
+
+  config = await editDatabase();
+  await config.getByLabel('Database vCPU', { exact: true }).fill('8');
+  await config.getByLabel('RAM (GB)', { exact: true }).fill('32');
+  await config.getByLabel('Storage type', { exact: true }).selectOption('NVMe');
+  await config.getByRole('button', { name: 'Save to draft' }).click();
+  await expect(config).toBeHidden();
+  await deploy(page);
+  const upgraded = await state(page, id);
+  expect(upgraded.snapshot.metrics.throughput).toBeGreaterThan(pool.snapshot.metrics.throughput);
+  expect(upgraded.economy.daily_infrastructure).toBeGreaterThan(pool.economy.daily_infrastructure);
+  expect(upgraded.deployments[0].comparison?.before).toEqual(pool.snapshot.metrics);
+  expect(upgraded.deployments[0].comparison?.after).toEqual(upgraded.snapshot.metrics);
 });
 
 test('E · failed instance reduces availability and redundancy restores service', async ({ page }) => {
@@ -250,6 +320,47 @@ test.describe('Mobile workbench', () => {
     await expect(page.getByRole('heading', { name: 'Game preferences' })).toBeVisible();
     await page.getByRole('button', { name: 'Save game' }).tap();
     await expect(page.getByRole('status')).toHaveText('Game saved');
+  });
+
+  test('touch players can use component help, group cards, and typed connections', async ({ page }) => {
+    const id = await create(page, true, false);
+    await page.getByRole('button', { name: 'Add node' }).tap();
+    const library = page.getByRole('dialog', { name: 'Component library' });
+    await library.getByRole('button', { name: 'About Monitoring' }).tap();
+    const reference = page.getByRole('dialog', { name: 'Connection reference' });
+    await expect(reference.getByText('Input connections')).toBeVisible();
+    await expect(reference.getByText(/Worker · Metrics collection/)).toBeVisible();
+    await reference.getByRole('button', { name: 'Close dialog' }).tap();
+
+    await page.getByRole('button', { name: 'Show component list' }).tap();
+    await page.getByRole('button', { name: 'Select multiple' }).tap();
+    const api = page.getByRole('button', { name: 'Messenger API API server' });
+    if (await api.getAttribute('aria-pressed') !== 'true') await api.tap();
+    await page.getByRole('button', { name: 'Primary database Database' }).tap();
+    await expect(page.getByRole('button', { name: 'Create group' })).toBeVisible();
+    await page.getByRole('button', { name: 'Create group' }).tap();
+    const group = page.getByRole('dialog', { name: 'Create group' });
+    await group.getByLabel('Group name').fill('Data path');
+    await group.getByRole('button', { name: 'Save group' }).tap();
+    await page.getByRole('button', { name: 'Collapse group', exact: true }).tap();
+    await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(true);
+    expect((await state(page, id)).draft).toBeNull();
+    await page.getByRole('button', { name: 'Expand group', exact: true }).tap();
+    await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(false);
+
+    await page.getByRole('button', { name: 'Add node' }).tap();
+    await library.getByRole('button', { name: 'Monitoring', exact: true }).tap();
+    await page.getByRole('button', { name: 'Connect', exact: true }).tap();
+    const connection = page.getByRole('dialog', { name: 'Connect components' });
+    await connection.getByLabel('Source component').selectOption({ label: 'Primary database' });
+    await connection.getByLabel('Target component').selectOption({ label: 'Monitoring' });
+    await expect(connection.getByText('Metrics collection')).toBeVisible();
+    await connection.getByRole('button', { name: 'Connect components' }).tap();
+    await expect(connection).toBeHidden();
+    await deploy(page);
+    await navigate(page, 'Monitor', true);
+    await expect(page.getByText('Collecting metrics', { exact: true })).toBeVisible();
+    expect((await state(page, id)).snapshot.components.api).toBeUndefined();
   });
 });
 
@@ -420,6 +531,18 @@ test('Russian is persisted across menus, editor, settings, and game screens', as
   await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 });
   await page.mouse.up();
   await expect(page.getByText('Нельзя соединить «Источник трафика» и «База данных».')).toBeVisible();
+  const id = base.split('/').at(-1)!;
+  const draft = await state(page, id);
+  const rejected = await page.request.put(`/api/games/${id}/draft`, {
+    data: {
+      request_id: crypto.randomUUID(),
+      revision: draft.revision,
+      topology: { ...draft.draft!, edges: [...draft.draft!.edges, { source: 'traffic', target: 'db' }] }
+    }
+  });
+  expect(rejected.status()).toBe(422);
+  expect(rejected.headers()['x-game-error-code']).toBe('incompatible_connection');
+  expect((await state(page, id)).draft).toEqual(draft.draft);
   await page.getByRole('button', { name: 'Проверить развёртывание' }).click();
   const review = page.getByRole('dialog', { name: 'Проверка развёртывания' });
   await expect(review.getByRole('heading', { name: 'Прогноз нагрузки и производительности' })).toBeVisible();
@@ -437,7 +560,7 @@ test('Russian is persisted across menus, editor, settings, and game screens', as
       return nodes.length === 4 && nodes.every((node) => node.left >= bounds.left - 1 && node.right <= bounds.right + 1 &&
         node.top >= bounds.top - 1 && node.bottom <= bounds.bottom + 1);
     })).toBe(true);
-    if (visualDir && [1440, 390].includes(width)) await page.screenshot({ path: `${visualDir}/russian-${width}.png` });
+    if (visualDir) await page.screenshot({ path: `${visualDir}/russian-${width}.png` });
   }
 });
 
@@ -583,4 +706,41 @@ test('port guidance rejects incompatible links and reconnects endpoints in Draft
   const final = await state(page, id);
   expect(final.production.edges.some((edge) => edge.source === 'traffic' && edge.target === 'api')).toBe(true);
   expect(final.diagram.routes['traffic:api']).toEqual(routeBeforeDeploy);
+});
+
+test('a new API server in a reopened save keeps its links and route through deployment', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const original = await state(page, id);
+  await page.getByRole('link', { name: 'Service Unavailable main menu' }).click();
+  await page.getByRole('link', { name: /Saved games/ }).click();
+  await page.getByRole('link', { name: new RegExp(serviceName) }).click();
+  await page.getByRole('button', { name: 'Add node' }).click();
+  await page.getByRole('dialog', { name: 'Component library' }).getByRole('button', { name: 'API server', exact: true }).click();
+  await connect(page, 'Edge balancer', 'API server');
+  await connect(page, 'API server', 'Primary database');
+  const drafted = await state(page, id);
+  const added = drafted.draft!.nodes.find((node) => node.kind === 'api' && node.id !== 'api')!;
+  expect(drafted.production).toEqual(original.production);
+
+  await page.getByRole('button', { name: 'Show component list' }).click();
+  await page.getByRole('button', { name: 'API server → Primary database', exact: true }).click();
+  await page.getByRole('button', { name: 'Show topology canvas' }).click();
+  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  const routeKey = `${added.id}:db`;
+  await expect.poll(async () => (await state(page, id)).diagram.routes[routeKey]?.length).toBe(1);
+  const waypoint = page.getByRole('button', { name: 'Waypoint 1' });
+  await page.getByRole('button', { name: 'Fit view' }).click();
+  await waypoint.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await state(page, id)).diagram.routes[routeKey]?.[0].y).toBeGreaterThan(
+    (added.position.y + original.production.nodes.find((node) => node.id === 'db')!.position.y) / 2 + 50.5
+  );
+  const route = (await state(page, id)).diagram.routes[routeKey];
+  await deploy(page);
+  await page.reload();
+  await expect(page.locator(`.svelte-flow__edge[data-id="${routeKey}"]`)).toBeAttached();
+  const restored = await state(page, id);
+  expect(restored.production).toEqual(drafted.draft);
+  expect(restored.diagram.routes[routeKey]).toEqual(route);
 });

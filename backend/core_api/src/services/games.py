@@ -31,7 +31,15 @@ from src.simulation.catalog import (
     SECONDS_PER_TICK,
 )
 from src.simulation.engine import evaluate
-from src.simulation.models import Deployment, DeploymentComparison, Game, Node, Topology
+from src.simulation.models import (
+    Deployment,
+    DeploymentComparison,
+    Game,
+    Node,
+    ResourcePressure,
+    Snapshot,
+    Topology,
+)
 from src.simulation.progression import (
     add_event,
     advance,
@@ -299,6 +307,17 @@ def modifications(before: Topology, after: Topology) -> list[Modification]:
     return records
 
 
+def highest_pressure(snapshot: Snapshot, topology: Topology) -> ResourcePressure | None:
+    resources = (
+        ResourcePressure(component=node.name, resource=resource, utilization=value)
+        for node in topology.nodes
+        if (metric := snapshot.components.get(node.id))
+        for resource, value in metric.utilization.items()
+        if value >= 0.78
+    )
+    return max(resources, key=lambda item: item.utilization, default=None)
+
+
 def deploy(
     game: Game, revision: int, request_id: UUID, rollback: UUID | None = None
 ) -> None:
@@ -326,7 +345,8 @@ def deploy(
         if count
         else "Updated canvas layout"
     )
-    before = evaluate(game).snapshot.metrics
+    before = evaluate(game).snapshot
+    pressure_before = highest_pressure(before, game.production)
     game.deployments.append(
         Deployment(
             id=request_id,
@@ -357,11 +377,14 @@ def deploy(
             2,
             factor=0.96,
         )
+    after = evaluate(game).snapshot
     game.deployments[-1].comparison = DeploymentComparison(
-        before=before,
-        after=evaluate(game).snapshot.metrics,
+        before=before.metrics,
+        after=after.metrics,
         daily_before=result.daily_before,
         daily_after=result.daily_after,
+        pressure_before=pressure_before,
+        pressure_after=highest_pressure(after, game.production),
     )
     if game.tutorial == 2:
         game.tutorial = 3

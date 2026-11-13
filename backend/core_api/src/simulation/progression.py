@@ -11,7 +11,14 @@ from src.simulation.catalog import (
     TICKS_PER_DAY,
 )
 from src.simulation.engine import evaluate
-from src.simulation.models import Difficulty, Game, HistoryPoint, Incident, Metrics
+from src.simulation.models import (
+    Difficulty,
+    Game,
+    HistoryPoint,
+    Incident,
+    Metrics,
+    Snapshot,
+)
 from src.simulation.topology import RuleError, config, starter_topology, topology_cost
 
 SECONDS_PER_STEP = MINUTES_PER_TICK * 60
@@ -36,16 +43,27 @@ def new_game(
         balance=profile["balance"],
         difficulty=difficulty,
     )
-    game.history = [history_point(game, evaluate(game).snapshot.metrics)]
+    game.history = [history_point(game, evaluate(game).snapshot)]
     return game
 
 
-def history_point(game: Game, metrics: Metrics) -> HistoryPoint:
+def history_point(game: Game, snapshot: Snapshot) -> HistoryPoint:
+    recorded = {
+        node_id
+        for monitor in snapshot.monitors.values()
+        if monitor.history
+        for node_id in monitor.covered
+    }
     return HistoryPoint(
         tick=game.tick,
         audience=round(game.audience),
         balance=game.balance,
-        metrics=metrics,
+        metrics=snapshot.metrics,
+        peak_utilization={
+            node_id: max(metric.utilization.values())
+            for node_id, metric in snapshot.components.items()
+            if node_id in recorded and metric.utilization
+        },
     )
 
 
@@ -175,7 +193,7 @@ def advance(game: Game, steps: int) -> None:
         game.revenue += revenue
         game.operating += expense
         game.balance += revenue - expense
-        game.history.append(history_point(game, metrics))
+        game.history.append(history_point(game, result.snapshot))
         game.history = game.history[-HISTORY_LIMIT:]
         for node in game.production.nodes:
             if node.kind != "database":

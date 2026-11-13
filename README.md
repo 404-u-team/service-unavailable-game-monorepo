@@ -83,4 +83,6 @@ Select a connection and choose **Add waypoint**. Drag the point to route around 
 
 Monitoring links collect diagnostic metrics from their origin. Each linked component uses one collector slot. Service history reserves two slots and needs at least one linked component. Collectors at capacity recognize links in component-ID order. Add slots or distribute coverage across collectors when links exceed capacity.
 
+The resource history chart records peak utilization for components covered by a collector in Service history mode. Gaps show ticks without a recorded reading. Deployment comparisons report monitored resource pressure at the time of the deployment.
+
 A database starts at 155 reads and 62 writes per simulated second on two vCPUs, 8 GB RAM, and SSD. CPU scales both limits with a diminishing return. RAM raises read capacity, and NVMe raises I/O limits at an additional 35% base daily cost. Connection limits can restrict admission. Existing read/write settings are retained as throttles capped by the derived hardware capacity. Replication lag is estimated from replica pressure and primary availability, with an 8% primary write overhead per attached reachable replica.

@@ -20,7 +20,7 @@ export type Snapshot = {
   metrics: Metrics; components: Record<string, ComponentMetrics>;
   traffic: (Connection & { rps: number; operations: Record<string, number> })[]; demand: Record<string, number>; monitored: boolean; monitors: Record<string, MonitorCoverage>;
 };
-export type History = { tick: number; audience: number; balance: number; metrics: Metrics };
+export type History = { tick: number; audience: number; balance: number; metrics: Metrics; peak_utilization?: Record<string, number> };
 export type Incident = {
   id: string; title: string; symptom: string; severity: string; start: number; end: number; active: boolean;
   cause: string | null; target: string | null; resolution: string | null; failed_requests: number; acknowledged: boolean;
@@ -30,7 +30,11 @@ export type Save = { id: string; name: string; scenario: string; tick: number; a
 export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number };
 export type Feature = { id: string; state: 'locked' | 'available' | 'developing' | 'ready' | 'released'; remaining: number; requirements: string[]; demand_change: number };
 export type Campaign = { id: string; remaining: number; progress: number };
-export type Deployment = { id: string; tick: number; summary: string; cost: number; comparison: { before: Metrics; after: Metrics; daily_before: number; daily_after: number } | null };
+export type ResourcePressure = { component: string; resource: string; utilization: number };
+export type Deployment = { id: string; tick: number; summary: string; cost: number; comparison: {
+  before: Metrics; after: Metrics; daily_before: number; daily_after: number;
+  pressure_before?: ResourcePressure | null; pressure_after?: ResourcePressure | null;
+} | null };
 export type Game = Save & {
   speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
   diagram: Diagram;
