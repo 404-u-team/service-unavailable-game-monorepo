@@ -50,6 +50,30 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 201, self.game)
         self.path = f"/{self.game['id']}"
 
+    def test_diagram_mutation_is_independent_from_deployment(self):
+        diagram = {
+            "positions": {"api": {"x": 600, "y": 300}},
+            "routes": {"api:db": [{"x": 700, "y": 350}]},
+            "groups": [
+                {
+                    "id": "storage",
+                    "name": "Data path",
+                    "members": ["api", "db"],
+                    "collapsed": True,
+                }
+            ],
+        }
+        status, updated = call(
+            self.client, self.path + "/diagram", "PUT", action(diagram=diagram)
+        )
+        self.assertEqual(status, 200, updated)
+        self.assertEqual(updated["diagram"], diagram)
+        self.assertEqual(updated["production"], self.game["production"])
+        self.assertEqual(updated["revision"], self.game["revision"])
+        self.assertEqual(updated["snapshot"], self.game["snapshot"])
+        self.assertIsNone(updated["draft"])
+        self.assertEqual(call(self.client, self.path)[1]["diagram"], diagram)
+
     def test_owned_saves_and_idempotent_creation(self):
         self.assertEqual(call(session(), self.path)[0], 404)
         self.assertEqual(call(session())[1], [])

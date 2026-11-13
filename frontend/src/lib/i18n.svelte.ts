@@ -1,0 +1,73 @@
+import { ApiError } from './api';
+import russian from './ru.json';
+
+export type Language = 'en' | 'ru';
+let language = $state<Language>('en');
+const dictionary: Record<string, string> = russian;
+
+export function locale() { return language; }
+
+export function setLanguage(value: Language) {
+  language = value;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('workbench-language', value);
+    document.documentElement.lang = value;
+  }
+}
+
+export function t(message: string, args: readonly unknown[] = []) {
+  const translated = language === 'ru' ? dictionary[message] ?? message : message;
+  return args.length ? translated.replace(/\{(\d+)\}/g, (match, index) => String(args[Number(index)] ?? match)) : translated;
+}
+
+export function count(n: number, one: string, other: string, ru: [string, string, string]) {
+  const plural = new Intl.PluralRules(language).select(n);
+  const word = language === 'ru' ? ru[plural === 'one' ? 0 : plural === 'few' ? 1 : 2] : plural === 'one' ? one : other;
+  return `${new Intl.NumberFormat(language).format(n)} ${word}`;
+}
+
+const matches: [RegExp, string][] = [
+  [/^Deployed (\d+) infrastructure changes$/, 'Deployed infrastructure changes: {0}'],
+  [/^(.+) cannot connect to (.+)\.$/, '{0} cannot connect to {1}.'],
+  [/^(.+) has an unknown setting: (.+)\.$/, '{0} has an unknown setting: {1}.'],
+  [/^(.+): invalid value for (.+)\.$/, '{0}: invalid value for {1}.'],
+  [/^(.+) can replicate from one primary database\.$/, '{0} can replicate from one primary database.'],
+  [/^Remove (.+) and add a new component to change its type\.$/, 'Remove {0} and add a new component to change its type.'],
+  [/^(.+) is disconnected and will still incur operating costs\.$/, '{0} is disconnected and will still incur operating costs.'],
+  [/^(.+) has no route for writes\.$/, '{0} has no route for writes.'],
+  [/^(.+) cannot serve cache misses without a data connection\.$/, '{0} cannot serve cache misses without a data connection.'],
+  [/^(.+) needs a connection to a primary database\.$/, '{0} needs a connection to a primary database.'],
+  [/^(.+) has no worker\. Its backlog will build up\.$/, '{0} has no worker. Its backlog will build up.'],
+  [/^(.+) campaign started$/, '{0} campaign started'],
+  [/^(.+) campaign completed$/, '{0} campaign completed'],
+  [/^(.+) released$/, '{0} released'],
+  [/^Connect the required infrastructure: (.+)\.$/, 'Connect the required infrastructure: {0}.'],
+  [/^This action costs (.+)\. Available balance is (.+)\.$/, 'This action costs {0}. Available balance is {1}.'],
+  [/^(.+) has no monitoring links\.$/, '{0} has no monitoring links.'],
+  [/^(.+) has more monitoring links than available slots\.$/, '{0} has more monitoring links than available slots.'],
+  [/^(.+) campaign has ended$/, '{0} campaign completed'],
+];
+
+export function message(message: string): string {
+  if (language === 'en') return message;
+  for (const [pattern, key] of matches) {
+    const result = pattern.exec(message);
+    if (result) return t(key, result.slice(1).map((value) => t(value)));
+  }
+  return t(message);
+}
+
+const errorKeys: Record<string, string> = {
+  incompatible_connection: '{0} cannot connect to {1}.',
+  invalid_setting: '{0}: invalid value for {1}.',
+  duplicate_connection: 'A connection already exists between these components.',
+  connection_cycle: 'Connections cannot form a cycle.',
+  multiple_primaries: '{0} can replicate from one primary database.'
+};
+
+export function apiMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code && locale() === 'ru' && errorKeys[error.code]) {
+    return t(errorKeys[error.code], error.values.map((value) => t(value)));
+  }
+  return error instanceof Error ? error.message : 'The request could not be completed.';
+}

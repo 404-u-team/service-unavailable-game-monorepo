@@ -19,7 +19,14 @@ from src.simulation.catalog import CAMPAIGNS
 from src.simulation.engine import demand, evaluate
 from src.simulation.models import Edge, Game, Kind, Node, Position
 from src.simulation.progression import advance, drill, new_game
-from src.simulation.topology import RuleError, topology_cost
+from src.simulation.topology import (
+    RuleError,
+    config,
+    daily_cost,
+    database_capacity,
+    inspect_graph,
+    topology_cost,
+)
 
 
 def fixture(seed: int = 7) -> Game:
@@ -64,6 +71,20 @@ class SimulationTests(TestCase):
         self.assertEqual(a, b)
         self.assertTrue(a.incidents)
         self.assertEqual(evaluate(a), evaluate(b))
+
+    def test_old_saves_load_without_layout_and_keep_legacy_database_limits(self):
+        game = fixture()
+        component(game, "db").config = {"reads": 45.0, "writes": 30.0}
+        state = game.model_dump(mode="json")
+        state.pop("diagram")
+        state["settings"].pop("show_objectives")
+        loaded = Game.model_validate(state)
+        self.assertEqual(loaded.production, game.production)
+        self.assertEqual(loaded.diagram.positions, {})
+        self.assertEqual(loaded.diagram.groups, [])
+        self.assertTrue(loaded.settings.show_objectives)
+        self.assertEqual(database_capacity(config(component(loaded, "db"))), (45, 30))
+        self.assertEqual(evaluate(loaded), evaluate(game))
 
     def test_clock_accounts_for_partial_ticks_without_browser_time(self):
         a = fixture()
@@ -143,6 +164,45 @@ class SimulationTests(TestCase):
         write = evaluate(game).snapshot
         self.assertGreater(write.components["db"].utilization["Writes"], 1)
         self.assertLess(write.components["db"].utilization["Reads"], 1)
+
+    def test_database_resources_limit_throughput_and_legacy_values_are_throttles(self):
+        game = fixture()
+        db = component(game, "db")
+        api = component(game, "api")
+        api.config = {"cpu": 16, "memory": 32}
+        game.audience = 16_000
+        base = evaluate(game).snapshot.metrics
+        base_cost = daily_cost(db)
+        db.config = {"connections": 10_000, "reads": 10_000, "writes": 5_000}
+        self.assertEqual(evaluate(game).snapshot.metrics, base)
+        self.assertEqual(daily_cost(db), base_cost)
+        db.config = {"cpu": 8, "memory": 32, "disk": "NVMe"}
+        self.assertGreater(evaluate(game).snapshot.metrics.throughput, base.throughput)
+        self.assertGreater(daily_cost(db), base_cost)
+        reads, writes = database_capacity(config(db))
+        self.assertGreater(reads, writes)
+        db.config["cpu"] = 17
+        with self.assertRaises(RuleError):
+            inspect_graph(game.production)
+
+    def test_monitor_slots_limit_visibility_without_consuming_capacity(self):
+        game = fixture()
+        traffic = evaluate(game).snapshot.metrics
+        monitor(game, "api", "db", "edge")
+        collector = component(game, "telemetry")
+        collector.config = {"slots": 2}
+        seen = evaluate(game).snapshot
+        self.assertEqual(seen.metrics, traffic)
+        self.assertEqual(seen.monitors["telemetry"].covered, ["api", "db"])
+        self.assertEqual(seen.monitors["telemetry"].dropped, ["edge"])
+        self.assertNotIn("edge", seen.components)
+        cost = daily_cost(collector)
+        collector.config = {"slots": 6, "detail": "Service history"}
+        expanded = evaluate(game).snapshot
+        self.assertEqual(expanded.metrics, traffic)
+        self.assertIn("edge", expanded.components)
+        self.assertTrue(expanded.monitored)
+        self.assertGreater(daily_cost(collector), cost)
 
     def test_cache_misses_route_and_read_caching_preserves_write_load(self):
         game = fixture()

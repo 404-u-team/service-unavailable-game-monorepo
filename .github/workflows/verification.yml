@@ -1,0 +1,61 @@
+name: Verification
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  game:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: core_api
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d core_api"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/core_api
+      TEST_GAME_API_URL: http://127.0.0.1:8000
+      TEST_BASE_URL: http://127.0.0.1:3000
+      CORE_API_URL: http://127.0.0.1:8000
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Prepare FastAPI
+        working-directory: backend/core_api
+        run: |
+          python -m pip install poetry
+          poetry install --no-root
+          poetry run uvicorn src.main:app --host 127.0.0.1 --port 8000 > /tmp/service-unavailable-api.log 2>&1 &
+          curl --fail --retry 20 --retry-connrefused --retry-delay 1 "$TEST_GAME_API_URL/api/health"
+      - name: Test Python and PostgreSQL
+        working-directory: backend/core_api
+        run: poetry run python -m unittest discover -v
+      - name: Install and build frontend
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun --bun run check
+          bun test ./tests/routing.unit.ts
+          bun --bun run build
+      - name: Test the production Bun server
+        working-directory: frontend
+        run: |
+          bun --bun x playwright install --with-deps chromium
+          bun --bun run start > /tmp/service-unavailable-frontend.log 2>&1 &
+          curl --fail --retry 20 --retry-connrefused --retry-delay 1 "$TEST_BASE_URL/api/games/catalog"
+          bun --bun run test

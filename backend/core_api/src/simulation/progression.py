@@ -134,6 +134,15 @@ def advance(game: Game, steps: int) -> None:
                     * (1 - phase)
                     / campaign["duration"]
                 )
+            if elapsed == campaign["duration"]:
+                add_event(
+                    game,
+                    "campaign-complete",
+                    f"{campaign['name']} campaign has ended",
+                    "The campaign has finished acquiring users.",
+                    "info",
+                    0,
+                )
         game.campaigns = {
             key: start
             for key, start in game.campaigns.items()

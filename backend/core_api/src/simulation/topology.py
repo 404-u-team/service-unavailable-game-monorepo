@@ -1,12 +1,28 @@
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from src.simulation.catalog import ALLOWED, COMPONENTS, defaults
+from src.simulation.catalog import (
+    COMPONENTS,
+    CONNECTIONS,
+    LEGACY_DATABASE_LIMITS,
+    defaults,
+)
 from src.simulation.models import Edge, Kind, Node, Position, Topology
 
 
 class RuleError(ValueError):
     """A gameplay rule rejected an action."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "rule_violation",
+        values: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.values = values
 
 
 @dataclass
@@ -15,6 +31,7 @@ class Graph:
     targets: dict[str, list[str]]
     order: list[str]
     reachable: set[str]
+    relationships: dict[tuple[str, str], str]
 
 
 def inspect_graph(topology: Topology) -> Graph:
@@ -28,6 +45,10 @@ def inspect_graph(topology: Topology) -> Graph:
         fields = COMPONENTS[node.kind]["fields"]
         for key, value in node.config.items():
             field = fields.get(key)
+            if field is None and (
+                node.kind == "database" or (node.kind == "replica" and key == "reads")
+            ):
+                field = LEGACY_DATABASE_LIMITS.get(key)
             if field is None:
                 raise RuleError(f"{node.name} has an unknown setting: {key}.")
             if "options" in field:
@@ -37,23 +58,38 @@ def inspect_graph(topology: Topology) -> Graph:
                     isinstance(value, (float, int))
                     and field["min"] <= value <= field["max"]
                 )
-                if key == "instances":
+                if key in {"instances", "cpu", "slots"}:
                     valid = valid and int(value) == value
             if not valid:
-                raise RuleError(f"{node.name}: invalid value for {field['label']}.")
+                raise RuleError(
+                    f"{node.name}: invalid value for {field['label']}.",
+                    code="invalid_setting",
+                    values=(node.name, field["label"]),
+                )
 
     targets: dict[str, list[str]] = defaultdict(list)
     incoming = dict.fromkeys(nodes, 0)
+    relationships = {}
     for edge in topology.edges:
         if edge.source not in nodes or edge.target not in nodes:
             raise RuleError("Connections must link existing components.")
         source, target = nodes[edge.source], nodes[edge.target]
-        if target.kind not in ALLOWED[source.kind]:
-            raise RuleError(f"{source.name} cannot connect to {target.name}.")
+        relationship = CONNECTIONS[source.kind].get(target.kind)
+        if relationship is None:
+            raise RuleError(
+                f"{source.name} cannot connect to {target.name}.",
+                code="incompatible_connection",
+                values=(source.name, target.name),
+            )
         if edge.target in targets[edge.source]:
-            raise RuleError("A connection already exists between these components.")
+            raise RuleError(
+                "A connection already exists between these components.",
+                code="duplicate_connection",
+            )
         targets[edge.source].append(edge.target)
-        incoming[edge.target] += 1
+        relationships[edge.source, edge.target] = relationship
+        if relationship not in {"telemetry", "replication"}:
+            incoming[edge.target] += 1
 
     for children in targets.values():
         children.sort()
@@ -63,22 +99,32 @@ def inspect_graph(topology: Topology) -> Graph:
         node = ready.popleft()
         order.append(node)
         for target in targets[node]:
+            if relationships[node, target] in {"telemetry", "replication"}:
+                continue
             incoming[target] -= 1
             if incoming[target] == 0:
                 ready.append(target)
     if len(order) != len(nodes):
-        raise RuleError("Connections cannot form a cycle.")
+        raise RuleError("Connections cannot form a cycle.", code="connection_cycle")
     for node in nodes.values():
         if (
             node.kind == "replica"
             and sum(nodes[t].kind == "database" for t in targets[node.id]) > 1
         ):
-            raise RuleError(f"{node.name} can replicate from one primary database.")
+            raise RuleError(
+                f"{node.name} can replicate from one primary database.",
+                code="multiple_primaries",
+                values=(node.name,),
+            )
     reachable = {sources[0]}
     for node in order:
         if node in reachable:
-            reachable.update(targets[node])
-    return Graph(nodes, targets, order, reachable)
+            reachable.update(
+                target
+                for target in targets[node]
+                if relationships[node, target] not in {"telemetry", "replication"}
+            )
+    return Graph(nodes, targets, order, reachable, relationships)
 
 
 def deployment_warnings(graph: Graph) -> list[str]:
@@ -96,7 +142,23 @@ def deployment_warnings(graph: Graph) -> list[str]:
         )
     warnings = []
     for node in graph.nodes.values():
-        if node.id not in graph.reachable:
+        if node.kind == "monitor":
+            links = sum(
+                target == node.id and kind == "telemetry"
+                for (_, target), kind in graph.relationships.items()
+            )
+            if not links:
+                warnings.append(f"{node.name} has no monitoring links.")
+            elif links > config(node)["slots"] - (
+                2
+                if config(node)["detail"] == "Service history"
+                and config(node)["slots"] >= 3
+                else 0
+            ):
+                warnings.append(
+                    f"{node.name} has more monitoring links than available slots."
+                )
+        elif node.id not in graph.reachable:
             warnings.append(
                 f"{node.name} is disconnected and will still incur operating costs."
             )
@@ -124,6 +186,15 @@ def config(node: Node) -> dict:
     return defaults(node.kind) | node.config
 
 
+def database_capacity(cfg: dict) -> tuple[float, float]:
+    cpu = (cfg["cpu"] / 2) ** 0.74
+    memory = (cfg["memory"] / 8) ** 0.22
+    disk = 1.45 if cfg["disk"] == "NVMe" else 1.0
+    reads = min(155 * cpu * memory, 420 * disk) * disk
+    writes = min(62 * cpu, 115 * disk) * disk
+    return min(reads, cfg.get("reads", reads)), min(writes, cfg.get("writes", writes))
+
+
 def daily_cost(node: Node) -> float:
     cfg = config(node)
     base = COMPONENTS[node.kind]["daily"]
@@ -133,10 +204,20 @@ def daily_cost(node: Node) -> float:
         max(0, float(cfg[key]) / max(1, field["default"]) - 1) * 0.18
         for key, field in COMPONENTS[node.kind]["fields"].items()
         if "min" in field
-        and key not in {"instances", "ttl", "limit", "window", "burst", "retention"}
+        and key
+        not in {
+            "instances",
+            "ttl",
+            "limit",
+            "window",
+            "burst",
+            "retention",
+            "connections",
+        }
     )
     disk = 0.35 if cfg.get("disk") == "NVMe" else 0
-    return round(base * cfg.get("instances", 1) * (1 + extras + disk), 2)
+    history = 0.20 if cfg.get("detail") == "Service history" else 0
+    return round(base * cfg.get("instances", 1) * (1 + extras + disk + history), 2)
 
 
 def topology_cost(topology: Topology) -> float:

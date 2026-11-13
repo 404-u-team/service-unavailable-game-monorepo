@@ -25,12 +25,13 @@ from src.simulation.catalog import (
     CAMPAIGNS,
     COMPONENTS,
     FEATURES,
+    LEGACY_DATABASE_LIMITS,
     OPERATIONS,
     SCENARIOS,
     SECONDS_PER_TICK,
 )
 from src.simulation.engine import evaluate
-from src.simulation.models import Deployment, Game, Node, Topology
+from src.simulation.models import Deployment, DeploymentComparison, Game, Node, Topology
 from src.simulation.progression import (
     add_event,
     advance,
@@ -275,15 +276,15 @@ def modifications(before: Topology, after: Topology) -> list[Modification]:
             continue
         old_config, new_config = config(previous), config(node)
         fields = COMPONENTS[node.kind]["fields"]
-        for key, value in new_config.items():
-            prior = old_config[key]
+        for key in dict.fromkeys((*old_config, *new_config)):
+            prior, value = old_config.get(key), new_config.get(key)
             if prior != value:
                 records.append(
                     Modification(
                         component=node.name,
-                        field=fields[key]["label"],
-                        before=prior,
-                        after=value,
+                        field=(fields.get(key) or LEGACY_DATABASE_LIMITS[key])["label"],
+                        before=prior if prior is not None else "Automatic",
+                        after=value if value is not None else "Automatic",
                     )
                 )
         if node.name != previous.name:
@@ -325,6 +326,7 @@ def deploy(
         if count
         else "Updated canvas layout"
     )
+    before = evaluate(game).snapshot.metrics
     game.deployments.append(
         Deployment(
             id=request_id,
@@ -355,6 +357,12 @@ def deploy(
             2,
             factor=0.96,
         )
+    game.deployments[-1].comparison = DeploymentComparison(
+        before=before,
+        after=evaluate(game).snapshot.metrics,
+        daily_before=result.daily_before,
+        daily_after=result.daily_after,
+    )
     if game.tutorial == 2:
         game.tutorial = 3
 
@@ -473,6 +481,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
         satisfaction=game.satisfaction,
         production=game.production,
         draft=game.draft,
+        diagram=game.diagram,
         revision=game.revision,
         snapshot=snapshot,
         history=history,
@@ -524,7 +533,13 @@ def view(game: Game, saved_at: datetime) -> GameView:
             for event in reversed(game.incidents)
         ],
         deployments=[
-            DeploymentView(id=e.id, tick=e.tick, summary=e.summary, cost=e.cost)
+            DeploymentView(
+                id=e.id,
+                tick=e.tick,
+                summary=e.summary,
+                cost=e.cost,
+                comparison=e.comparison,
+            )
             for e in reversed(game.deployments)
         ],
         settings=game.settings,

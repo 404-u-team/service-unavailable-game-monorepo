@@ -7,29 +7,33 @@ export type Setting = string | number;
 export type Component = { id: string; kind: Kind; name: string; position: Point; config: Record<string, Setting> };
 export type Connection = { source: string; target: string };
 export type Topology = { nodes: Component[]; edges: Connection[] };
+export type DiagramGroup = { id: string; name: string; members: string[]; collapsed: boolean };
+export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[] };
 export type Metrics = { rps: number; throughput: number; availability: number; latency: number; errors: number; rejected: number };
 export type ComponentMetrics = {
   status: 'healthy' | 'warning' | 'overloaded' | 'failed' | 'idle';
   rps: number; throughput: number; latency: number; utilization: Record<string, number>;
-  cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null;
+  cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null; replication_lag: number | null;
 };
+export type MonitorCoverage = { capacity: number; history: boolean; covered: string[]; dropped: string[]; failed: boolean };
 export type Snapshot = {
   metrics: Metrics; components: Record<string, ComponentMetrics>;
-  traffic: (Connection & { rps: number })[]; demand: Record<string, number>; monitored: boolean;
+  traffic: (Connection & { rps: number; operations: Record<string, number> })[]; demand: Record<string, number>; monitored: boolean; monitors: Record<string, MonitorCoverage>;
 };
 export type History = { tick: number; audience: number; balance: number; metrics: Metrics };
 export type Incident = {
   id: string; title: string; symptom: string; severity: string; start: number; end: number; active: boolean;
   cause: string | null; target: string | null; resolution: string | null; failed_requests: number; acknowledged: boolean;
 };
-export type Settings = { reduced_motion: boolean; show_tutorial: boolean };
+export type Settings = { reduced_motion: boolean; show_tutorial: boolean; show_objectives?: boolean };
 export type Save = { id: string; name: string; scenario: string; tick: number; audience: number; balance: number; saved_at: string };
 export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number };
 export type Feature = { id: string; state: 'locked' | 'available' | 'developing' | 'ready' | 'released'; remaining: number; requirements: string[]; demand_change: number };
 export type Campaign = { id: string; remaining: number; progress: number };
-export type Deployment = { id: string; tick: number; summary: string; cost: number };
+export type Deployment = { id: string; tick: number; summary: string; cost: number; comparison: { before: Metrics; after: Metrics; daily_before: number; daily_after: number } | null };
 export type Game = Save & {
   speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
+  diagram: Diagram;
   snapshot: Snapshot; history: History[]; business_history: Pick<History, 'tick' | 'audience' | 'balance'>[]; economy: Economy; component_costs: Record<string, number>; draft_costs: Record<string, number>; features: Feature[]; campaigns: Campaign[];
   incidents: Incident[]; deployments: Deployment[]; settings: Settings; tutorial: number; peak: Metrics | null;
 };
@@ -42,7 +46,9 @@ export type Catalog = {
   components: Record<Kind, Definition>; scenarios: Record<string, Scenario>;
   features: Record<string, FeatureDefinition>; campaigns: Record<string, CampaignDefinition>;
   difficulties: Record<Difficulty, { name: string; balance: number; audience: number; incident_chance: number }>;
-  operations: Record<string, string>; connections: Record<Kind, Kind[]>; minutes_per_tick: number;
+  operations: Record<string, string>; connections: Record<Kind, Kind[]>;
+  connection_types: Record<Kind, Partial<Record<Kind, keyof typeof import('./workbench/connections').connectionLabels>>>;
+  minutes_per_tick: number;
 };
 export type Interval = { low: number; high: number };
 export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high' };

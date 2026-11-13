@@ -1,151 +1,383 @@
 <script lang="ts">
+  import { message, t } from '../i18n.svelte';
   import { Background, BackgroundVariant, Controls, MarkerType, MiniMap, Position, SvelteFlow,
-    type Connection as FlowConnection, type Edge, type IsValidConnection } from '@xyflow/svelte';
+    type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import FitOnResize from './FitOnResize.svelte';
   import FlowNode, { type WorkbenchNode } from './FlowNode.svelte';
-  import { rps } from '../format';
+  import GroupNode, { type GroupFlowNode } from './GroupNode.svelte';
+  import RoutedEdge, { type RoutedEdge as DiagramEdge } from './RoutedEdge.svelte';
+  import { labelPosition, routeConnection, segments, type Rect } from './routing';
+  import { num, rps } from '../format';
   import { statusLabel } from '../labels';
-  import type { Catalog, Component, Connection, Game, Point, Topology } from '../types';
+  import { groupComponents, nestedGroups } from './groups';
+  import { connectionError, connectionKind, connectionLabels } from './connections';
+  import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
-  let { topology, game, catalog, selected, edgeSelected, editable, compact, removed,
-    select, selectEdge, connect, move, menu, clear, cluster, container }: {
-    topology: Topology; game: Game; catalog: Catalog; selected: string;
-    edgeSelected: string; editable: boolean; compact: boolean; removed: Component[];
-    select: (id: string) => void; selectEdge: (id: string) => void;
-    connect: (edge: Connection) => void; move: (id: string, position: Point) => void;
+  let { topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
+    select, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container }: {
+    topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
+    edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
+    select: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
+    selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
+    move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
+    updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
     menu: (event: MouseEvent, id?: string) => void; clear: () => void; cluster: boolean; container: HTMLElement;
   } = $props();
 
-  export const edgeKey = (edge: Connection) => `${edge.source}:${edge.target}`;
-  const nodeTypes = { workbench: FlowNode };
-  let nodes = $state.raw<WorkbenchNode[]>([]);
-  let edges = $state.raw<Edge[]>([]);
-  const actual = $derived(Object.fromEntries(game.production.nodes.map((node) => [node.id, node])));
+  const edgeKey = (edge: Connection) => `${edge.source}:${edge.target}`;
+  const nodeTypes = { workbench: FlowNode, groupCard: GroupNode };
+  const edgeTypes = { routed: RoutedEdge };
+  type CanvasNode = WorkbenchNode | GroupFlowNode;
+  let nodes = $state.raw<CanvasNode[]>([]);
+  let edges = $state.raw<DiagramEdge[]>([]);
+  let linkStart = $state<{ id: string; isTarget: boolean }>();
+  let reconnectKey = $state('');
+  let dragPositions = $state.raw<Record<string, Point>>({});
+  let routeFrame: ReturnType<typeof setTimeout> | undefined;
 
-  const mobilePositions: Record<string, { original: Point; display: Point }> = {
-    traffic: { original: { x: 45, y: 185 }, display: { x: 0, y: 0 } },
-    edge: { original: { x: 275, y: 185 }, display: { x: 188, y: 0 } },
-    api: { original: { x: 505, y: 185 }, display: { x: 94, y: 117 } },
-    db: { original: { x: 735, y: 185 }, display: { x: 94, y: 239 } }
+  function previewPositions(next: Record<string, Point>) {
+    if (topology.edges.length < 80) {
+      dragPositions = next;
+      return;
+    }
+    if (routeFrame !== undefined) return;
+    routeFrame = setTimeout(() => { routeFrame = undefined; dragPositions = next; }, 75);
+  }
+
+  function finishMove(next: Record<string, Point>) {
+    clearTimeout(routeFrame);
+    routeFrame = undefined;
+    move(next);
+    dragPositions = {};
+  }
+
+  onDestroy(() => clearTimeout(routeFrame));
+  let linkFeedback = $state('');
+  function viewportKey() { return `workbench-viewport:${game.id}:${compact ? 'compact' : 'wide'}`; }
+  function restoreViewport(): Viewport | undefined {
+    try {
+      const stored = JSON.parse(localStorage.getItem(viewportKey()) ?? 'null');
+      if (stored && [stored.x, stored.y, stored.zoom].every(Number.isFinite)) return stored;
+    } catch { /* The diagram still fits when browser preferences are unavailable. */ }
+  }
+  const initialViewport = untrack(restoreViewport);
+  const card = $derived({ width: compact ? 156 : 167, height: compact ? 86 : 101 });
+  const actual = $derived(Object.fromEntries(game.production.nodes.map((node) => [node.id, node])));
+  const components = $derived(Object.fromEntries(topology.nodes.map((node) => [node.id, node])));
+  const hiddenGroups = $derived(new Set(diagram.groups.filter((group) => group.collapsed)
+    .flatMap((group) => [...nestedGroups(group, diagram.groups)])));
+  const collapsedMembers = $derived(new Map(diagram.groups.filter((group) => group.collapsed && !hiddenGroups.has(group.id))
+    .flatMap((group) => groupComponents(group, diagram.groups).map((member) => [member, group.id] as const))));
+  const allGroups = $derived(new Map(diagram.groups.map((group) => [group.id, group])));
+
+
+  const compactOffsets: Record<string, Point> = {
+    traffic: { x: 0, y: -112 },
+    edge: { x: -45, y: -112 },
+    api: { x: -275, y: 10 },
+    db: { x: -505, y: 134 }
   };
 
-  function project(p: Point, id: string, inverse = false): Point {
-    if (!compact) return p;
-    const anchor = mobilePositions[id] ?? { original: { x: 505, y: 365 }, display: { x: 282, y: 117 } };
-    const from = inverse ? anchor.display : anchor.original;
-    const to = inverse ? anchor.original : anchor.display;
-    return { x: to.x + p.y - from.y, y: to.y + p.x - from.x };
+  function project(point: Point, id: string, inverse = false): Point {
+    const offset = compact ? compactOffsets[id] : undefined;
+    const direction = inverse ? -1 : 1;
+    return offset ? { x: point.x + offset.x * direction, y: point.y + offset.y * direction } : point;
   }
+
+  function position(node: Component) {
+    return project(dragPositions[node.id] ?? diagram.positions[node.id] ?? node.position, node.id);
+  }
+
+  function projectWaypoint(point: Point, edge: Connection, inverse = false) {
+    const a = project(point, edge.source, inverse);
+    const b = project(point, edge.target, inverse);
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+  const groupBoxes = $derived.by(() => {
+    const boxes = new Map<string, Rect>();
+    function measure(group: DiagramGroup): Rect | undefined {
+      const found = boxes.get(group.id);
+      if (found) return found;
+      const items: Rect[] = [];
+      for (const id of group.collapsed ? groupComponents(group, diagram.groups) : group.members) {
+        const node = components[id];
+        const child = allGroups.get(id);
+        const rect = node ? { ...position(node), ...card } : child && measure(child);
+        if (rect) items.push(rect);
+      }
+      if (!items.length) return;
+      const x = Math.min(...items.map((r) => r.x));
+      const y = Math.min(...items.map((r) => r.y));
+      const box = group.collapsed ? { x, y, width: 180, height: 83 } : {
+        x: x - 16, y: y - 43, width: Math.max(...items.map((r) => r.x + r.width)) - x + 32,
+        height: Math.max(...items.map((r) => r.y + r.height)) - y + 59
+      };
+      boxes.set(group.id, box);
+      return box;
+    }
+    for (const group of diagram.groups) if (!hiddenGroups.has(group.id)) measure(group);
+    return boxes;
+  });
 
   $effect(() => {
     const current = untrack(() => nodes);
     const stable = new Map(current.map((node) => [node.id, node]));
-    const next = [...topology.nodes, ...removed].flatMap((node): WorkbenchNode[] => {
+    const next: CanvasNode[] = [];
+    for (const group of diagram.groups) {
+      const bounds = groupBoxes.get(group.id);
+      if (!bounds) continue;
+      const members = groupComponents(group, diagram.groups).filter((id) => components[id]);
+      const stats = members.flatMap((id) => game.snapshot.components[id] ? [game.snapshot.components[id]] : []);
+      const warnings = stats.filter((metric) => !['idle', 'healthy'].includes(metric.status)).length;
+      const priority = ['failed', 'overloaded', 'warning', 'healthy', 'idle'] as const;
+      const status = priority.find((state) => stats.some((metric) => metric.status === state));
+      next.push({
+        id: group.id, type: 'groupCard', position: { x: bounds.x, y: bounds.y }, width: bounds.width, height: bounds.height,
+        data: { name: group.name, count: members.length, warnings,
+          status: status ? statusLabel[status] : 'Metrics unavailable', collapsed: group.collapsed,
+          throughput: stats.length ? stats.reduce((sum, metric) => sum + metric.throughput, 0) : undefined,
+          toggle: stable.get(group.id)?.type === 'groupCard' ? (stable.get(group.id) as GroupFlowNode).data.toggle : () => toggleGroup(group.id) },
+        selected: group.id === groupSelected, draggable: true, dragHandle: '.drag-group',
+        selectable: true, connectable: false, deletable: false, ariaLabel: group.name, zIndex: group.collapsed ? 0 : -1 - nestedGroups(group, diagram.groups).size
+      });
+    }
+    for (const node of [...topology.nodes, ...removed]) {
+      if (collapsedMembers.has(node.id)) continue;
       const live = actual[node.id];
       const definition = catalog.components[node.kind];
       const metric = game.snapshot.components[node.id];
       const pending = removed.includes(node);
       const settings = Object.fromEntries(Object.entries(definition.fields).map(([key, field]) => [key, node.config[key] ?? field.default]));
       const configured = live && Object.keys(definition.fields).some((key) => (live.config[key] ?? definition.fields[key].default) !== settings[key]);
-      const change = pending ? 'Pending removal' : !live ? 'Added in draft' : configured || live.name !== node.name ? 'Modified in draft' : '';
-      const status = metric?.status;
+      const change = pending ? t('Pending removal') : !live ? t('Added in draft') : configured || live.name !== node.name ? t('Modified in draft') : '';
+      const monitor = game.snapshot.monitors?.[node.id];
+      const status = metric?.status ?? (monitor ? monitor.failed ? 'failed' : monitor.dropped.length ? 'warning' : monitor.covered.length ? 'healthy' : 'idle' : undefined);
       const use = metric && Object.keys(metric.utilization).length ? Math.max(...Object.values(metric.utilization)) : undefined;
       const tone = status === 'failed' || status === 'overloaded' ? 'bad' : status === 'warning' ? 'warn' : status === 'healthy' || node.kind === 'source' ? 'good' : 'dim';
       const instances = Number(settings.instances ?? 1);
       const meta = node.kind === 'source' ? rps(game.snapshot.metrics.rps)
         : node.kind === 'api' ? `${instances > 1 ? `${instances}× · ` : ''}${settings.cpu} vCPU · ${settings.memory} GB`
         : node.kind === 'worker' ? `${instances}× · ${settings.cpu} vCPU`
-        : node.kind === 'balancer' ? String(settings.algorithm)
-        : definition.name;
+        : node.kind === 'balancer' ? t(String(settings.algorithm)) : t(definition.name);
+      const compatible = linkStart && linkStart.id !== node.id ? !connectionError(topology, catalog, linkStart.isTarget
+        ? { source: node.id, target: linkStart.id } : { source: linkStart.id, target: node.id }, reconnectKey) : undefined;
       const base: WorkbenchNode = {
-        ...stable.get(node.id), id: node.id, type: 'workbench', position: project(node.position, node.id),
-        data: { name: node.name, kind: node.kind, meta, tone, health: status ? statusLabel[status] : node.kind === 'source' ? 'Traffic input' : 'No telemetry', change, use, editable: editable && !pending, vertical: compact,
-          input: compact ? node.id === 'edge' ? Position.Left : Position.Top : Position.Left,
-          output: compact ? node.id === 'traffic' ? Position.Right : Position.Bottom : Position.Right }, 
-        selected: node.id === selected, draggable: editable && !pending, deletable: false,
-        selectable: !pending, connectable: editable && !pending, ariaLabel: node.name
+        id: node.id, type: 'workbench', position: position(node), ...card,
+        data: { name: t(node.name), kind: node.kind, meta, tone,
+          health: status ? t(statusLabel[status]) : node.kind === 'source' ? t('Traffic input') : t('Metrics unavailable'),
+          change, use, editable: editable && !pending, vertical: compact, compatible,
+          input: Position.Left, output: Position.Right },
+        selected: selection.includes(node.id), draggable: !pending, deletable: false,
+        selectable: !pending, connectable: editable && !pending, ariaLabel: t(node.name), zIndex: 1
       };
-      const previous = stable.get(node.id);
-      if (previous?.dragging || previous?.position.x === base.position.x && previous.position.y === base.position.y) base.position = previous.position;
-      const related = [base];
+      next.push(base);
       if (cluster && !pending && node.id === selected && instances > 1 && (node.kind === 'api' || node.kind === 'worker')) {
         for (let i = 0; i < instances; i++) {
           const p = base.position;
-          related.push({
-            id: `${node.id}~${i + 1}`, type: 'workbench',
-            position: { x: p.x + (compact ? 170 : 0) + (i % 3) * 175, y: p.y + (compact ? 0 : 115) + Math.floor(i / 3) * 106 },
-            data: { ...base.data, name: `Instance ${i + 1}`, meta: `${settings.cpu} vCPU`, health: 'Cluster member', change: '', use: undefined, editable: false },
-            selectable: false, focusable: false, draggable: false, deletable: false, connectable: false
+          next.push({
+            id: `${node.id}~${i + 1}`, type: 'workbench', ...card,
+            position: { x: p.x + (i % 3) * (card.width + 18), y: p.y + 124 + Math.floor(i / 3) * (card.height + 14) },
+            data: { ...base.data, name: t('Instance {0}', [i + 1]), meta: `${settings.cpu} vCPU`, health: t('Cluster member'), change: '', use: undefined, editable: false },
+            selectable: false, focusable: false, draggable: false, deletable: false, connectable: false, zIndex: 1
           });
         }
       }
-      return related.map((item) => {
-        const prev = stable.get(item.id);
-        if (prev && prev.position.x === item.position.x && prev.position.y === item.position.y &&
-            prev.selected === item.selected && prev.draggable === item.draggable &&
-            JSON.stringify(prev.data) === JSON.stringify(item.data)) return prev;
-        return item;
-      });
+    }
+    const resolved = next.map((node) => {
+      const previous = stable.get(node.id);
+      if (!previous) return node;
+      if (previous.dragging) return { ...previous, data: node.data } as CanvasNode;
+      if (previous.position.x === node.position.x && previous.position.y === node.position.y &&
+          previous.width === node.width && previous.height === node.height && previous.selected === node.selected &&
+          JSON.stringify(previous.data) === JSON.stringify(node.data)) return previous;
+      return node;
     });
-    if (next.length !== current.length || next.some((node, index) => node !== current[index])) nodes = next;
+    if (resolved.length !== current.length || resolved.some((node, index) => node !== current[index])) nodes = resolved;
+  });
+
+  const edgeSpecs = $derived.by(() => {
+    const bundles = new Map<string, { key: string; source: string; target: string; originals: Connection[]; kind: ReturnType<typeof connectionKind>; aggregated: boolean }>();
+    for (const edge of topology.edges) {
+      const source = collapsedMembers.get(edge.source) ?? edge.source;
+      const target = collapsedMembers.get(edge.target) ?? edge.target;
+      if (source === target) continue;
+      const aggregated = source !== edge.source || target !== edge.target;
+      const kind = connectionKind(catalog, components[edge.source]?.kind, components[edge.target]?.kind);
+      const key = aggregated ? `bundle:${source}:${target}:${kind}` : edgeKey(edge);
+      const bundle = bundles.get(key);
+      if (bundle) bundle.originals.push(edge);
+      else bundles.set(key, { key, source, target, kind, originals: [edge], aggregated });
+    }
+    return [...bundles.values()];
+  });
+
+  const paths = $derived.by(() => {
+    const boxes: Record<string, Rect> = {};
+    for (const node of [...topology.nodes, ...removed]) {
+      if (!collapsedMembers.has(node.id)) boxes[node.id] = { ...position(node), ...card };
+    }
+    for (const group of diagram.groups) {
+      const box = groupBoxes.get(group.id);
+      if (group.collapsed && box) boxes[group.id] = box;
+    }
+    const obstacles = Object.values(boxes);
+    const occupied: [Point, Point][] = [];
+    const paths = edgeSpecs.flatMap((item, index) => {
+      const from = boxes[item.source];
+      const to = boxes[item.target];
+      if (!from || !to) return [];
+      const waypoints = item.aggregated ? [] : (diagram.routes[item.key] ?? []).map((point) => projectWaypoint(point, item.originals[0]));
+      const points = routeConnection({ x: from.x + from.width, y: from.y + from.height / 2 },
+        { x: to.x, y: to.y + to.height / 2 }, obstacles, waypoints, occupied, (index % 7 - 3) * 9);
+      occupied.push(...segments(points));
+      return [{ ...item, waypoints, points }];
+    });
+    return { paths, obstacles };
   });
 
   $effect(() => {
-    const traffic = new Map(game.snapshot.traffic.map((item) => [edgeKey(item), item.rps]));
+    const traffic = new Map(game.snapshot.traffic.map((item) => [edgeKey(item), requestType ? item.operations?.[requestType] ?? 0 : item.rps]));
     const liveEdges = new Set(game.production.edges.map(edgeKey));
     const current = untrack(() => edges);
     const previous = new Map(current.map((edge) => [edge.id, edge]));
-    const next = topology.edges.map((item) => {
-      const key = edgeKey(item);
-      const flow = traffic.get(key);
-      const color = key === edgeSelected || !liveEdges.has(key) ? '#ffb35c' : '#c7f46c';
-      const width = flow === undefined ? 2 : Math.min(3.8, 1.6 + flow / 120);
-      const edge: Edge = {
-        ...item, id: key, type: 'step', selected: key === edgeSelected, deletable: false,
-        label: flow === undefined ? undefined : `${Math.round(flow)}/s`,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color },
-        style: `stroke: ${color}; stroke-width: ${width};${liveEdges.has(key) ? '' : 'stroke-dasharray: 5 3;'}`,
-        labelStyle: 'fill: #c7f46c; font-family: IBM Plex Mono, monospace; font-size: 11px;',
-        interactionWidth: 20
+    const labels: Rect[] = [];
+    const next = paths.paths.map((item): DiagramEdge => {
+      const known = item.originals.flatMap((edge) => traffic.has(edgeKey(edge)) ? [traffic.get(edgeKey(edge))!] : []);
+      const flow = known.length ? known.reduce((sum, value) => sum + value, 0) : undefined;
+      const live = item.originals.every((edge) => liveEdges.has(edgeKey(edge)));
+      const selected = item.key === edgeSelected;
+      const dim = requestType && (!flow || flow <= 0) && !selected;
+      const color = dim ? '#53636b' : selected || !live ? '#ffb35c' : item.kind === 'telemetry' ? '#8cbdf3' : item.kind === 'replication' ? '#d7aeed' : '#c7f46c';
+      const label = flow === undefined || (requestType && !flow) ? (item.aggregated ? `${item.originals.length}×` : undefined) : t('{0}/s', [num(Math.round(flow))]);
+      const width = flow === undefined ? 1.7 : Math.min(3.8, 1.6 + flow / 120);
+      const old = previous.get(item.key);
+      const value: DiagramEdge = {
+        id: item.key, source: item.source, target: item.target, type: 'routed', selected, deletable: false, zIndex: 0,
+        ariaLabel: `${t(components[item.originals[0].source]?.name ?? '')} → ${t(components[item.originals[0].target]?.name ?? '')} · ${t(connectionLabels[item.kind])}`,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color },
+        data: { points: item.points, waypoints: item.waypoints, label, color, width,
+          labelAt: label ? labelPosition(item.points, label.length * 7 + 8, paths.obstacles, labels) : undefined,
+          dashed: !live || item.kind === 'telemetry' || item.kind === 'replication',
+          moving: game.speed > 0 && Boolean(flow && flow > 0) && !game.settings.reduced_motion,
+          reconnectable: !item.aggregated && editable,
+          update: item.aggregated ? undefined : old?.data?.update ?? ((waypoints, save) => updateRoute(item.key, waypoints.map((point) => projectWaypoint(point, item.originals[0], true)), save)) }
       };
-      const old = previous.get(key);
-      return old && old.label === edge.label && old.style === edge.style && old.selected === edge.selected ? old : edge;
+      return old && old.ariaLabel === value.ariaLabel && old.selected === value.selected && JSON.stringify(old.data) === JSON.stringify(value.data) ? old : value;
     });
     if (next.length !== current.length || next.some((edge, index) => edge !== current[index])) edges = next;
   });
 
-  const valid: IsValidConnection = (candidate) => {
-    if (!editable) return false;
-    const source = topology.nodes.find((node) => node.id === candidate.source);
-    const target = topology.nodes.find((node) => node.id === candidate.target);
-    return Boolean(source && target && catalog.connections[source.kind].includes(target.kind)
-      && !topology.edges.some((edge) => edge.source === source.id && edge.target === target.id));
+  const valid: IsValidConnection = (candidate) => editable && !connectionError(topology, catalog, candidate, reconnectKey);
+
+  function trackDrag(dragged: CanvasNode[]) {
+    const positions: Record<string, Point> = {};
+    for (const item of dragged) {
+      if (item.type === 'workbench') positions[item.id] = project(item.position, item.id, true);
+      else {
+        const group = diagram.groups.find((group) => group.id === item.id);
+        if (!group) continue;
+        const bounds = groupBoxes.get(group.id);
+        if (!bounds) continue;
+        const current = dragPositions;
+        // The group's bounds follow its children as the drag progresses.
+        const dx = item.position.x - bounds.x;
+        const dy = item.position.y - bounds.y;
+        for (const id of groupComponents(group, diagram.groups)) {
+          if (!components[id]) continue;
+          const start = current[id] ?? diagram.positions[id] ?? components[id].position;
+          positions[id] = { x: start.x + dx, y: start.y + dy };
+        }
+      }
+    }
+    return positions;
+  }
+  const startConnection: OnConnectStart = (_, params) => {
+    linkFeedback = '';
+    if (params.nodeId) linkStart = { id: params.nodeId, isTarget: params.handleType === 'target' };
   };
 
-  function onConnect(connection: FlowConnection) {
-    if (valid(connection)) connect({ source: connection.source, target: connection.target });
-  }
+  const finishConnection: OnConnectEnd = (event, state) => {
+    if (linkStart && !state.isValid) {
+      const contact = 'changedTouches' in event ? event.changedTouches[0] : event;
+      const underPointer = contact ? document.elementsFromPoint(contact.clientX, contact.clientY) : [];
+      const hoverNode = underPointer.flatMap((element) => {
+        const node = element.closest<HTMLElement>('.svelte-flow__node-workbench');
+        return node ? [node] : [];
+      })[0];
+      const closePort = contact && [...container.querySelectorAll<HTMLElement>(linkStart.isTarget ? '.svelte-flow__handle.source' : '.svelte-flow__handle.target')]
+        .find((port) => {
+          const bounds = port.getBoundingClientRect();
+          return Math.hypot(contact.clientX - (bounds.x + bounds.width / 2), contact.clientY - (bounds.y + bounds.height / 2)) <= 13;
+        });
+      const target = state.toNode?.id ?? hoverNode?.dataset.id ?? (closePort ? closePort.dataset.nodeid : undefined);
+      const candidate = linkStart.isTarget ? { source: target ?? '', target: linkStart.id } : { source: linkStart.id, target: target ?? '' };
+      linkFeedback = target ? connectionError(topology, catalog, candidate, reconnectKey) ?? '' : t('Drop on a highlighted port to connect.');
+    }
+    linkStart = undefined;
+    reconnectKey = '';
+  };
 </script>
 
-<SvelteFlow bind:nodes bind:edges {nodeTypes} fitView fitViewOptions={{ padding: compact ? 0.12 : 0.12, maxZoom: compact ? 1 : 1.13 }}
+<SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView={!initialViewport} {initialViewport} fitViewOptions={{ padding: .12, maxZoom: compact ? 1 : 1.13 }}
   minZoom={0.15} maxZoom={2.5} colorMode="dark" attributionPosition="bottom-right"
-  nodesDraggable={editable} nodesConnectable={editable} deleteKey={null} isValidConnection={valid} onconnect={onConnect}
-  onnodeclick={({ node }) => select(node.id)}
+  ariaLabelConfig={{
+    'controls.ariaLabel': t('Canvas controls'),
+    'controls.zoomIn.ariaLabel': t('Zoom in'),
+    'controls.zoomOut.ariaLabel': t('Zoom out'),
+    'controls.fitView.ariaLabel': t('Fit view'),
+    'minimap.ariaLabel': t('Minimap'),
+    'handle.ariaLabel': t('Connection port'),
+    'node.a11yDescription.default': t('Use arrow keys to move the selected node.'),
+    'node.a11yDescription.keyboardDisabled': t('Use Enter to select a component.'),
+    'node.a11yDescription.ariaLiveMessage': ({ x, y }) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
+    'edge.a11yDescription.default': t('Use Enter to select a connection.')
+  }}
+  autoPanOnConnect={false} nodesConnectable={editable} deleteKey={null} multiSelectionKey={['Control', 'Meta', 'Shift']}
+  isValidConnection={valid}
+  onbeforeconnect={(connection: FlowConnection) => { if (valid(connection)) connect({ source: connection.source, target: connection.target }); return false; }}
+  onbeforereconnect={(next, old) => {
+    if (valid(next)) connect({ source: next.source, target: next.target }, old.id);
+    return null;
+  }}
+  onreconnectstart={(_, edge) => { reconnectKey = edge.id; }}
+  onconnectstart={startConnection} onconnectend={finishConnection}
+  onclickconnectstart={startConnection} onclickconnectend={finishConnection}
+  onreconnectend={() => { linkStart = undefined; reconnectKey = ''; }}
+  onnodeclick={({ node, event }) => {
+    if (node.type === 'groupCard') selectGroup(node.id);
+    else if (!('ctrlKey' in event) || !(event.ctrlKey || event.metaKey || event.shiftKey)) select(node.id);
+  }}
+  onselectionchange={({ nodes: items, edges: chosen }) => {
+    const next = items.filter((item) => item.type === 'workbench').map((item) => item.id);
+    if (!touchSelect) selectMany(next);
+    if (chosen.length === 1 && chosen[0].id !== edgeSelected && !next.length) selectEdge(chosen[0].id);
+  }}
   onedgeclick={({ edge }) => selectEdge(edge.id)}
-  onnodedragstop={({ targetNode }) => { if (editable && targetNode) move(targetNode.id, project(targetNode.position, targetNode.id, true)); }}
-  onpaneclick={clear} onnodecontextmenu={({ event, node }) => menu(event, node.id)}
+  onnodedrag={({ nodes: dragged }) => previewPositions(trackDrag(dragged))}
+  onnodedragstop={({ nodes: dragged }) => finishMove(trackDrag(dragged))}
+  onselectiondrag={(_, dragged) => previewPositions(trackDrag(dragged))}
+  onselectiondragstop={(_, dragged) => finishMove(trackDrag(dragged))}
+  onmoveend={(event, viewport) => {
+    if (event) localStorage.setItem(viewportKey(), JSON.stringify(viewport));
+  }}
+  onpaneclick={() => { linkFeedback = ''; clear(); }}
+  onnodecontextmenu={({ event, node }) => { if (node.type === 'groupCard') { selectGroup(node.id); menu(event); } else menu(event, node.id); }}
   onpanecontextmenu={({ event }) => menu(event)}
   onedgecontextmenu={({ event, edge }) => { selectEdge(edge.id); menu(event); }}
   panOnDrag zoomOnPinch>
-  <FitOnResize {container} {compact} nodeIds={nodes.map((node) => node.id)} />
+  <FitOnResize {container} {compact} preserveInitial={Boolean(initialViewport)} nodeIds={nodes.map((node) => node.id)} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
   <Controls position="bottom-left" showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}
 </SvelteFlow>
+{#if linkStart || linkFeedback}
+  <p class="link-feedback notice" role="status">{linkStart ? t("Highlighted ports accept this connection.") : message(linkFeedback)}</p>
+{/if}
 
 <style>
+  .link-feedback { position: absolute; top: 9px; left: 9px; right: 9px; width: fit-content; max-width: calc(100% - 18px); pointer-events: none; background: var(--surface); }
   :global(.svelte-flow) {
     --xy-background-color: var(--background);
     --xy-controls-button-background-color: var(--surface);
@@ -155,6 +387,8 @@
     --xy-controls-button-border-color: var(--border);
     --xy-minimap-background-color: var(--surface);
   }
+  :global(.svelte-flow__node-workbench:has(.connectable)) { z-index: 1003 !important; }
+  :global(.svelte-flow__edge-labels) { z-index: 1002; pointer-events: none; }
   :global(.svelte-flow__controls) { border: 1px solid var(--border); overflow: hidden; border-radius: 8px; }
   :global(.svelte-flow__minimap) { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   :global(.svelte-flow__attribution) { background: var(--surface); }

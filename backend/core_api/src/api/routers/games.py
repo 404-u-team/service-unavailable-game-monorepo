@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from json import dumps
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -23,6 +24,7 @@ from src.api.game_schemas import (
     SaveSummary,
     SettingsAction,
     TutorialAction,
+    UpdateDiagram,
     UpdateDraft,
     VersionedAction,
 )
@@ -48,6 +50,7 @@ from src.simulation.catalog import (
     ALLOWED,
     CAMPAIGNS,
     COMPONENTS,
+    CONNECTIONS,
     DIFFICULTIES,
     FEATURES,
     MINUTES_PER_TICK,
@@ -118,7 +121,16 @@ def game_errors(error: Exception) -> HTTPException:
         return HTTPException(404, "Save not found.")
     if isinstance(error, RevisionConflict):
         return HTTPException(409, str(error))
-    return HTTPException(422, str(error))
+    if isinstance(error, RuleError):
+        return HTTPException(
+            422,
+            str(error),
+            headers={
+                "X-Game-Error-Code": error.code,
+                "X-Game-Error-Values": dumps(error.values),
+            },
+        )
+    raise error
 
 
 @router.get("/catalog", response_model=Catalog)
@@ -133,6 +145,7 @@ def catalog():
             for key, item in SCENARIOS.items()
         },
         "connections": {key: sorted(targets) for key, targets in ALLOWED.items()},
+        "connection_types": CONNECTIONS,
         "operations": {key: op["label"] for key, op in OPERATIONS.items()},
         "minutes_per_tick": MINUTES_PER_TICK,
     }
@@ -247,6 +260,20 @@ async def create_draft(
         body,
         "open draft",
         lambda game: open_draft(game, body.revision),
+    )
+
+
+@router.put("/{game_id}/diagram", response_model=GameView)
+async def update_diagram(
+    game_id: UUID, body: UpdateDiagram, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "diagram",
+        lambda game: setattr(game, "diagram", body.diagram),
     )
 
 

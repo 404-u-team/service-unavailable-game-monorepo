@@ -1,12 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getViewportForBounds, useSvelteFlow } from '@xyflow/svelte';
-  let { container, compact, nodeIds }: { container: HTMLElement; compact: boolean; nodeIds: string[] } = $props();
+  let { container, compact, nodeIds, preserveInitial }: { container: HTMLElement; compact: boolean; nodeIds: string[]; preserveInitial: boolean } = $props();
   const { fitView, getNodesBounds, setViewport } = useSvelteFlow();
 
   onMount(() => {
+    let lastSize = preserveInitial ? [container.clientWidth, container.clientHeight] : undefined;
     let timer: ReturnType<typeof setTimeout>;
     const resize = new ResizeObserver(() => {
+      const size = [container.clientWidth, container.clientHeight];
+      if (lastSize?.[0] === size[0] && lastSize[1] === size[1]) return;
+      lastSize = size;
       clearTimeout(timer);
       timer = setTimeout(() => {
         const bounds = getNodesBounds(nodeIds);

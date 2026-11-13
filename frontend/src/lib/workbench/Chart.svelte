@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../i18n.svelte';
   import { clock, num } from '../format';
   let { title, values, ticks, secondary = [] }: { title: string; values: number[]; ticks: number[]; secondary?: number[] } = $props();
   const data = $derived([...values, ...secondary]);
@@ -11,7 +12,7 @@
 </script>
 
 {#if values.length}
-  <svg viewBox="0 0 650 205" role="img" aria-label={`${title}, ${values.length} samples. Latest value ${num(values.at(-1) ?? 0)}.`}>
+  <svg viewBox="0 0 650 205" role="img" aria-label={t("{0}, {1} samples. Latest value {2}.", [title, values.length, num(values.at(-1) ?? 0)])}>
     {#each [0, .25, .5, .75, 1] as item}
       <line x1="60" x2="635" y1={170 - item * 151} y2={170 - item * 151} />
       <text x="51" y={174 - item * 151} text-anchor="end">{num(minimum + item * (maximum - minimum))}</text>
@@ -27,7 +28,7 @@
     <polyline points={values.map(point).join(' ')} />
   </svg>
 {:else}
-  <div class="chart-empty grid-bg"><p class="muted">Install Monitoring with Service history to view this chart.</p></div>
+  <div class="chart-empty grid-bg"><p class="muted">{t("Install Monitoring with Service history to view this chart.")}</p></div>
 {/if}
 
 <style>

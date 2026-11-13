@@ -5,6 +5,8 @@ from uuid import UUID
 from pydantic import Field
 
 from src.simulation.models import (
+    DeploymentComparison,
+    Diagram,
     Difficulty,
     GameSettings,
     HistoryPoint,
@@ -44,6 +46,10 @@ class VersionedAction(Action):
 
 class UpdateDraft(VersionedAction):
     topology: Topology
+
+
+class UpdateDiagram(Action):
+    diagram: Diagram
 
 
 class SettingsAction(Action):
@@ -159,6 +165,7 @@ class DeploymentView(Model):
     tick: int
     summary: str
     cost: float
+    comparison: DeploymentComparison | None = None
 
 
 class GameView(SaveSummary):
@@ -167,6 +174,7 @@ class GameView(SaveSummary):
     satisfaction: float
     production: Topology
     draft: Topology | None
+    diagram: Diagram
     revision: int
     snapshot: Snapshot
     history: list[HistoryPoint]
@@ -240,4 +248,5 @@ class Catalog(Model):
     campaigns: dict[str, CampaignDefinition]
     operations: dict[str, str]
     connections: dict[str, list[str]]
+    connection_types: dict[str, dict[str, str]]
     minutes_per_tick: int

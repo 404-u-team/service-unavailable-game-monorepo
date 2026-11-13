@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import type { Snippet } from 'svelte';
   import { X } from '@lucide/svelte';
 
@@ -19,7 +20,7 @@
 <dialog bind:this={dialog} class:wide aria-label={title} oncancel={(event) => { event.preventDefault(); close(); }}>
   <header class="row spread">
     <div><h2>{title}</h2>{#if subtitle}<p class="muted">{subtitle}</p>{/if}</div>
-    <button class="btn icon-btn ghost" aria-label="Close dialog" onclick={close}><X size={17} /></button>
+    <button class="btn icon-btn ghost" aria-label={t("Close dialog")} onclick={close}><X size={17} /></button>
   </header>
   <div class="dialog-body">{@render children()}</div>
   {#if footer}<footer>{@render footer()}</footer>{/if}

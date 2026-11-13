@@ -57,6 +57,9 @@ async function deploy(page: Page) {
   await expect(review.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
   await review.getByRole('button', { name: 'Deploy changes' }).click();
   await expect(review).toBeHidden();
+  const results = page.getByRole('dialog', { name: 'Deployment complete' });
+  await expect(results.getByRole('table')).toBeVisible();
+  await results.getByRole('button', { name: 'Done' }).click();
 }
 
 test('A and B · create, run, save, reopen, edit and scale production', async ({ page }) => {
@@ -81,12 +84,12 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   expect((await state(page, id)).tick).toBe(saved.tick);
 
   await page.getByRole('button', { name: 'Add node' }).click();
-  await page.getByRole('dialog', { name: 'Component library' }).getByRole('button', { name: 'Monitoring' }).click();
+  await page.getByRole('dialog', { name: 'Component library' }).getByRole('button', { name: 'Monitoring', exact: true }).click();
   await connect(page, 'Messenger API', 'Monitoring');
   await connect(page, 'Primary database', 'Monitoring');
   await page.locator('.svelte-flow__node[aria-label="Monitoring"]').click();
   await page.getByRole('button', { name: 'Edit configuration' }).click();
-  await page.getByLabel('Collection scope').selectOption('Service history');
+  await page.getByLabel('Collection scope', { exact: true }).selectOption('Service history');
   await page.getByRole('button', { name: 'Save to draft' }).click();
   await deploy(page);
 
@@ -116,6 +119,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   if (visualDir) await page.screenshot({ path: `${visualDir}/deployment-1440.png` });
   await review.getByRole('button', { name: 'Deploy changes' }).click();
   await expect(review).toBeHidden();
+  await page.getByRole('button', { name: 'Done' }).click();
 
   const after = await state(page, id);
   expect(after.snapshot.components.api.utilization.CPU).toBeLessThan(before.snapshot.components.api.utilization.CPU);
@@ -181,7 +185,7 @@ test('E · failed instance reduces availability and redundancy restores service'
 
   await navigate(page, 'Topology');
   await page.getByRole('button', { name: 'Add node' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Monitoring' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Monitoring', exact: true }).click();
   await connect(page, 'Messenger API', 'Monitoring');
   await deploy(page);
   await navigate(page, 'Telemetry');
@@ -237,6 +241,7 @@ test.describe('Mobile workbench', () => {
     await expect(review.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
     if (visualDir) await page.screenshot({ path: `${visualDir}/deployment-390.png` });
     await review.getByRole('button', { name: 'Deploy changes' }).tap();
+    await page.getByRole('button', { name: 'Done' }).tap();
     expect((await state(page, id)).production.nodes.find((node) => node.id === 'api')!.config.instances).toBe(2);
     await navigate(page, 'Home', true);
     await expect(page.getByRole('heading', { name: 'Service overview' })).toBeVisible();
@@ -312,9 +317,9 @@ test('canvas drag, edge selection, and keyboard undo persist valid changes', asy
   await page.mouse.down();
   await page.mouse.move(x + width / 2 + 35, y + height / 2 - 85, { steps: 8 });
   await page.mouse.up();
-  await expect.poll(async () => (await state(page, id)).draft?.nodes.find((node) => node.id === 'api')?.position.y).toBeLessThan(145);
+  await expect.poll(async () => (await state(page, id)).diagram.positions.api?.y).toBeLessThan(145);
   await page.keyboard.press('Control+z');
-  await expect.poll(async () => (await state(page, id)).draft?.nodes.find((node) => node.id === 'api')?.position.y).toBe(185);
+  await expect.poll(async () => (await state(page, id)).diagram.positions.api).toBeUndefined();
   await page.getByRole('button', { name: 'Show component list' }).click();
   await page.getByRole('button', { name: 'Messenger API → Primary database' }).click();
   await page.keyboard.press('Delete');
@@ -328,4 +333,254 @@ test('canvas drag, edge selection, and keyboard undo persist valid changes', asy
   await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
   await expect.poll(async () => (await state(page, id)).draft).toBeNull();
   expect((await state(page, id)).production.edges).toHaveLength(3);
+});
+
+
+test('layout edits persist without Draft and preserve production', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const initial = await state(page, id);
+  const api = page.locator('.svelte-flow__node-workbench[aria-label="Messenger API"]');
+  const db = page.locator('.svelte-flow__node-workbench[aria-label="Primary database"]');
+  const apiBox = (await api.boundingBox())!;
+  const dbBox = (await db.boundingBox())!;
+  await page.mouse.click((apiBox.x + apiBox.width + dbBox.x) / 2, apiBox.y + apiBox.height / 2);
+
+  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  const handle = page.getByRole('button', { name: 'Waypoint 1' });
+  await expect(handle).toBeVisible();
+  await expect.poll(async () => (await state(page, id)).diagram.routes['api:db']?.length).toBe(1);
+  await expect.poll(() => handle.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === element;
+  })).toBe(true);
+  const point = (await handle.boundingBox())!;
+  await page.mouse.move(point.x + point.width / 2, point.y + point.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(point.x + point.width / 2, point.y - 50, { steps: 7 });
+  await page.mouse.up();
+  await expect.poll(async () => (await state(page, id)).diagram.routes['api:db']?.[0]?.y).toBeLessThan(220);
+  if (visualDir) await page.screenshot({ path: `${visualDir}/manual-routing.png` });
+
+  await api.click();
+  await db.click({ modifiers: ['Control'] });
+  await page.getByRole('button', { name: 'Create group' }).click();
+  const group = page.getByRole('dialog', { name: 'Create group' });
+  await group.getByLabel('Group name').fill('Data path');
+  await group.getByRole('button', { name: 'Save group' }).click();
+  await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(1);
+  if (visualDir) await page.screenshot({ path: `${visualDir}/expanded-group.png` });
+  await page.locator('.svelte-flow__node-groupCard').getByRole('button', { name: 'Collapse group' }).click();
+  await expect(api).toHaveCount(0);
+  await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(true);
+  if (visualDir) await page.screenshot({ path: `${visualDir}/collapsed-group.png` });
+  await page.reload();
+  await expect(page.locator('.svelte-flow__node-groupCard')).toContainText('Data path');
+  await expect(api).toHaveCount(0);
+  await page.locator('.svelte-flow__node-groupCard').getByRole('button', { name: 'Expand group' }).click();
+  await expect(api).toBeVisible();
+  const after = await state(page, id);
+  expect(after.production).toEqual(initial.production);
+  expect(after.revision).toBe(initial.revision);
+  expect(after.snapshot.metrics).toEqual(initial.snapshot.metrics);
+  expect(after.draft).toBeNull();
+  expect(after.diagram.routes['api:db']).toHaveLength(1);
+});
+
+test('Russian is persisted across menus, editor, settings, and game screens', async ({ page }) => {
+  await page.goto('/?view=settings');
+  await page.getByLabel('Interface language').selectOption('ru');
+  await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
+  await page.goto('/?view=new');
+  await page.getByLabel('Имя сервиса').fill('Мессенджер');
+  await page.getByRole('button', { name: 'Создать игру' }).click();
+  await expect(page.getByRole('heading', { name: 'Топология инфраструктуры' })).toBeVisible();
+  const base = new URL(page.url()).pathname;
+  for (const [view, title] of [['monitor', 'Мониторинг системы'], ['product', 'Функции продукта'], ['growth', 'Аудитория и кампании'],
+      ['finance', 'Финансы'], ['events', 'События и инциденты'], ['guide', 'Справка'], ['settings', 'Настройки']]) {
+    await page.goto(`${base}?view=${view}`);
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  }
+  await page.goto(`${base}?view=build`);
+  await page.getByRole('button', { name: 'Справочник соединений' }).click();
+  await expect(page.getByRole('dialog')).toContainText('Исходящие соединения');
+  await page.getByRole('button', { name: 'Закрыть окно' }).click();
+  await page.getByRole('button', { name: 'Создать черновик' }).click();
+  await expect(page.getByRole('button', { name: 'Проверить развёртывание' })).toBeVisible();
+  const sourcePort = page.locator('.svelte-flow__node[data-id="traffic"] .svelte-flow__handle.source');
+  await page.getByRole('button', { name: 'Вписать в экран' }).click();
+  const databasePort = page.locator('.svelte-flow__node[data-id="db"]');
+  await expect(databasePort).toBeInViewport();
+  const sourceBox = (await sourcePort.boundingBox())!;
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + sourceBox.height / 2);
+  await expect(page.getByText('Подсвеченные порты принимают соединение.')).toBeVisible();
+  const targetBox = (await databasePort.boundingBox())!;
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.getByText('Нельзя соединить «Источник трафика» и «База данных».')).toBeVisible();
+  await page.getByRole('button', { name: 'Проверить развёртывание' }).click();
+  const review = page.getByRole('dialog', { name: 'Проверка развёртывания' });
+  await expect(review.getByRole('heading', { name: 'Прогноз нагрузки и производительности' })).toBeVisible();
+  await review.getByRole('button', { name: 'К черновику' }).click();
+  await page.getByRole('button', { name: 'Отменить', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Удалить черновик' }).click();
+  await expect(page.getByRole('button', { name: 'Создать черновик' })).toBeVisible();
+  for (const width of [1920, 1440, 768, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await expect.poll(() => page.locator('.svelte-flow').evaluate((canvas) => {
+      const bounds = canvas.getBoundingClientRect();
+      const nodes = [...canvas.querySelectorAll('.svelte-flow__node-workbench')].map((node) => node.getBoundingClientRect());
+      return nodes.length === 4 && nodes.every((node) => node.left >= bounds.left - 1 && node.right <= bounds.right + 1 &&
+        node.top >= bounds.top - 1 && node.bottom <= bounds.bottom + 1);
+    })).toBe(true);
+    if (visualDir && [1440, 390].includes(width)) await page.screenshot({ path: `${visualDir}/russian-${width}.png` });
+  }
+});
+
+test('complex topology supports nested groups, telemetry capacity and configuration previews', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const id = await create(page, false, false);
+  const initial = await state(page, id);
+  const request = async (path: string, method: 'POST' | 'PUT', body: object) => {
+    const response = await page.request.fetch(`/api/games/${id}${path}`, {
+      method, data: { request_id: crypto.randomUUID(), ...body }
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return await response.json() as Game;
+  };
+  const draft = await request('/draft', 'POST', { revision: initial.revision });
+  const topology = draft.draft!;
+  topology.nodes.push(
+    { id: 'limit', kind: 'limiter', name: 'Burst protection', position: { x: 268, y: 245 }, config: { limit: 210 } },
+    { id: 'api2', kind: 'api', name: 'Messenger API communications standby for long regional names', position: { x: 715, y: 360 }, config: { cpu: 4, memory: 8 } },
+    { id: 'replica', kind: 'replica', name: 'Read replica', position: { x: 945, y: 120 }, config: {} },
+    { id: 'cache', kind: 'cache', name: 'Redis cache', position: { x: 945, y: 24 }, config: {} },
+    { id: 'queue', kind: 'queue', name: 'Media jobs', position: { x: 945, y: 520 }, config: {} },
+    { id: 'worker', kind: 'worker', name: 'Media worker', position: { x: 1175, y: 520 }, config: {} },
+    { id: 'monitor', kind: 'monitor', name: 'Metrics collector', position: { x: 1175, y: 270 }, config: { slots: 4, detail: 'Service history' } }
+  );
+  const positions = {
+    traffic: { x: 40, y: 245 }, edge: { x: 490, y: 245 }, api: { x: 715, y: 150 }, db: { x: 1175, y: 110 },
+    replica: { x: 945, y: 172 }
+  };
+  topology.edges = [
+    ['traffic', 'limit'], ['limit', 'edge'], ['edge', 'api'], ['edge', 'api2'], ['api', 'db'], ['api2', 'db'],
+    ['api', 'cache'], ['api2', 'replica'], ['cache', 'replica'], ['replica', 'db'], ['api', 'queue'],
+    ['api2', 'queue'], ['queue', 'worker'], ['api', 'monitor'], ['api2', 'monitor'], ['cache', 'monitor'],
+    ['db', 'monitor'], ['worker', 'monitor']
+  ].map(([source, target]) => ({ source, target }));
+  const edited = await request('/draft', 'PUT', { revision: draft.revision, topology });
+  const groups = [
+    { id: 'compute-display', name: 'API cluster', members: ['api', 'api2'], collapsed: false },
+    { id: 'background-display', name: 'Background processing', members: ['queue', 'worker'], collapsed: false },
+    { id: 'application-display', name: 'Messaging subsystem', members: ['compute-display', 'background-display'], collapsed: false }
+  ];
+  await request('/diagram', 'PUT', { diagram: { positions, groups, routes: {} } });
+  const deployed = await request('/deployments', 'POST', { revision: edited.revision });
+  expect(deployed.snapshot.monitors.monitor.covered).toEqual(['api', 'api2']);
+  expect(deployed.snapshot.monitors.monitor.dropped).toEqual(['cache', 'db', 'worker']);
+  await page.reload();
+  await expect(page.locator('.svelte-flow__node-workbench')).toHaveCount(11);
+  await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(3);
+  await expect(page.locator('.svelte-flow__edge')).toHaveCount(18);
+  await page.getByRole('button', { name: 'Fit view' }).click();
+  const clipped = await page.locator('.svelte-flow__node-workbench').evaluateAll((nodes) => nodes.some((node) => {
+    const content = node.querySelector('.node-status');
+    const heading = node.querySelector('strong');
+    const meter = node.querySelector('.meter');
+    const box = node.getBoundingClientRect();
+    return !content || !heading || !heading.title || content.getBoundingClientRect().bottom > box.bottom + 1 ||
+      heading.getBoundingClientRect().right > box.right + 1 || (meter && meter.getBoundingClientRect().right > box.right + 1);
+  }));
+  expect(clipped).toBe(false);
+  if (visualDir) await page.screenshot({ path: `${visualDir}/complex-topology.png` });
+
+  const subsystem = page.locator('.svelte-flow__node-groupCard[aria-label="Messaging subsystem"]');
+  await subsystem.getByRole('button', { name: 'Collapse group' }).click();
+  await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(1);
+  await expect(page.locator('.svelte-flow__node-workbench')).toHaveCount(7);
+  await expect.poll(async () => (await state(page, id)).diagram.groups.find((group) => group.id === 'application-display')?.collapsed).toBe(true);
+  expect((await state(page, id)).snapshot).toEqual(deployed.snapshot);
+  await page.getByRole('button', { name: 'Run simulation at normal speed' }).click();
+  await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(deployed.tick);
+  await subsystem.getByRole('button', { name: 'Expand group' }).click();
+  await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(3);
+  const running = await state(page, id);
+  expect(running.production).toEqual(deployed.production);
+  expect(running.revision).toBe(deployed.revision);
+  expect(running.snapshot.metrics.throughput).toBeGreaterThan(0);
+  await pause(page);
+
+  await navigate(page, 'Telemetry');
+  await expect(page.getByText('Collection capacity exceeded.', { exact: false })).toBeVisible();
+  const coverage = page.getByRole('heading', { name: 'Monitoring coverage' });
+  await expect(coverage).toBeVisible();
+  if (visualDir) {
+    await coverage.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${visualDir}/monitoring-coverage.png` });
+  }
+
+  await page.goto(`/game/${id}?view=build&component=db`);
+  await page.getByRole('button', { name: 'Edit configuration' }).click();
+  const config = page.getByRole('dialog', { name: 'Component configuration' });
+  await config.getByRole('button', { name: 'Help with Connection pool limit' }).click();
+  await expect(config.getByRole('tooltip').filter({ hasText: 'limits' })).toBeVisible();
+  if (visualDir) await page.screenshot({ path: `${visualDir}/configuration-help.png` });
+  await config.getByLabel('Database vCPU', { exact: true }).fill('8');
+  await config.getByRole('button', { name: 'Preview cost and capacity' }).click();
+  await expect(config.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
+  await expect(config.getByText('Daily infrastructure ·', { exact: false })).toBeVisible();
+});
+
+test('port guidance rejects incompatible links and reconnects endpoints in Draft', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const initial = await state(page, id);
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect(page.getByRole('button', { name: 'Review deployment' })).toBeVisible();
+  const node = (id: string) => page.locator(`.svelte-flow__node[data-id="${id}"]`);
+  const drag = async (from: ReturnType<Page['locator']>, to: ReturnType<Page['locator']>) => {
+    await expect.poll(() => from.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === element;
+    })).toBe(true);
+    const a = (await from.boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(a.x + a.width / 2 + 12, a.y + a.height / 2);
+    await expect(page.getByText('Highlighted ports accept this connection.')).toBeVisible();
+    const current = (await to.boundingBox())!;
+    await page.mouse.move(current.x + current.width / 2, current.y + current.height / 2, { steps: 8 });
+    const stable = (await to.boundingBox())!;
+    await page.mouse.move(stable.x + stable.width / 2, stable.y + stable.height / 2);
+    await page.mouse.up();
+  };
+  await drag(node('traffic').locator('.svelte-flow__handle.source'), node('db').locator('.target'));
+  await expect(page.getByText('Traffic source cannot connect to Database.')).toBeVisible();
+  expect((await state(page, id)).draft?.edges).toEqual(initial.production.edges);
+
+  const from = (await node('traffic').boundingBox())!;
+  const to = (await node('edge').boundingBox())!;
+  await page.mouse.click((from.x + from.width + to.x) / 2, from.y + from.height / 2);
+  const reconnect = page.locator('.svelte-flow__edgeupdater-target');
+  await expect(reconnect).toBeVisible();
+  await drag(reconnect, node('api').locator('.target'));
+  await expect.poll(async () => (await state(page, id)).draft?.edges.some((edge) => edge.source === 'traffic' && edge.target === 'api')).toBe(true);
+  expect((await state(page, id)).production).toEqual(initial.production);
+  await page.getByRole('button', { name: 'Show component list' }).click();
+  await page.getByRole('button', { name: 'Incoming traffic → Messenger API' }).click();
+  await page.getByRole('button', { name: 'Show topology canvas' }).click();
+  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  await expect.poll(async () => (await state(page, id)).diagram.routes['traffic:api']?.length).toBe(1);
+  const routeBeforeDeploy = (await state(page, id)).diagram.routes['traffic:api'];
+  await deploy(page);
+  await page.reload();
+  await expect(page.locator('.svelte-flow__edge[data-id="traffic:api"]')).toBeAttached();
+  const final = await state(page, id);
+  expect(final.production.edges.some((edge) => edge.source === 'traffic' && edge.target === 'api')).toBe(true);
+  expect(final.diagram.routes['traffic:api']).toEqual(routeBeforeDeploy);
 });

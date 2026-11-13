@@ -15,11 +15,12 @@ from src.simulation.models import (
     ComponentMetrics,
     Game,
     Metrics,
+    MonitorCoverage,
     Snapshot,
     Topology,
     Traffic,
 )
-from src.simulation.topology import config, inspect_graph
+from src.simulation.topology import config, database_capacity, inspect_graph
 
 
 @dataclass
@@ -110,6 +111,9 @@ def evaluate(
     # keeping the calculation proportional to the graph rather than the request count.
     incoming: dict[str, dict[tuple[str, str], Batch]] = defaultdict(dict)
     edges: dict[tuple[str, str], float] = defaultdict(float)
+    edge_operations: dict[tuple[str, str], dict[str, float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
     components: dict[str, ComponentMetrics] = {}
     completed: dict[tuple[str, str], Batch] = {}
     queues = {}
@@ -139,6 +143,7 @@ def evaluate(
             share = rate * weight / total
             add(incoming[target], key, share, latency)
             edges[source, target] += share
+            edge_operations[source, target][key[0]] += share
 
     def report(
         node_id: str,
@@ -181,7 +186,8 @@ def evaluate(
         targets = [
             target
             for target in graph.targets[node_id]
-            if graph.nodes[target].kind not in {"queue", "monitor"}
+            if graph.relationships[node_id, target]
+            in {"request", "queries", "reads", "cache"}
         ]
         cohorts = incoming[node_id]
         rate = sum(batch.rate for batch in cohorts.values())
@@ -215,29 +221,44 @@ def evaluate(
             }
             base = 3
         elif kind in {"database", "replica"}:
-            disk = 1.45 if cfg.get("disk") == "NVMe" else 1.0
+            read_capacity, write_capacity = database_capacity(cfg)
             reads = load("read")
             writes = load("write")
             usage = {
-                "Reads": reads / (cfg["reads"] * disk),
+                "Reads": reads / read_capacity,
                 "RAM": (0.8 + reads * 0.014 + writes * 0.02) / cfg["memory"],
                 "Connections": (reads + writes) / cfg["connections"],
             }
             if kind == "database":
                 followers = sum(
-                    graph.nodes[source].kind == "replica"
-                    and node_id in graph.targets[source]
+                    graph.relationships.get((source, node_id)) == "replication"
                     for source in graph.reachable
                 )
-                usage["Writes"] = (
-                    writes * (1 + 0.08 * followers) / (cfg["writes"] * disk)
-                )
+                usage["Writes"] = writes * (1 + 0.08 * followers) / write_capacity
                 usage["Disk I/O"] = 0.46 * usage["Reads"] + 0.77 * usage["Writes"]
                 details["storage_used"] = game.storage.get(node_id, 0)
                 usage["Storage"] = details["storage_used"] / cfg["storage"]
             else:
-                if not targets:
+                primary = next(
+                    (
+                        target
+                        for target in graph.targets[node_id]
+                        if graph.relationships[node_id, target] == "replication"
+                    ),
+                    None,
+                )
+                if not primary:
                     capacity = 0
+                elif failures[primary]:
+                    details["replication_lag"] = 30.0
+                else:
+                    details["replication_lag"] = round(
+                        0.2
+                        + 1.8
+                        * (reads / read_capacity) ** 2
+                        / max(factors[primary], 0.1),
+                        2,
+                    )
             base = 21
         elif kind == "cache":
             usage = {"CPU": rate / (160 + cfg["memory"] * 35)}
@@ -366,6 +387,9 @@ def evaluate(
     # Background work is generated only by requests that reached a successful terminal.
     jobs: dict[str, float] = defaultdict(float)
     async_routes: dict[tuple[str, str], list[str]] = {}
+    queued_operations: dict[str, dict[str, float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
     for key, batch in completed.items():
         op, origin = key
         targets = [
@@ -379,6 +403,8 @@ def evaluate(
             for target in targets:
                 jobs[target] += rate
                 edges[origin, target] += rate
+                edge_operations[origin, target][op] += rate
+                queued_operations[target][op] += rate
 
     dropped: dict[str, float] = {}
     worker_load: dict[str, float] = defaultdict(float)
@@ -421,6 +447,11 @@ def evaluate(
             worker_rate = (processed / seconds) * share / capacity if capacity else 0
             worker_load[worker] += worker_rate
             edges[node.id, worker] += worker_rate
+            current_share = min(1, rate * seconds / volume) if volume else 0
+            for operation, arrival in queued_operations[node.id].items():
+                edge_operations[node.id, worker][operation] += (
+                    worker_rate * current_share * arrival / rate
+                )
         pending = max(0, volume - processed)
         dropped[node.id] = (
             min(1, max(0, pending - cfg["capacity"]) / (rate * seconds)) if rate else 0
@@ -453,14 +484,35 @@ def evaluate(
         loss = sum(dropped[target] for target in routes) / len(routes) if routes else 0
         success.add(batch.rate * (1 - loss), batch.latency)
 
-    monitors = {
-        n.id for n in topology.nodes if n.kind == "monitor" and n.id in graph.reachable
-    }
-    visible = {
-        source
-        for source in graph.reachable
-        if monitors.intersection(graph.targets[source])
-    }
+    monitors = {}
+    visible = set()
+    for node in topology.nodes:
+        if node.kind != "monitor":
+            continue
+        linked = sorted(
+            source
+            for (source, target), kind in graph.relationships.items()
+            if target == node.id and kind == "telemetry"
+        )
+        cfg = settings[node.id]
+        capacity = int(cfg["slots"])
+        failed = bool(failures[node.id])
+        history = (
+            cfg["detail"] == "Service history"
+            and capacity >= 3
+            and bool(linked)
+            and not failed
+        )
+        available_slots = 0 if failed else max(0, capacity - (2 if history else 0))
+        covered, dropped = linked[:available_slots], linked[available_slots:]
+        visible.update(covered)
+        monitors[node.id] = MonitorCoverage(
+            capacity=capacity,
+            history=history,
+            covered=covered,
+            dropped=dropped,
+            failed=failed,
+        )
     rollout = 1.0
     for event in events:
         if event.kind == "deploy":
@@ -484,14 +536,18 @@ def evaluate(
             key: metric for key, metric in components.items() if key in visible
         },
         traffic=[
-            Traffic(source=source, target=target, rps=rate)
+            Traffic(
+                source=source,
+                target=target,
+                rps=rate,
+                operations=edge_operations.get((source, target), {}),
+            )
             for (source, target), rate in edges.items()
-            if source in visible or target in visible
+            if source in visible or target in visible or source == "traffic"
         ],
         demand=workloads,
-        monitored=any(
-            settings[monitor]["detail"] == "Service history" for monitor in monitors
-        ),
+        monitored=any(monitor.history for monitor in monitors.values()),
+        monitors=monitors,
     )
     return Evaluation(snapshot, queues, storage)
 

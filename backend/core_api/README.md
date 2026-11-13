@@ -18,6 +18,7 @@ All paths below start with `/api/games`. FastAPI publishes request and response 
 | `POST /{id}/save` | Persist and return the current snapshot |
 | `PUT /{id}/clock` | Set speed to 0, 1 or 3 |
 | `POST /{id}/draft` | Start a draft from production |
+| `PUT /{id}/diagram` | Save diagram positions, routes, and groups |
 | `PUT /{id}/draft` | Persist an edited topology |
 | `POST /{id}/draft/review` | Validate the draft or a supplied candidate topology and return the diff, costs and forecast |
 | `POST /{id}/draft/discard` | Discard the draft |
@@ -38,6 +39,10 @@ Call `GET /api/games` first to establish the signed, HTTP-only guest cookie. Cli
 - One step represents ten in-game minutes. The server advances saves from elapsed time at the selected speed. At 1×, two real seconds represent one step. At 3×, three steps take two seconds. On return to a running save, at most two in-game days are simulated for a single elapsed gap. Paused saves retain their tick and any fractional progress.
 - Demand is generated in operation cohorts from audience, scenario activity, daily variation, released features, campaigns and seeded events. CPU, RAM, network, connections, concurrency, disk I/O, database reads and writes, and storage affect throughput. Latency rises with resource pressure. Availability is successful throughput divided by incoming request rate.
 - Requests follow configured graph edges. Traffic can pass through a limiter or balancer to an API. An API sends writes directly to a primary. Read-only cohorts prefer linked caches and otherwise split across linked databases and read replicas. Cache misses follow the cache's data edges. Read replicas require a primary link and add replication write overhead. Background work uses an attached queue and worker when configured.
-- Monitoring exposes metrics for reachable components that send telemetry to it. Service history mode makes historical service metrics available. Forecasts evaluate representative future workload ranges with the same engine, excluding future random incidents. Higher monitoring coverage narrows the range.
+- Monitoring exposes metrics for linked components with a collection slot. Service history mode reserves two slots and exposes historical metrics. Forecasts evaluate representative future workload ranges with the same engine, excluding future random incidents. Higher monitoring coverage narrows the range.
 - Campaigns incur a one-time cost and acquire users along a growth curve. Organic growth and churn respond to service quality and feature appeal. The game bills infrastructure each step. Messenger subscription revenue varies with audience, satisfaction and features. Running topology changes that remove routing connections can briefly reduce throughput.
-- Deployment rollback restores configuration and placements. Runtime data on removed components is not recovered. Each save retains the last 20 deployments, 100 events and 144 history points.
+- Deployment rollback restores the earlier topology. Diagram positions, routes, and groups stay in the diagram. Runtime data on removed components is not recovered. Each save retains the last 20 deployments, 100 events and 144 history points.
+
+### Diagram storage
+
+`PUT /api/games/{id}/diagram` accepts `request_id` and a `diagram` object with `positions`, `routes`, and `groups`. Route keys are `source:target`. The game view returns this object independently of `production`, `draft`, and the topology revision. Existing saves have an empty diagram and render their stored topology positions. The existing JSON save column stores the diagram and deployment metric comparisons.

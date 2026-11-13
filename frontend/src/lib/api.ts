@@ -1,7 +1,7 @@
 import { difficulties, type Catalog, type Game, type Save } from './types';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string, public values: string[] = []) {
     super(message);
   }
 }
@@ -16,9 +16,11 @@ export async function api<T>(path: string, method = 'GET', data?: object): Promi
   const result = await response.json().catch(() => null);
   if (!response.ok) {
     const message = Array.isArray(result?.detail)
-      ? result.detail.map((item: { msg: string }) => item.msg).join(' ')
+      ? 'Some submitted values are invalid.'
       : result?.detail;
-    throw new ApiError(response.status, message || 'The request could not be completed.');
+    const code = response.headers.get('x-game-error-code') ?? undefined;
+    const values = JSON.parse(response.headers.get('x-game-error-values') ?? '[]') as string[];
+    throw new ApiError(response.status, message || 'The request could not be completed.', code, values);
   }
   return result as T;
 }

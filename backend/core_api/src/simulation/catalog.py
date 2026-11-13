@@ -63,25 +63,25 @@ COMPONENTS: dict[Kind, dict] = {
         "category": "Data",
         "daily": 51,
         "fields": {
-            "reads": number("Reads per second", 155, 25, 10000, 5),
-            "writes": number("Writes per second", 62, 10, 5000, 1),
+            "cpu": number("Database vCPU", 2, 1, 16),
             "memory": number("RAM (GB)", 8, 1, 128),
             "storage": number("Storage (GB)", 32, 4, 10000),
             "disk": choice("Storage type", "SSD", "SSD", "NVMe"),
-            "connections": number("Connections", 350, 25, 10000, 25),
+            "connections": number("Connection pool limit", 350, 25, 10000, 25),
         },
-        "description": "Serves persistent reads and writes with independent limits. NVMe increases I/O throughput.",
+        "description": "Serves persistent reads and writes. Throughput depends on CPU, memory, and disk. The connection pool limits admission.",
     },
     "replica": {
         "name": "Read replica",
         "category": "Data",
         "daily": 35,
         "fields": {
-            "reads": number("Reads per second", 155, 25, 10000, 5),
+            "cpu": number("Database vCPU", 2, 1, 16),
             "memory": number("RAM (GB)", 8, 1, 128),
-            "connections": number("Connections", 350, 25, 10000, 25),
+            "disk": choice("Storage type", "SSD", "SSD", "NVMe"),
+            "connections": number("Connection pool limit", 350, 25, 10000, 25),
         },
-        "description": "Offloads reads. Connect it to a primary database for replication.",
+        "description": "Serves application reads. Subscribe to one primary database for replication. Reads can lag behind writes.",
     },
     "cache": {
         "name": "Cache",
@@ -137,14 +137,15 @@ COMPONENTS: dict[Kind, dict] = {
         "category": "Operations",
         "daily": 17,
         "fields": {
+            "slots": number("Collection slots", 8, 2, 32),
             "detail": choice(
                 "Collection scope",
                 "Linked components",
                 "Linked components",
                 "Service history",
-            )
+            ),
         },
-        "description": "Connect production components to Monitoring to inspect their telemetry and incident causes.",
+        "description": "Collects metrics from linked components. Each link uses one slot. Service history reserves two more slots.",
     },
 }
 
@@ -305,17 +306,30 @@ CAMPAIGNS = {
     },
 }
 
-ALLOWED: dict[Kind, set[Kind]] = {
-    "source": {"api", "balancer", "limiter"},
-    "limiter": {"balancer", "api", "monitor"},
-    "balancer": {"api", "monitor"},
-    "api": {"database", "replica", "cache", "queue", "monitor"},
-    "cache": {"database", "replica", "monitor"},
-    "replica": {"database", "monitor"},
-    "database": {"monitor"},
-    "queue": {"worker", "monitor"},
-    "worker": {"monitor"},
-    "monitor": set(),
+CONNECTIONS: dict[Kind, dict[Kind, str]] = {
+    "source": {"api": "request", "balancer": "request", "limiter": "request"},
+    "limiter": {"balancer": "request", "api": "request", "monitor": "telemetry"},
+    "balancer": {"api": "request", "monitor": "telemetry"},
+    "api": {
+        "database": "queries",
+        "replica": "reads",
+        "cache": "cache",
+        "queue": "enqueue",
+        "monitor": "telemetry",
+    },
+    "cache": {"database": "reads", "replica": "reads", "monitor": "telemetry"},
+    "replica": {"database": "replication", "monitor": "telemetry"},
+    "database": {"monitor": "telemetry"},
+    "queue": {"worker": "jobs", "monitor": "telemetry"},
+    "worker": {"monitor": "telemetry"},
+    "monitor": {},
+}
+ALLOWED = {source: set(targets) for source, targets in CONNECTIONS.items()}
+
+
+LEGACY_DATABASE_LIMITS = {
+    "reads": number("Legacy read throttle", 155, 25, 10000, 5),
+    "writes": number("Legacy write throttle", 62, 10, 5000, 1),
 }
 
 

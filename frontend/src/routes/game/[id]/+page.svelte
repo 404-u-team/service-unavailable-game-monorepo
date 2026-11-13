@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { apiMessage, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
-  import { ArrowRight, ChevronDown, Pause, Play, Save as SaveIcon } from '@lucide/svelte';
+  import { ArrowRight, ChevronDown, Pause, X, Play, Save as SaveIcon } from '@lucide/svelte';
   import Brand from '#lib/Brand.svelte';
   import Architecture from '#lib/workbench/Architecture.svelte';
   import Dashboard from '#lib/workbench/Dashboard.svelte';
@@ -10,8 +11,36 @@
   import { when } from '#lib/format.ts';
   import type { Catalog, Game, Speed } from '#lib/types.ts';
 
-  let catalog = $state<Catalog>();
   let game = $state.raw<Game>();
+  let dismissed = $state(false);
+  let viewedEvent = '';
+  let recentEvent = $state<Game['incidents'][number]>();
+  const latestIncident = $derived(game?.incidents[0]);
+  const objective = $derived.by(() => {
+    if (!game || !game.settings.show_tutorial || game.settings.show_objectives === false || dismissed) return;
+    if (tutorial[game.tutorial]) return tutorial[game.tutorial];
+    if (Object.values(game.snapshot.monitors ?? {}).some((monitor) => monitor.dropped.length)) {
+      return { title: 'Expand monitoring coverage', text: 'Check which components lost collection slots.', section: 'monitor' } as const;
+    }
+    if (!Object.keys(game.snapshot.components).length) {
+      return { title: 'Set up monitoring coverage', text: 'Link components to a collector to see resource metrics.', section: 'build' } as const;
+    }
+    if (Object.values(game.snapshot.components).some((item) => item.status === 'overloaded' || item.status === 'failed')) {
+      return { title: 'Investigate an overloaded component', text: 'Use the highest resource load to decide which capacity to add.', section: 'monitor' } as const;
+    }
+    if (!game.campaigns.length) {
+      return { title: 'Check capacity for a campaign', text: 'Open a campaign forecast before adding traffic.', section: 'growth' } as const;
+    }
+  });
+  $effect(() => {
+    if (!latestIncident || latestIncident.id === viewedEvent) return;
+    viewedEvent = latestIncident.id;
+    if (latestIncident.severity === 'info' && !latestIncident.id.startsWith('campaign-complete-') &&
+        !latestIncident.id.startsWith('release-')) return;
+    if (game && game.tick - latestIncident.start < 3) recentEvent = latestIncident;
+  });
+
+  let catalog = $state<Catalog>();
   let error = $state('');
   let connection = $state('');
   let loading = $state(true);
@@ -57,6 +86,8 @@
 
   async function open(gameId: string) {
     currentId = gameId;
+    recentEvent = undefined;
+    dismissed = false;
     const version = ++generation;
     loading = true;
     game = undefined;
@@ -66,7 +97,7 @@
       const [state, definitions] = await Promise.all([loadGame(gameId), catalog ? Promise.resolve(catalog) : loadCatalog()]);
       if (version === generation) { game = state; catalog = definitions; }
     } catch (reason) {
-      if (version === generation) connection = (reason as Error).message;
+      if (version === generation) connection = apiMessage(reason);
     } finally {
       if (version === generation) loading = false;
     }
@@ -80,7 +111,7 @@
       const next = await loadGame(gameId);
       if (mounted && currentId === gameId) { accept(next); connection = ''; }
     } catch (reason) {
-      if (currentId === gameId) connection = (reason as Error).message;
+      if (currentId === gameId) connection = apiMessage(reason);
     } finally { polling = false; }
   }
 
@@ -106,7 +137,7 @@
       }
       return next;
     } catch (reason) {
-      error = (reason as Error).message;
+      error = apiMessage(reason);
       if (reason instanceof ApiError && reason.status < 500) actionRequest = undefined;
       if (reason instanceof ApiError && reason.status === 409) await refresh(true);
       return null;
@@ -124,50 +155,50 @@
   <header class="topbar">
     <Brand />
     {#if game}
-      <nav class="primary-nav" aria-label="Primary navigation">
-        {#each primary as item}<a href={link(item)} aria-current={section === item ? 'page' : undefined}>{sections[item].name}</a>{/each}
+      <nav class="primary-nav" aria-label={t("Primary navigation")}>
+        {#each primary as item}<a href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
       </nav>
       <div class="controls row">
-        <span class="badge good online"><i class="dot"></i>{game.speed ? 'Live' : 'Paused'}</span>
-        <button class="btn quick-pause" aria-label={game.speed ? 'Pause simulation' : 'Run simulation at normal speed'} disabled={busy} onclick={() => act('/clock', { speed: game?.speed ? 0 : 1 }, 'PUT')}>
+        <span class="badge good online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</span>
+        <button class="btn quick-pause" aria-label={game.speed ? t("Pause simulation") : t("Run simulation at normal speed")} disabled={busy} onclick={() => act('/clock', { speed: game?.speed ? 0 : 1 }, 'PUT')}>
           {#if game.speed}<Pause size={15} />{:else}<Play size={15} />{/if}
         </button>
         <div class="clock-control">
-          <button class="btn speed" aria-label="Game speed" aria-expanded={clockOpen} onclick={() => clockOpen = !clockOpen}>
-            {game.speed ? `${game.speed}×` : 'Paused'} <ChevronDown size={13} />
+          <button class="btn speed" aria-label={t("Game speed")} aria-expanded={clockOpen} onclick={() => clockOpen = !clockOpen}>
+            {game.speed ? `${game.speed}×` : t("Paused")} <ChevronDown size={13} />
           </button>
           {#if clockOpen}
             <div class="clock-options panel stack">
               {#each speedOptions as speed}<button class="btn" disabled={busy} aria-pressed={game.speed === speed.value}
-                onclick={async () => { if (await act('/clock', { speed: speed.value }, 'PUT')) clockOpen = false; }}>{speed.label}</button>{/each}
+                onclick={async () => { if (await act('/clock', { speed: speed.value }, 'PUT')) clockOpen = false; }}>{t(speed.label)}</button>{/each}
             </div>
           {/if}
         </div>
         <span class="time mono">{when(game.tick)}</span>
-        <button class="btn icon-btn quick-save" title={saved ? 'Game saved' : 'Save game'} aria-label="Save game" disabled={busy} onclick={() => act('/save')}><SaveIcon size={15} /></button>
+        <button class="btn icon-btn quick-save" title={saved ? t("Game saved") : t("Save game")} aria-label={t("Save game")} disabled={busy} onclick={() => act('/save')}><SaveIcon size={15} /></button>
       </div>
     {/if}
   </header>
 
   {#if loading}
-    <main class="fallback"><p aria-live="polite">Loading service…</p></main>
+    <main class="fallback"><p aria-live="polite">{t("Loading service…")}</p></main>
   {:else if !game || !catalog}
-    <main class="fallback stack"><h1>Could not open game</h1><p class="notice error" role="alert">{connection || 'The save is unavailable.'}</p>
-      <div class="row"><button class="btn primary" onclick={() => open(id)}>Retry connection</button><a class="btn" href="/?view=saves">Saved games</a></div>
+    <main class="fallback stack"><h1>{t("Could not open game")}</h1><p class="notice error" role="alert">{connection ? message(connection) : t("The save is unavailable.")}</p>
+      <div class="row"><button class="btn primary" onclick={() => open(id)}>{t("Retry connection")}</button><a class="btn" href="/?view=saves">{t("Saved games")}</a></div>
     </main>
   {:else}
-    <nav class="rail" aria-label="Workbench navigation">
+    <nav class="rail" aria-label={t("Workbench navigation")}>
       {#each desktop as item}
         {@const Icon = sections[item].icon}
-        <a href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{sections[item].name}</a>
+        <a href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
       {/each}
-      <a href="/?view=saves" class="rail-saves" aria-label="Saved games"><span class="avatar">SU</span></a>
+      <a href="/?view=saves" class="rail-saves" aria-label={t("Saved games")}><span class="avatar">{t("SU")}</span></a>
     </nav>
     <div class="main-area">
       {#if connection || error}
-        <div class="server-message notice error row spread" role="alert"><span>{connection || error}</span><button class="btn" onclick={() => { error = ''; void refresh(); }}>{connection ? 'Reconnect' : 'Dismiss'}</button></div>
+        <div class="server-message notice error row spread" role="alert"><span>{message(connection || error)}</span><button class="btn" onclick={() => { error = ''; void refresh(); }}>{connection ? t("Reconnect") : t("Dismiss")}</button></div>
       {/if}
-      {#if saved}<span class="save-feedback badge good" role="status">Game saved</span>{/if}
+      {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture {game} {catalog} {act} {busy} {error} {note} focusId={page.url.searchParams.get('component') ?? undefined} />
@@ -175,19 +206,27 @@
           <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} />
         {/if}
       {/key}
-      {#if game.settings.show_tutorial && tutorial[game.tutorial] && (section === 'build' || section === 'home')}
-        {@const step = tutorial[game.tutorial]}
-        <aside class="tutorial panel row spread" aria-label="Onboarding tip">
-          <div><p class="eyebrow">Onboarding · {game.tutorial + 1} / {tutorial.length}</p><strong>{step.title}</strong></div>
-          <a class="btn" href={link(step.section === section ? 'guide' : step.section)}>{step.section === section ? 'Guide' : 'Open'} <ArrowRight size={14} /></a>
+      {#if recentEvent && section !== 'events'}
+        <aside class="event-feedback notice row spread" class:warn={recentEvent.severity !== 'info'} aria-live="polite">
+          <a href={link('events')} onclick={() => recentEvent = undefined}>{message(recentEvent.title)}</a>
+          <button class="btn icon-btn" aria-label={t('Dismiss notification')} onclick={() => recentEvent = undefined}><X size={14} /></button>
+        </aside>
+      {/if}
+      {#if objective && (section === 'build' || section === 'home')}
+        <aside class="tutorial panel row spread wrap" aria-label={t("Onboarding tip")}>
+          <div><p class="eyebrow">{t('Objective')}</p><strong>{t(objective.title)}</strong></div>
+          <div class="row wrap">
+            <a class="btn" href={link(objective.section === section ? 'guide' : objective.section)}>{t('Open')} <ArrowRight size={14} /></a>
+            <button class="btn icon-btn" aria-label={t('Dismiss objective')} onclick={() => dismissed = true}><X size={14} /></button>
+          </div>
         </aside>
       {/if}
     </div>
-    <nav class="bottom" aria-label="Mobile navigation">
+    <nav class="bottom" aria-label={t("Mobile navigation")}>
       {#each mobile as item}
         {@const Icon = sections[item].icon}
         {@const active = section === item || (item === 'more' && !mobile.includes(section))}
-        <a href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{sections[item].mobile}</a>
+        <a href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
       {/each}
     </nav>
   {/if}
@@ -219,7 +258,9 @@
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
   .server-message { position: sticky; top: 69px; z-index: 8; margin: 8px 14px; }
   .save-feedback { position: fixed; top: 73px; right: 20px; z-index: 8; }
-  .tutorial { position: fixed; bottom: 19px; right: 19px; z-index: 4; max-width: calc(100vw - 38px); padding: 8px 11px; box-shadow: 0 5px 18px #0005; }
+  .tutorial { width: fit-content; margin: 0 18px 12px auto; max-width: calc(100vw - 38px); padding: 8px 11px; box-shadow: 0 5px 18px #0005; }
+  .event-feedback { position: sticky; bottom: 10px; z-index: 6; margin: 6px 15px; background: var(--surface); }
+  .event-feedback a:hover { text-decoration: underline; }
   .tutorial strong { font-size: 13px; }
   .tutorial p { font-size: 9px; }
   .tutorial .btn { min-height: 31px; }
@@ -241,6 +282,7 @@
     .bottom a span { display: grid; place-items: center; height: 31px; width: 58px; border-radius: 12px; }
     .bottom a[aria-current] { color: var(--text); }
     .bottom a[aria-current] span { background: var(--tint); color: var(--primary); }
+    .event-feedback { bottom: 68px; }
     .tutorial { position: static; margin: 0 17px 14px; }
   }
 </style>

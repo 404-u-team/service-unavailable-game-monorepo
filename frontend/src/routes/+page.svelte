@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { apiMessage, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { Activity, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Database, Diamond, GitFork, Radio, Server } from '@lucide/svelte';
+  import Language from '#lib/Language.svelte';
   import Brand from '#lib/Brand.svelte';
   import Guide from '#lib/Guide.svelte';
   import { createGame, loadCatalog, saves as listSaves } from '#lib/api.ts';
@@ -45,7 +47,7 @@
     loading = true;
     catalog = undefined;
     try { [saves, catalog] = await Promise.all([listSaves(), loadCatalog()]); }
-    catch (reason) { error = (reason as Error).message; }
+    catch (reason) { error = apiMessage(reason); }
     finally { loading = false; }
   }
 
@@ -63,7 +65,7 @@
       const game = await createGame({ id: createId, name, scenario: 'messenger', difficulty, seed: showSeed ? seed ?? null : null, settings: preferences });
       await goto(`/game/${game.id}?view=build`);
       createId = '';
-    } catch (reason) { error = (reason as Error).message; }
+    } catch (reason) { error = apiMessage(reason); }
     finally { busy = false; }
   }
 </script>
@@ -71,94 +73,94 @@
 <div class="menu" data-reduced-motion={preferences.reduced_motion}>
   <header class="menu-header">
     {#if current === 'menu'}<Brand />
-    {:else}<a class="row menu-back eyebrow" href="/"><ArrowLeft size={15} /> Main menu</a>{/if}
-    <span class="eyebrow">{screens[current] ?? screens.menu}</span>
+    {:else}<a class="row menu-back eyebrow" href="/"><ArrowLeft size={15} /> {t("Main menu")}</a>{/if}
+    <span class="eyebrow">{t(screens[current] ?? screens.menu)}</span>
   </header>
   <main>
-    {#if error}<div class="notice error row spread" role="alert">{error}<button class="btn" onclick={load}>Retry connection</button></div>{/if}
+    {#if error}<div class="notice error row spread" role="alert">{message(error)}<button class="btn" onclick={load}>{t("Retry connection")}</button></div>{/if}
     {#if current === 'new'}
-      <div class="intro setup-title"><h1>New game</h1><p class="muted">Choose a product and its starting configuration.</p></div>
+      <div class="intro setup-title"><h1>{t("New game")}</h1><p class="muted">{t("Choose a product and its starting configuration.")}</p></div>
       <form class="stack setup" onsubmit={start}>
         <fieldset class="scenario-grid">
-          <legend class="eyebrow">Product scenario</legend>
+          <legend class="eyebrow">{t("Product scenario")}</legend>
           {#each Object.entries(catalog?.scenarios ?? {}) as [id, scenario]}
             {@const Icon = scenarioIcons[id as keyof typeof scenarioIcons]}
             <label class="scenario" class:available={scenario.available}>
               <span class="scenario-icon"><Icon size={23} /></span>
-              <span><strong>{scenario.name}</strong><small>{scenario.description}</small><span class="scenario-status mono">{scenario.available ? 'Available' : 'Unavailable'}</span></span>
-              <input type="radio" name="scenario" value={id} checked={id === 'messenger'} disabled={!scenario.available} aria-label={scenario.name} />
+              <span><strong>{t(scenario.name)}</strong><small>{t(scenario.description)}</small><span class="scenario-status mono">{scenario.available ? t("Available") : t("Unavailable")}</span></span>
+              <input type="radio" name="scenario" value={id} checked={id === 'messenger'} disabled={!scenario.available} aria-label={t(scenario.name)} />
             </label>
           {/each}
         </fieldset>
         <div class="setup-grid">
-          <label class="field"><span>Service name</span><input bind:value={name} maxlength="60" required /></label>
+          <label class="field"><span>{t("Service name")}</span><input bind:value={name} maxlength="60" required /></label>
           <fieldset class="difficulty">
-            <legend class="eyebrow">Difficulty</legend>
+            <legend class="eyebrow">{t("Difficulty")}</legend>
             {#each Object.entries(catalog?.difficulties ?? {}) as [id, option]}
-              <label class="btn"><input type="radio" name="difficulty" value={id} bind:group={difficulty} /> {option.name}</label>
+              <label class="btn"><input type="radio" name="difficulty" value={id} bind:group={difficulty} /> {t(option.name)}</label>
             {/each}
           </fieldset>
         </div>
         {#if starting}
-          <section class="panel pad starting"><p class="eyebrow">Starting conditions</p>
-            <div class="row wrap"><span>{money(starting.balance)} budget</span><span>{num(starting.audience)} active users</span><span>1 API server</span><span>1 database</span></div>
+          <section class="panel pad starting"><p class="eyebrow">{t("Starting conditions")}</p>
+            <div class="row wrap"><span>{money(starting.balance)} {t("budget")}</span><span>{num(starting.audience)} {t("active users")}</span><span>{t("1 API server")}</span><span>{t("1 database")}</span></div>
           </section>
         {/if}
         <div class="row wrap seed">
-          <label class="row"><input type="checkbox" bind:checked={showSeed} /> Specify a simulation seed</label>
-          {#if showSeed}<label class="field seed-field"><span>Simulation seed</span><input type="number" min="0" max="4294967295" step="1" bind:value={seed} /></label>{/if}
+          <label class="row"><input type="checkbox" bind:checked={showSeed} /> {t("Specify a simulation seed")}</label>
+          {#if showSeed}<label class="field seed-field"><span>{t("Simulation seed")}</span><input type="number" min="0" max="4294967295" step="1" bind:value={seed} /></label>{/if}
         </div>
-        <div class="row setup-actions"><a href="/" class="btn large">Cancel</a><button class="btn primary large" disabled={busy || loading || !starting}>{busy ? 'Creating game…' : 'Create game'} <ArrowRight size={15} /></button></div>
+        <div class="row setup-actions"><a href="/" class="btn large">{t("Cancel")}</a><button class="btn primary large" disabled={busy || loading || !starting}>{busy ? t("Creating game…") : t("Create game")} <ArrowRight size={15} /></button></div>
       </form>
     {:else if current === 'saves'}
-      <div class="intro"><h1>Saved games</h1><p class="muted">Open a service to continue playing.</p></div>
+      <div class="intro"><h1>{t("Saved games")}</h1><p class="muted">{t("Open a service to continue playing.")}</p></div>
       <section class="panel pad stack">
-        {#if loading}<p class="muted">Loading saved games…</p>
-        {:else if !saves.length}<p class="muted">No saved games.</p><a href="/?view=new" class="btn primary">New game</a>
+        {#if loading}<p class="muted">{t("Loading saved games…")}</p>
+        {:else if !saves.length}<p class="muted">{t("No saved games.")}</p><a href="/?view=new" class="btn primary">{t("New game")}</a>
         {:else}
           {#each saves as save (save.id)}
             <a class="save-row" href={`/game/${save.id}?view=build`}>
-              <div><strong>{save.name}</strong><small>{catalog?.scenarios[save.scenario]?.name ?? save.scenario} · Day {day(save.tick)}</small></div>
-              <div><span class="mono">{num(save.audience)} users</span><small>{money(save.balance)} balance</small></div>
+              <div><strong>{save.name}</strong><small>{t(catalog?.scenarios[save.scenario]?.name ?? save.scenario)} {t("· Day")} {day(save.tick)}</small></div>
+              <div><span class="mono">{num(save.audience)} {t("users")}</span><small>{money(save.balance)} {t("balance")}</small></div>
               <ChevronRight size={17} />
             </a>
           {/each}
         {/if}
       </section>
     {:else if current === 'guide'}
-      <div class="intro"><h1>Guide</h1><p class="muted">Components and simulation mechanics</p></div>
-      {#if catalog}<Guide {catalog} />{:else if loading}<p class="muted">Loading guide…</p>{/if}
+      <div class="intro"><h1>{t("Guide")}</h1><p class="muted">{t("Components and simulation mechanics")}</p></div>
+      {#if catalog}<Guide {catalog} />{:else if loading}<p class="muted">{t("Loading guide…")}</p>{/if}
     {:else if current === 'settings'}
-      <div class="intro"><h1>Settings</h1><p class="muted">Defaults for new games on this browser.</p></div>
+      <div class="intro"><h1>{t("Settings")}</h1><p class="muted">{t("Defaults for new games on this browser.")}</p></div>
       <div class="panel pad stack form">
-        <label class="row spread">Show onboarding prompts <input type="checkbox" bind:checked={preferences.show_tutorial} onchange={remember} /></label>
-        <label class="row spread">Reduce motion <input type="checkbox" bind:checked={preferences.reduced_motion} onchange={remember} /></label>
-        <p class="muted">Interface language · English</p>
+        <label class="row spread">{t("Show onboarding prompts")} <input type="checkbox" bind:checked={preferences.show_tutorial} onchange={remember} /></label>
+        <label class="row spread">{t("Reduce motion")} <input type="checkbox" bind:checked={preferences.reduced_motion} onchange={remember} /></label>
+        <Language />
       </div>
     {:else}
-      <div class="intro menu-title"><h1>Service Unavailable</h1><p class="muted">Infrastructure simulator</p></div>
+      <div class="intro menu-title"><h1>Service Unavailable</h1><p class="muted">{t("Infrastructure simulator")}</p></div>
       <div class="menu-grid">
         <section class="panel continue">
-          <div><h2>{latest ? 'Continue game' : 'Start a service'}</h2><p class="eyebrow">{latest ? `Most recent save / ${latest.name}` : 'Messenger / Starting topology'}</p></div>
-          <div class="preview grid-bg" aria-label="Starting topology from incoming traffic through a balancer and API server to a database">
-            <div class="preview-node"><Radio size={17} /><strong>Ingress</strong></div><span class="wire"></span>
-            <div class="preview-node emphasis"><GitFork size={17} /><strong>Balancer</strong></div><span class="wire"></span>
-            <div class="preview-node"><Server size={17} /><strong>API server</strong></div><span class="wire"></span>
-            <div class="preview-node"><Database size={17} /><strong>Database</strong></div>
+          <div><h2>{latest ? t("Continue game") : t("Start a service")}</h2><p class="eyebrow">{latest ? t("Most recent save / {0}", [latest.name]) : t("Messenger / Starting topology")}</p></div>
+          <div class="preview grid-bg" aria-label={t("Starting topology from incoming traffic through a balancer and API server to a database")}>
+            <div class="preview-node"><Radio size={17} /><strong>{t("Ingress")}</strong></div><span class="wire"></span>
+            <div class="preview-node emphasis"><GitFork size={17} /><strong>{t("Balancer")}</strong></div><span class="wire"></span>
+            <div class="preview-node"><Server size={17} /><strong>{t("API server")}</strong></div><span class="wire"></span>
+            <div class="preview-node"><Database size={17} /><strong>{t("Database")}</strong></div>
           </div>
           {#if latest}
             <dl class="summary">
-              <div><dt class="eyebrow">Day</dt><dd>{day(latest.tick)}</dd></div>
-              <div><dt class="eyebrow">Active users</dt><dd>{num(latest.audience)}</dd></div>
-              <div><dt class="eyebrow">Balance</dt><dd>{money(latest.balance)}</dd></div>
+              <div><dt class="eyebrow">{t("Day")}</dt><dd>{day(latest.tick)}</dd></div>
+              <div><dt class="eyebrow">{t("Active users")}</dt><dd>{num(latest.audience)}</dd></div>
+              <div><dt class="eyebrow">{t("Balance")}</dt><dd>{money(latest.balance)}</dd></div>
             </dl>
-          {:else}<p class="muted">{loading ? 'Checking for saved games…' : 'Build and operate a messenger service. Track request load, manage expenses and deploy infrastructure changes.'}</p>{/if}
-          <a class="btn primary large block" href={latest ? `/game/${latest.id}?view=build` : '/?view=new'}>{latest ? 'Continue' : 'Create a service'} <ArrowRight size={15} /></a>
+          {:else}<p class="muted">{loading ? t("Checking for saved games…") : t("Build and operate a messenger service. Track request load, manage expenses and deploy infrastructure changes.")}</p>{/if}
+          <a class="btn primary large block" href={latest ? `/game/${latest.id}?view=build` : '/?view=new'}>{latest ? t("Continue") : t("Create a service")} <ArrowRight size={15} /></a>
         </section>
         <section class="panel options">
-          <h2>Game options</h2>
+          <h2>{t("Game options")}</h2>
           {#each options as option}
-            <a href={`/?view=${option.id}`} class="row spread"><span><strong>{screens[option.id]}</strong><small>{option.description}</small></span><ArrowRight size={15} class="accent" /></a>
+            <a href={`/?view=${option.id}`} class="row spread"><span><strong>{t(screens[option.id])}</strong><small>{t(option.description)}</small></span><ArrowRight size={15} class="accent" /></a>
           {/each}
         </section>
       </div>

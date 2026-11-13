@@ -18,8 +18,10 @@ const proxy: RequestHandler = async ({ request, params, url }) => {
       signal: AbortSignal.timeout(15_000)
     });
     const result = new Headers({ 'Cache-Control': 'no-store' });
-    const type = upstream.headers.get('content-type');
-    if (type) result.set('content-type', type);
+    for (const key of ['content-type', 'x-game-error-code', 'x-game-error-values']) {
+      const value = upstream.headers.get(key);
+      if (value) result.set(key, value);
+    }
     for (const cookie of upstream.headers.getSetCookie()) result.append('set-cookie', cookie);
     return new Response(upstream.body, { status: upstream.status, headers: result });
   } catch {

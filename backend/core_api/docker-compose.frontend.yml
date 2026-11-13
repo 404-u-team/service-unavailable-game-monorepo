@@ -1,0 +1,10 @@
+services:
+    frontend:
+        build: ../../frontend
+        environment:
+            CORE_API_URL: http://core-api:8000
+        ports:
+            - "${FRONTEND_PORT:-3000}:3000"
+        depends_on:
+            core-api:
+                condition: service_healthy
