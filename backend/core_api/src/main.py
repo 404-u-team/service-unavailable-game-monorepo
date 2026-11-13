@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from logging import INFO, basicConfig
+from pathlib import Path
 from sys import stdout
 
 import asyncpg
@@ -8,6 +9,7 @@ from fastapi import FastAPI
 
 from src.api.routers import dependencies
 from src.api.routers.auth import router as auth_router
+from src.api.routers.games import router as games_router
 from src.api.routers.health import router as health_router
 from src.config import settings
 
@@ -39,8 +41,15 @@ structlog.configure(
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     dependencies.pool = await asyncpg.create_pool(settings.database_url)
-    yield
-    await dependencies.pool.close()
+    try:
+        migration = Path(__file__).parent / "repositories" / "sql" / "games.sql"
+        async with dependencies.pool.acquire() as connection, connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock(529108446)")
+            await connection.execute(migration.read_text())
+        yield
+    finally:
+        await dependencies.pool.close()
+        dependencies.pool = None
 
 
 # -----------------------------------------
@@ -50,3 +59,5 @@ app = FastAPI(title="Core API", lifespan=lifespan)
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+
+app.include_router(games_router, prefix="/api")

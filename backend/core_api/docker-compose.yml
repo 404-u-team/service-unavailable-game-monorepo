@@ -1,16 +1,17 @@
 services:
     db:
         image: postgres:17-alpine
+        command: ["postgres", "-p", "${POSTGRES_PORT:-5432}"]
         environment:
             POSTGRES_DB: ${POSTGRES_DB:-core_api}
-            POSTGRES_PORT: ${POSTGRES_PORT:-5432}
             POSTGRES_USER: ${POSTGRES_USER:-postgres}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+            PGPORT: ${POSTGRES_PORT:-5432}
         volumes:
             - postgres_data:/var/lib/postgresql/data
             - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
         healthcheck:
-            test: ["CMD-SHELL", "pg_isready -U postgres -d core_api"]
+            test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p \"$$PGPORT\" -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
             interval: 5s
             timeout: 5s
             retries: 5
@@ -18,6 +19,7 @@ services:
     core-api:
         build: .
         env_file: .env
+        restart: "on-failure:3"
         environment:
             DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-core_api}
         ports:
@@ -25,6 +27,12 @@ services:
         depends_on:
             db:
                 condition: service_healthy
+        healthcheck:
+            test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/health', timeout=2).close()"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+            start_period: 5s
 
 volumes:
     postgres_data:
