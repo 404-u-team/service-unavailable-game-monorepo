@@ -21,6 +21,7 @@ from src.api.game_schemas import (
     Forecast,
     GameView,
     IncidentView,
+    ProductAction,
     SaveSummary,
     SettingsAction,
     TutorialAction,
@@ -37,6 +38,7 @@ from src.services.games import (
     RevisionConflict,
     acknowledge_incident,
     change_feature,
+    change_product,
     deploy,
     discard_draft,
     edit_draft,
@@ -48,9 +50,11 @@ from src.services.games import (
 )
 from src.simulation.catalog import (
     ALLOWED,
+    BUSINESS,
     CAMPAIGNS,
     COMPONENTS,
     CONNECTIONS,
+    DAYS_PER_MONTH,
     DIFFICULTIES,
     FEATURES,
     MINUTES_PER_TICK,
@@ -136,7 +140,10 @@ def game_errors(error: Exception) -> HTTPException:
 @router.get("/catalog", response_model=Catalog)
 def catalog():
     return {
-        "components": COMPONENTS,
+        "components": {
+            kind: {**definition, "daily": definition["monthly"] / DAYS_PER_MONTH}
+            for kind, definition in COMPONENTS.items()
+        },
         "difficulties": DIFFICULTIES,
         "features": FEATURES,
         "campaigns": CAMPAIGNS,
@@ -148,6 +155,9 @@ def catalog():
         "connection_types": CONNECTIONS,
         "operations": {key: op["label"] for key, op in OPERATIONS.items()},
         "minutes_per_tick": MINUTES_PER_TICK,
+        "days_per_month": DAYS_PER_MONTH,
+        "premium_price_min": BUSINESS["premium_min_price"],
+        "premium_price_max": BUSINESS["premium_max_price"],
     }
 
 
@@ -196,7 +206,7 @@ async def architecture(
 async def monitoring(game_id: UUID, owner_id: Owner, service: Service):
     try:
         return await service.read(
-            owner_id, game_id, lambda game, _: evaluate(game).snapshot
+            owner_id, game_id, lambda game, _: evaluate(game, overview=True).snapshot
         )
     except SaveNotFound as error:
         raise game_errors(error) from error
@@ -366,6 +376,20 @@ async def feature(
         body,
         f"feature:{feature_id}",
         lambda game: change_feature(game, feature_id, body.action),
+    )
+
+
+@router.put("/{game_id}/product", response_model=GameView)
+async def product(
+    game_id: UUID, body: ProductAction, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "product",
+        lambda game: change_product(game, body.product),
     )
 
 

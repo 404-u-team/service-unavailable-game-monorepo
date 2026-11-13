@@ -6,6 +6,7 @@ from uuid import UUID
 
 from src.api.game_schemas import (
     Action,
+    AdvertisingEstimate,
     BusinessPoint,
     CampaignView,
     CreateGame,
@@ -13,6 +14,7 @@ from src.api.game_schemas import (
     DraftReview,
     Economy,
     FeatureView,
+    FinancePoint,
     Forecast,
     GameView,
     IncidentView,
@@ -23,21 +25,30 @@ from src.api.game_schemas import (
 )
 from src.repositories.games import GameRepository
 from src.simulation.catalog import (
+    ADVERTISING,
+    BUSINESS,
     CAMPAIGNS,
     COMPONENTS,
     FEATURES,
     LEGACY_DATABASE_LIMITS,
+    MINUTES_PER_TICK,
     OPERATIONS,
     SCENARIOS,
     SECONDS_PER_TICK,
+    TICKS_PER_DAY,
 )
+from src.simulation.demand import MINUTES_PER_DAY, ad_forecast, product_settings
 from src.simulation.engine import evaluate
 from src.simulation.models import (
     Deployment,
     DeploymentComparison,
     Game,
     Node,
+    OneTimeCosts,
+    OperatingCosts,
+    ProductSettings,
     ResourcePressure,
+    RevenueSources,
     Snapshot,
     Topology,
 )
@@ -45,7 +56,6 @@ from src.simulation.progression import (
     add_event,
     advance,
     new_game,
-    operating_rates,
     spend,
 )
 from src.simulation.requirements import REQUIREMENTS, requirement_met
@@ -75,7 +85,18 @@ class GameService:
 
     async def list(self, owner: str) -> list[SaveSummary]:
         return [
-            SaveSummary.model_validate(dict(row) | {"audience": round(row["audience"])})
+            SaveSummary(
+                id=row["id"],
+                name=row["name"],
+                scenario=row["scenario"],
+                tick=row["tick"],
+                day=(row["start_minute"] + row["tick"] * MINUTES_PER_TICK)
+                // MINUTES_PER_DAY
+                + 1,
+                audience=round(row["audience"]),
+                balance=row["balance"],
+                saved_at=row["saved_at"],
+            )
             for row in await self.repository.list(owner)
         ]
 
@@ -342,7 +363,7 @@ def deploy(
         raise RuleError(result.errors[0])
     if not any(result.changes.values()):
         raise RuleError("There are no architecture changes to deploy.")
-    spend(game, result.install, "deployment_spend")
+    spend(game, result.install, "deployment")
     count = sum(len(items) for key, items in result.changes.items() if key != "moved")
     summary = (
         "Rollback"
@@ -408,16 +429,34 @@ def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureVi
         for rule_id in feature["infrastructure"]
         for rule in (REQUIREMENTS[rule_id],)
     ]
+    enabled = game.enabled_features
+    prereqs = [
+        FEATURES[item]["name"] for item in feature["prereq"] if item not in enabled
+    ]
     if key in game.released:
-        return FeatureView(id=key, state="released", infrastructure=infrastructure)
+        dependents = [
+            item
+            for item, definition in FEATURES.items()
+            if item in enabled and key in definition["prereq"]
+        ]
+        return FeatureView(
+            id=key,
+            state="released",
+            infrastructure=infrastructure,
+            enabled=key in enabled,
+            can_enable=not prereqs and all(rule.met for rule in infrastructure),
+            can_disable=key != "text" and not dependents,
+            dependents=dependents,
+            requirements=prereqs,
+        )
     operation = feature["operation"]
     base = SCENARIOS[game.scenario]["operations"]
-    released = [
-        FEATURES[key]["operation"]
-        for key in game.released
-        if FEATURES[key]["operation"]
+    active = [
+        FEATURES[item]["operation"]
+        for item in sorted(enabled)
+        if FEATURES[item]["operation"]
     ]
-    workload = sum(OPERATIONS[key]["rate"] for key in dict.fromkeys([*base, *released]))
+    workload = sum(OPERATIONS[item]["rate"] for item in dict.fromkeys([*base, *active]))
     demand_change = OPERATIONS[operation]["rate"] / workload if operation else 0
     if key in game.development:
         remaining = max(0, game.development[key] - game.tick)
@@ -425,16 +464,16 @@ def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureVi
             id=key,
             state="developing" if remaining else "ready",
             remaining=remaining,
-            requirements=[rule.description for rule in infrastructure if not rule.met],
+            requirements=[
+                *prereqs,
+                *(rule.description for rule in infrastructure if not rule.met),
+            ],
             infrastructure=infrastructure,
-            can_release=not remaining and all(rule.met for rule in infrastructure),
+            can_release=not remaining
+            and not prereqs
+            and all(rule.met for rule in infrastructure),
             demand_change=demand_change,
         )
-    prereqs = [
-        FEATURES[item]["name"]
-        for item in feature["prereq"]
-        if item not in game.released
-    ]
     return FeatureView(
         id=key,
         state="locked" if prereqs else "available",
@@ -448,9 +487,14 @@ def change_feature(game: Game, key: str, action: str) -> None:
     state = feature_state(game, key)
     feature = FEATURES[key]
     if action == "develop" and state.state == "available":
-        spend(game, feature["cost"], "development_spend")
+        spend(game, feature["cost"], "development")
         game.development[key] = game.tick + feature["duration"]
     elif action == "release" and state.state == "ready":
+        if any(item not in game.enabled_features for item in feature["prereq"]):
+            raise RuleError(
+                "Enable the required product features first.",
+                code="feature_dependency_missing",
+            )
         if not state.can_release:
             raise RuleError(
                 "Production infrastructure does not meet the release requirements.",
@@ -467,17 +511,211 @@ def change_feature(game: Game, key: str, action: str) -> None:
             "info",
             0,
         )
+    elif action == "disable" and state.enabled:
+        if state.dependents:
+            raise RuleError(
+                "Disable dependent features first.",
+                code="feature_has_dependents",
+            )
+        if not state.can_disable:
+            raise RuleError(
+                "Text messaging is required for Messenger.", code="feature_required"
+            )
+        game.disabled_features.add(key)
+        add_event(
+            game,
+            "feature-disabled",
+            f"{feature['name']} disabled",
+            "Product settings changed.",
+            "info",
+            0,
+        )
+    elif action == "enable" and state.state == "released" and not state.enabled:
+        if state.requirements:
+            raise RuleError(
+                "Enable the required product features first.",
+                code="feature_dependency_missing",
+            )
+        if not state.can_enable:
+            raise RuleError(
+                "Production infrastructure does not meet the release requirements.",
+                code="feature_infrastructure_missing",
+            )
+        game.disabled_features.remove(key)
+        if key not in game.infrastructure_releases:
+            game.infrastructure_releases.append(key)
+        add_event(
+            game,
+            "feature-enabled",
+            f"{feature['name']} enabled",
+            "Product settings changed.",
+            "info",
+            0,
+        )
     else:
         raise RuleError(
             "This feature is not ready for that action.", code="feature_not_ready"
         )
 
 
+def change_product(game: Game, product: ProductSettings) -> None:
+    previous = product_settings(game)
+    if (
+        not BUSINESS["premium_min_price"]
+        <= product.premium_price
+        <= BUSINESS["premium_max_price"]
+    ):
+        raise RuleError(
+            "Subscription price is outside the allowed range.",
+            code="premium_price_range",
+        )
+    for field, feature in (
+        ("ad_intensity", "advertising"),
+        ("premium_price", "premium"),
+        ("premium_fast_sync", "premium"),
+    ):
+        if (
+            getattr(product, field) != getattr(previous, field)
+            and feature not in game.released
+        ):
+            raise RuleError(
+                "Release the feature before changing its settings.",
+                code="product_release_required",
+            )
+    if product != previous:
+        game.product = product
+        add_event(
+            game,
+            "product-settings",
+            "Product settings updated",
+            "Product settings changed.",
+            "info",
+            0,
+        )
+
+
+def finance(game: Game, active_users: float) -> Economy:
+    sources = RevenueSources(
+        advertising=game.advertising_revenue,
+        subscriptions=game.subscription_revenue,
+        legacy=max(
+            0, game.revenue - (game.advertising_revenue + game.subscription_revenue)
+        ),
+    )
+    costs = OperatingCosts(
+        infrastructure=game.infrastructure_spend,
+        traffic=game.traffic_spend,
+        payments=game.payment_spend,
+        legacy=max(
+            0,
+            game.operating
+            - (game.infrastructure_spend + game.traffic_spend + game.payment_spend),
+        ),
+    )
+    history = [
+        FinancePoint(tick=point.tick, **point.finance.model_dump())
+        for point in game.history
+        if point.finance is not None
+    ]
+    sample_count = len(history)
+    factor = TICKS_PER_DAY / max(1, sample_count)
+    daily_sources = RevenueSources(
+        advertising=sum(p.revenue.advertising for p in history) * factor,
+        subscriptions=sum(p.revenue.subscriptions for p in history) * factor,
+    )
+    daily_costs = OperatingCosts(
+        infrastructure=sum(p.expenses.infrastructure for p in history) * factor,
+        traffic=sum(p.expenses.traffic for p in history) * factor,
+        payments=sum(p.expenses.payments for p in history) * factor,
+    )
+    dau = (
+        sum(p.daily_active_users for p in history) / sample_count
+        if sample_count
+        else active_users
+    )
+    recent = OneTimeCosts(
+        development=sum(
+            purchase.development for purchase in game.recent_purchases.values()
+        ),
+        marketing=sum(
+            purchase.marketing for purchase in game.recent_purchases.values()
+        ),
+        deployment=sum(
+            purchase.deployment for purchase in game.recent_purchases.values()
+        ),
+    )
+    daily_profit = daily_sources.total - daily_costs.total
+    # One-time charges are reported as incurred even when the rolling window is partial.
+    daily_total_expenses = daily_costs.total + recent.total
+    cash_received = game.advertising_revenue + game.subscription_cash + sources.legacy
+    return Economy(
+        balance=game.balance,
+        revenue=game.revenue,
+        operating=game.operating,
+        development=game.development_spend,
+        marketing=game.marketing_spend,
+        deployment=game.deployment_spend,
+        profit=game.revenue
+        - game.operating
+        - game.development_spend
+        - game.marketing_spend
+        - game.deployment_spend,
+        daily_infrastructure=topology_cost(game.production),
+        daily_revenue=daily_sources.total,
+        daily_operating=daily_costs.total,
+        daily_profit=daily_profit,
+        daily_total_expenses=daily_total_expenses,
+        daily_net_profit=daily_sources.total - daily_total_expenses,
+        recent_purchases=recent,
+        revenue_sources=sources,
+        daily_sources=daily_sources,
+        operating_costs=costs,
+        daily_costs=daily_costs,
+        starting_capital=game.balance
+        - cash_received
+        + game.operating
+        + game.development_spend
+        + game.marketing_spend
+        + game.deployment_spend,
+        cash_received=cash_received,
+        deferred_subscription_revenue=max(
+            0, game.subscription_cash - game.subscription_revenue
+        ),
+        daily_active_users=dau,
+        operating_margin=daily_profit / daily_sources.total
+        if daily_sources.total
+        else None,
+        arpdau=daily_sources.total / dau if sample_count and dau else None,
+        cost_per_dau=daily_costs.total / dau if sample_count and dau else None,
+        subscribers=round(game.subscribers),
+        conversion=game.subscribers / max(1, game.audience),
+        premium_satisfaction=min(
+            1,
+            game.premium_quality
+            + BUSINESS["premium_sync_satisfaction"]
+            * (
+                sum(term.subscribers for term in game.subscriptions if term.fast_sync)
+                / game.subscribers
+                if game.subscribers
+                else int(product_settings(game).premium_fast_sync)
+            )
+            + (
+                BUSINESS["premium_ad_free_satisfaction"]
+                if "advertising" in game.enabled_features
+                else 0
+            ),
+        ),
+        daily_ad_impressions=sum(p.ad_impressions for p in history) * factor,
+        recorded_ticks=sample_count,
+        history=history,
+    )
+
+
 def start_campaign(game: Game, key: str) -> None:
     if key in game.campaigns:
         raise RuleError("That campaign is already running.")
     campaign = CAMPAIGNS[key]
-    spend(game, campaign["cost"], "marketing_spend")
+    spend(game, campaign["cost"], "marketing")
     game.campaigns[key] = game.tick
     add_event(
         game,
@@ -497,15 +735,18 @@ def acknowledge_incident(game: Game, event_id: str) -> None:
 
 
 def view(game: Game, saved_at: datetime) -> GameView:
-    snapshot = evaluate(game).snapshot
-    appeal = sum(FEATURES[key]["appeal"] for key in game.released)
-    daily_revenue, daily_operating = operating_rates(game, snapshot.metrics, appeal)
-    costs = (
-        game.operating
-        + game.development_spend
-        + game.marketing_spend
-        + game.deployment_spend
-    )
+    result = evaluate(game, overview=True)
+    snapshot = result.snapshot
+    estimates = {}
+    if "advertising" in game.released:
+        for intensity in ADVERTISING:
+            projection = ad_forecast(game, intensity)
+            estimates[intensity] = AdvertisingEstimate(
+                impressions=projection.requests_per_day * snapshot.metrics.availability,
+                revenue=projection.value_per_day * snapshot.metrics.availability,
+                satisfaction_impact=-projection.friction,
+                churn_impact=projection.additional_churn,
+            )
     history = game.history if snapshot.monitored else []
     graph = inspect_graph(game.production)
     return GameView(
@@ -513,10 +754,12 @@ def view(game: Game, saved_at: datetime) -> GameView:
         name=game.name,
         scenario=game.scenario,
         tick=game.tick,
+        day=(game.start_minute + game.tick * MINUTES_PER_TICK) // MINUTES_PER_DAY + 1,
         audience=round(game.audience),
         balance=game.balance,
         saved_at=saved_at,
         speed=game.speed,
+        start_minute=game.start_minute,
         difficulty=game.difficulty,
         satisfaction=game.satisfaction,
         production=game.production,
@@ -529,19 +772,9 @@ def view(game: Game, saved_at: datetime) -> GameView:
             BusinessPoint(tick=p.tick, audience=p.audience, balance=p.balance)
             for p in game.history
         ],
-        economy=Economy(
-            balance=game.balance,
-            revenue=game.revenue,
-            operating=game.operating,
-            development=game.development_spend,
-            marketing=game.marketing_spend,
-            deployment=game.deployment_spend,
-            profit=game.revenue - costs,
-            daily_infrastructure=topology_cost(game.production),
-            daily_revenue=daily_revenue,
-            daily_operating=daily_operating,
-            daily_profit=daily_revenue - daily_operating,
-        ),
+        economy=finance(game, result.daily_active_users),
+        product=product_settings(game),
+        advertising_estimates=estimates,
         component_costs={node.id: daily_cost(node) for node in game.production.nodes},
         draft_costs={node.id: daily_cost(node) for node in game.draft.nodes}
         if game.draft

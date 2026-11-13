@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Check } from '@lucide/svelte';
   import { t } from './i18n.svelte';
   import { connectionKind, connectionLabels } from './workbench/connections';
   import { componentNotes } from './workbench/details';
@@ -16,7 +17,7 @@
       <ol class="steps">
         {#each tutorial as step, index}
           <li class:current={index === game.tutorial}>
-            <span class="index">{index < game.tutorial ? '✓' : index + 1}</span>
+            <span class="index">{#if index < game.tutorial}<Check size={15} />{:else}{index + 1}{/if}</span>
             <div><strong>{t(step.title)}</strong><p class="muted">{t(step.text)}</p>
               {#if index === game.tutorial}<a href={link(step.section)} class="btn">{t("Open")} {step.section === 'build' ? t("topology") : t("telemetry")}</a>{/if}
             </div>

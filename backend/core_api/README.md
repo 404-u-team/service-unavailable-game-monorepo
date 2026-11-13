@@ -13,7 +13,7 @@ All paths below start with `/api/games`. FastAPI publishes request and response 
 | `GET /{id}` | Current game, production and draft, telemetry, progression and finances |
 | `GET /{id}/architecture?version=production\|draft` | Read one topology |
 | `GET /{id}/monitoring` | Read current service and visible component metrics |
-| `GET /{id}/finance` | Read the game ledger and projected daily operating rates |
+| `GET /{id}/finance` | Read revenue and expense breakdowns, cash and the rolling game-day history |
 | `GET /{id}/incidents` | Read the visible incident history |
 | `POST /{id}/save` | Persist and return the current snapshot |
 | `PUT /{id}/clock` | Set speed to 0, 1 or 3 |
@@ -24,7 +24,8 @@ All paths below start with `/api/games`. FastAPI publishes request and response 
 | `POST /{id}/draft/discard` | Discard the draft |
 | `POST /{id}/deployments` | Revalidate and deploy the saved draft |
 | `POST /{id}/deployments/{deployment_id}/rollback` | Restore the topology before that deployment |
-| `POST /{id}/features/{feature_id}` | Develop or release a feature |
+| `POST /{id}/features/{feature_id}` | Develop, release, enable or disable a feature |
+| `PUT /{id}/product` | Set ad intensity, Premium terms, media quality, synchronization and market acquisition |
 | `GET /{id}/campaigns/{campaign_id}/forecast` | Preview campaign demand and availability |
 | `POST /{id}/campaigns/{campaign_id}` | Start a campaign |
 | `POST /{id}/incidents/drill` | Run a one-instance failure drill |
@@ -37,11 +38,11 @@ Call `GET /api/games` first to establish the signed, HTTP-only guest cookie. Cli
 ## Simulation model
 
 - One step represents ten in-game minutes. The server advances saves from elapsed time at the selected speed. At 1×, two real seconds represent one step. At 3×, three steps take two seconds. On return to a running save, at most two in-game days are simulated for a single elapsed gap. Paused saves retain their tick and any fractional progress.
-- Demand is generated in operation cohorts from audience, scenario activity, daily variation, released features, campaigns and seeded events. CPU, RAM, network, connections, concurrency, disk I/O, database reads and writes, and storage affect throughput. Latency rises with resource pressure. Availability is successful throughput divided by incoming request rate.
+- Demand is generated in operation cohorts from regional audience, local activity, enabled features, campaigns and seeded events. CPU, RAM, network, connections, concurrency, disk I/O, database reads and writes, and storage affect throughput. Latency rises with resource pressure. Availability is successful throughput divided by incoming request rate.
 - Traffic can pass through a limiter or balancer to an API. Writes go directly to a primary. Read-only cohorts prefer linked caches, then use the cache's explicit data edges on a miss. If the cache has no explicit data links, misses return through the originating API's database or replica links. A replica needs a primary subscription and adds replication write overhead.
 - Successful foreground operations can submit background jobs to attached queues. Notifications and media jobs contribute job load. Workers process at the minimum of their CPU, RAM and concurrency limits, scaled by healthy instances. Queues absorb excess arrivals up to their capacity. New submissions fail on overflow. Retention expires a fraction of old work per step. Accepted jobs can wait beyond the response, and queue wait is estimated from backlog and worker throughput capacity.
 - Monitoring exposes metrics for linked components with a collection slot. Service history mode reserves two slots and exposes historical metrics. Forecasts evaluate representative future workload ranges with the same engine, excluding future random incidents. Higher monitoring coverage narrows the range.
-- Campaigns incur a one-time cost and acquire users along a growth curve. Organic growth and churn respond to service quality and feature appeal. The game bills infrastructure each step. Messenger subscription revenue varies with audience, satisfaction and features. Running topology changes that remove routing connections can briefly reduce throughput.
+- Campaigns incur a one-time cost and acquire users along a growth curve. Organic growth and churn respond to service quality and feature appeal. The game records revenue, cash receipts and operating costs each step. See [Messenger economy and balance](BALANCE.md) for formulas, save compatibility and reproducible results. Running topology changes that remove routing connections can briefly reduce throughput.
 - Deployment rollback restores the earlier topology. Diagram positions, routes, and groups stay in the diagram. Runtime data on removed components is not recovered. Each save retains the last 20 deployments, 100 events and 144 history points.
 
 ### Diagram storage
@@ -50,4 +51,4 @@ Call `GET /api/games` first to establish the signed, HTTP-only guest cookie. Cli
 
 ### Feature releases
 
-Development checks feature prerequisites and budget. The API revalidates infrastructure against production under the save lock before release. Text and group messaging use a writable primary. Media uses primary database storage with at least 8 GB free at release. Voice messages and file sharing also need an API → Queue → Worker path. Search uses a primary with the message search index enabled. Calls use API signaling capacity of at least 40 MB/s and 1,500 connections per reachable API across its instances. These checks cover every API that receives traffic. Previously released features keep their saved release status and routing behavior. The new release rules apply to later releases.
+Development checks feature prerequisites and budget. The API revalidates infrastructure against production under the save lock before release. Text and group messaging use a writable primary. Media uses primary database storage with at least 8 GB free at release. Voice messages and file sharing also need an API → Queue → Worker path. Search uses a primary with the message search index enabled. Calls use API signaling capacity of at least 40 MB/s and 1,500 connections per reachable API across its instances. These checks cover every API that receives traffic. Previously released features keep their saved release status and routing behavior. Release and re-enabling require enabled prerequisites. Disable enabled dependent features before disabling their prerequisite. Text messaging stays enabled as the core Messenger operation. Disabling a feature retains its release, data and development spend. Pending background jobs continue to drain. Paid subscription terms keep their price and benefits until expiry.

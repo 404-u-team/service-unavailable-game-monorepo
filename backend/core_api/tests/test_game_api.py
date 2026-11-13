@@ -170,6 +170,41 @@ class GameApiTests(TestCase):
             0,
         )
 
+    def test_product_settings_persist_and_replayed_actions_do_not_duplicate_events(
+        self,
+    ):
+        product = self.game["product"] | {
+            "north_america": True,
+            "sync_frequency": "relaxed",
+        }
+        payload = action(product=product)
+        status, updated = call(self.client, self.path + "/product", "PUT", payload)
+        self.assertEqual(status, 200, updated)
+        self.assertEqual(updated["product"], product)
+        self.assertLess(
+            updated["snapshot"]["demand"]["history"],
+            self.game["snapshot"]["demand"]["history"],
+        )
+        self.assertEqual(updated["economy"]["revenue"], 0)
+        self.assertEqual(updated["tick"], 0)
+        self.assertEqual(
+            updated["snapshot"]["demand_overview"]["regions"][1]["id"], "north_america"
+        )
+        self.assertEqual(
+            call(self.client, self.path + "/product", "PUT", payload)[1], updated
+        )
+        self.assertEqual(call(self.client, self.path)[1], updated)
+        self.assertEqual(
+            call(self.client, self.path + "/finance")[1], updated["economy"]
+        )
+        status, _ = call(
+            self.client,
+            self.path + "/product",
+            "PUT",
+            action(product=product | {"premium_price": 7}),
+        )
+        self.assertEqual(status, 422)
+
     def test_catalog_difficulty_profiles_match_new_games(self):
         status, catalog = call(self.client, "/catalog")
         self.assertEqual(status, 200, catalog)

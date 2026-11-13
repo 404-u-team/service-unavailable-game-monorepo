@@ -5,21 +5,37 @@ from uuid import UUID
 from pydantic import Field
 
 from src.simulation.models import (
+    AdIntensity,
     DeploymentComparison,
     Diagram,
     Difficulty,
+    FinanceSample,
     GameSettings,
     HistoryPoint,
     Metrics,
     Model,
     Name,
+    OneTimeCosts,
+    OperatingCosts,
+    ProductSettings,
+    RevenueSources,
     Snapshot,
     Speed,
     Topology,
 )
 
 ScenarioId = Literal["messenger", "social", "multiplayer", "education"]
-FeatureId = Literal["text", "groups", "images", "voice", "search", "files", "calls"]
+FeatureId = Literal[
+    "text",
+    "groups",
+    "images",
+    "voice",
+    "search",
+    "files",
+    "calls",
+    "advertising",
+    "premium",
+]
 CampaignId = Literal["community", "creator", "ads"]
 
 
@@ -57,7 +73,11 @@ class SettingsAction(Action):
 
 
 class FeatureAction(Action):
-    action: Literal["develop", "release"]
+    action: Literal["develop", "release", "enable", "disable"]
+
+
+class ProductAction(Action):
+    product: ProductSettings
 
 
 class TutorialAction(Action):
@@ -106,6 +126,7 @@ class SaveSummary(Model):
     name: str
     scenario: str
     tick: int
+    day: int
     audience: int
     balance: float
     saved_at: datetime
@@ -115,6 +136,17 @@ class BusinessPoint(Model):
     tick: int
     audience: int
     balance: float
+
+
+class FinancePoint(FinanceSample):
+    tick: int
+
+
+class AdvertisingEstimate(Model):
+    impressions: float
+    revenue: float
+    satisfaction_impact: float
+    churn_impact: float
 
 
 class Economy(Model):
@@ -129,6 +161,26 @@ class Economy(Model):
     daily_revenue: float
     daily_operating: float
     daily_profit: float
+    daily_total_expenses: float
+    daily_net_profit: float
+    recent_purchases: OneTimeCosts
+    revenue_sources: RevenueSources
+    daily_sources: RevenueSources
+    operating_costs: OperatingCosts
+    daily_costs: OperatingCosts
+    starting_capital: float
+    cash_received: float
+    deferred_subscription_revenue: float
+    daily_active_users: float
+    operating_margin: float | None
+    arpdau: float | None
+    cost_per_dau: float | None
+    subscribers: int
+    conversion: float
+    premium_satisfaction: float
+    daily_ad_impressions: float
+    recorded_ticks: int
+    history: list[FinancePoint]
 
 
 class RequirementView(Model):
@@ -144,6 +196,10 @@ class FeatureView(Model):
     requirements: list[str] = Field(default_factory=list)
     infrastructure: list[RequirementView] = Field(default_factory=list)
     can_release: bool = False
+    enabled: bool = False
+    can_enable: bool = False
+    can_disable: bool = False
+    dependents: list[str] = Field(default_factory=list)
     demand_change: float = 0
 
 
@@ -178,6 +234,7 @@ class DeploymentView(Model):
 
 class GameView(SaveSummary):
     speed: Speed
+    start_minute: int
     difficulty: Difficulty
     satisfaction: float
     production: Topology
@@ -191,6 +248,8 @@ class GameView(SaveSummary):
     component_costs: dict[str, float]
     draft_costs: dict[str, float]
     features: list[FeatureView]
+    product: ProductSettings
+    advertising_estimates: dict[AdIntensity, AdvertisingEstimate]
     campaigns: list[CampaignView]
     incidents: list[IncidentView]
     deployments: list[DeploymentView]
@@ -211,6 +270,7 @@ class CatalogField(Model):
 class ComponentDefinition(Model):
     name: str
     category: str
+    monthly: float
     daily: float
     fields: dict[str, CatalogField]
     description: str
@@ -260,3 +320,6 @@ class Catalog(Model):
     connections: dict[str, list[str]]
     connection_types: dict[str, dict[str, str]]
     minutes_per_tick: int
+    days_per_month: int
+    premium_price_min: float
+    premium_price_max: float

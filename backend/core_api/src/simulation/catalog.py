@@ -1,9 +1,11 @@
 from src.simulation.models import Kind, Setting
 
 MINUTES_PER_TICK = 10
-TICKS_PER_DAY = 144
+TICKS_PER_DAY = 24 * 60 // MINUTES_PER_TICK
+DAYS_PER_MONTH = 30
+START_MINUTE_UTC = 8 * 60
 SECONDS_PER_TICK = 2
-HISTORY_LIMIT = 144
+HISTORY_LIMIT = TICKS_PER_DAY
 
 
 def number(
@@ -26,14 +28,14 @@ COMPONENTS: dict[Kind, dict] = {
     "source": {
         "name": "Traffic source",
         "category": "Traffic",
-        "daily": 0,
+        "monthly": 0,
         "fields": {},
-        "description": "Generates requests from active users, released features and audience activity.",
+        "description": "Generates requests from active users, enabled features and audience activity.",
     },
     "balancer": {
         "name": "Load balancer",
         "category": "Traffic",
-        "daily": 23,
+        "monthly": 120,
         "fields": {
             "algorithm": choice(
                 "Routing strategy", "Round robin", "Round robin", "Weighted capacity"
@@ -47,7 +49,7 @@ COMPONENTS: dict[Kind, dict] = {
     "api": {
         "name": "API server",
         "category": "Compute",
-        "daily": 42,
+        "monthly": 180,
         "fields": {
             "instances": number("Instances", 1, 1, 24),
             "cpu": number("vCPU per instance", 2, 1, 32),
@@ -61,7 +63,7 @@ COMPONENTS: dict[Kind, dict] = {
     "database": {
         "name": "Database",
         "category": "Data",
-        "daily": 51,
+        "monthly": 360,
         "fields": {
             "cpu": number("Database vCPU", 2, 1, 16),
             "memory": number("RAM (GB)", 8, 1, 128),
@@ -77,7 +79,7 @@ COMPONENTS: dict[Kind, dict] = {
     "replica": {
         "name": "Read replica",
         "category": "Data",
-        "daily": 35,
+        "monthly": 240,
         "fields": {
             "cpu": number("Database vCPU", 2, 1, 16),
             "memory": number("RAM (GB)", 8, 1, 128),
@@ -89,7 +91,7 @@ COMPONENTS: dict[Kind, dict] = {
     "cache": {
         "name": "Cache",
         "category": "Data",
-        "daily": 24,
+        "monthly": 150,
         "fields": {
             "memory": number("Capacity (GB)", 2, 1, 64),
             "ttl": number("TTL (seconds)", 120, 10, 3600, 10),
@@ -103,7 +105,7 @@ COMPONENTS: dict[Kind, dict] = {
     "limiter": {
         "name": "Rate limiter",
         "category": "Traffic",
-        "daily": 14,
+        "monthly": 90,
         "fields": {
             "limit": number("Requests per window", 130, 1, 100000),
             "window": number("Window (seconds)", 1, 1, 120),
@@ -117,7 +119,7 @@ COMPONENTS: dict[Kind, dict] = {
     "queue": {
         "name": "Queue",
         "category": "Compute",
-        "daily": 19,
+        "monthly": 120,
         "fields": {
             "capacity": number("Capacity (jobs)", 30000, 100, 2_000_000, 100),
             "retention": number("Retention (minutes)", 60, 10, 1440, 10),
@@ -127,7 +129,7 @@ COMPONENTS: dict[Kind, dict] = {
     "worker": {
         "name": "Worker",
         "category": "Compute",
-        "daily": 28,
+        "monthly": 180,
         "fields": {
             "instances": number("Instances", 1, 1, 24),
             "cpu": number("vCPU per instance", 2, 1, 32),
@@ -139,7 +141,7 @@ COMPONENTS: dict[Kind, dict] = {
     "monitor": {
         "name": "Monitoring",
         "category": "Operations",
-        "daily": 17,
+        "monthly": 90,
         "fields": {
             "slots": number("Collection slots", 8, 2, 32),
             "detail": choice(
@@ -159,7 +161,6 @@ SCENARIOS = {
         "available": True,
         "description": "Messaging, chat history and persistent connections.",
         "activity": 1.0,
-        "daily_revenue": 0.018,
         "organic": 0.009,
         "operations": ["send", "history", "conversations", "auth", "connection"],
     },
@@ -168,7 +169,6 @@ SCENARIOS = {
         "available": False,
         "description": "Feeds, media uploads and advertising.",
         "activity": 1.2,
-        "daily_revenue": 0.014,
         "organic": 0.012,
         "operations": ["feed", "upload", "auth"],
     },
@@ -177,7 +177,6 @@ SCENARIOS = {
         "available": False,
         "description": "Real-time sessions and in-game purchases.",
         "activity": 1.4,
-        "daily_revenue": 0.027,
         "organic": 0.007,
         "operations": ["session", "connection", "auth"],
     },
@@ -186,7 +185,6 @@ SCENARIOS = {
         "available": False,
         "description": "Lessons, streaming and subscriptions.",
         "activity": 0.8,
-        "daily_revenue": 0.022,
         "organic": 0.008,
         "operations": ["lesson", "stream", "auth"],
     },
@@ -240,6 +238,7 @@ OPERATIONS = {
         "File transfers", 0.00035, 1.6, write=1, mb=4.2, jobs=1.4, storage=0.00028
     ),
     "calls": operation("Voice calls", 0.00085, 2.2, mb=1.7, connections=42),
+    "ad": operation("Ad delivery", 0, 0.65, mb=0.045),
     "feed": operation("Feed reads", 0.008, 1.1, read=3, mb=0.08),
     "session": operation("Session updates", 0.02, 0.7, connections=16),
     "lesson": operation("Lesson progress", 0.002, 1.2, read=1, write=1),
@@ -271,6 +270,12 @@ def feature(
 
 FEATURES = {
     "text": feature("Text messaging", 0, 0, 0, None, (), infrastructure=("primary",)),
+    "advertising": feature(
+        "Advertising", 480, 12, 0, "ad", infrastructure=("primary",)
+    ),
+    "premium": feature(
+        "Premium subscriptions", 720, 18, 0, None, infrastructure=("primary",)
+    ),
     "groups": feature(
         "Group chats", 650, 12, 0.17, "groups", infrastructure=("primary",)
     ),
@@ -387,18 +392,89 @@ DIFFICULTIES = {
         "name": "Beginner",
         "balance": 10000,
         "audience": 8400,
-        "incident_chance": 0.16,
+        "incident_chance": 0.08,
     },
     "standard": {
         "name": "Standard",
         "balance": 7500,
         "audience": 9700,
-        "incident_chance": 0.23,
+        "incident_chance": 0.16,
     },
     "expert": {
         "name": "Expert",
         "balance": 4800,
         "audience": 11400,
-        "incident_chance": 0.32,
+        "incident_chance": 0.25,
     },
 }
+
+
+# Local activity sampled every three hours from midnight. Smooth interpolation
+# between these anchors drives both the live workload and its forecast.
+REGIONS = {
+    "europe": {
+        "name": "Europe",
+        "utc_offset": 60,
+        "profile": (0.43, 0.31, 0.48, 0.83, 0.85, 0.93, 1.03, 1.09),
+        "weekend": 1.06,
+        "engagement": 1.0,
+        "ad_value": 1.0,
+    },
+    "north_america": {
+        "name": "North America",
+        "utc_offset": -300,
+        "profile": (0.44, 0.30, 0.47, 0.80, 0.86, 0.94, 1.02, 1.10),
+        "weekend": 1.08,
+        "engagement": 0.95,
+        "ad_value": 1.20,
+    },
+}
+
+ADVERTISING = {
+    "low": {"slots": 2, "fill": 0.79, "cpm": 1.40, "friction": 0.012, "churn": 0.001},
+    "moderate": {
+        "slots": 4,
+        "fill": 0.72,
+        "cpm": 1.30,
+        "friction": 0.048,
+        "churn": 0.007,
+    },
+    "high": {"slots": 7, "fill": 0.55, "cpm": 1.20, "friction": 0.16, "churn": 0.035},
+}
+BUSINESS = {
+    "active_share": 0.64,
+    "sessions_per_dau": 3.2,
+    "traffic_cost_per_rps_day": 0.012,
+    "payments_fee": 0.035,
+    "premium_default_price": 4.0,
+    "premium_min_price": 1.0,
+    "premium_max_price": 15.0,
+    "premium_daily_adoption": 0.0055,
+    "premium_renewal": 0.91,
+    "premium_quality_floor": 0.985,
+    "premium_reliability_memory_days": 3,
+    "premium_ad_free_satisfaction": 0.018,
+    "premium_sync_multiplier": 1.30,
+    "premium_sync_satisfaction": 0.012,
+    "premium_standard_adoption_factor": 0.80,
+    "premium_ad_free_adoption": 4.0,
+    "premium_max_daily_adoption": 0.025,
+    "premium_reliability_sensitivity": 4.0,
+    "premium_renewal_price_sensitivity": 0.45,
+    "premium_latency_threshold": 85,
+    "premium_latency_scale": 320,
+    "premium_price_sensitivity": 0.38,
+    "expansion_acquisition_share": 0.55,
+}
+
+SYNC_FREQUENCY = {
+    "relaxed": {"load": 0.75, "satisfaction": -0.032},
+    "standard": {"load": 1.0, "satisfaction": 0.0},
+    "frequent": {"load": 1.22, "satisfaction": 0.012},
+}
+MEDIA_QUALITY = {
+    "compressed": {"size": 0.58, "cpu": 1.15, "satisfaction": -0.024},
+    "standard": {"size": 1.0, "cpu": 1.0, "satisfaction": 0.0},
+    "high": {"size": 1.52, "cpu": 0.95, "satisfaction": 0.018},
+}
+MEDIA_OPERATIONS = {"upload", "voice", "files"}

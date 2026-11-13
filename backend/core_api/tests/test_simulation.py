@@ -407,7 +407,8 @@ class SimulationTests(TestCase):
         self.assertGreater(normal.audience, 8400)
         self.assertLess(outage.audience, 8400)
         self.assertGreater(normal.satisfaction, outage.satisfaction)
-        self.assertGreater(normal.revenue, outage.revenue)
+        self.assertEqual(normal.revenue, 0)
+        self.assertEqual(outage.revenue, 0)
         self.assertAlmostEqual(
             normal.balance, 10_000 + normal.revenue - normal.operating
         )

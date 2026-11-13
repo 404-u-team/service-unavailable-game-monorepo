@@ -8,6 +8,9 @@
   import Meter from '../Meter.svelte';
   import Guide from '../Guide.svelte';
   import Chart from './Chart.svelte';
+  import Finance from './Finance.svelte';
+  import ProductSettings from './ProductSettings.svelte';
+  import RegionalDemand from './RegionalDemand.svelte';
   import ForecastCard from './Forecast.svelte';
   import { api } from '../api';
   import { more, sections, statusLabel, type Section } from '../labels';
@@ -21,6 +24,7 @@
   } = $props();
   let dialog = $state<'campaign' | 'feature' | 'incident' | 'rollback' | 'drill'>();
   let detail = $state('');
+  let confirmDisable = $state(false);
   let featureId = $state('groups');
   let eventId = $state('');
   let eventFilter = $state<'all' | 'active' | 'closed'>('all');
@@ -45,10 +49,8 @@
   const currentFeature = $derived(game.features.find((item) => item.id === detail));
   const selectedFeature = $derived(game.features.find((item) => item.id === featureId));
   const inDevelopment = $derived(game.features.filter((item) => item.state === 'developing' || item.state === 'ready'));
-  const categories = $derived(Object.entries(catalog.components).reduce<Record<string, number>>((costs, [kind, item]) => {
-    costs[item.category] = (costs[item.category] ?? 0) + game.production.nodes.filter((node) => node.kind === kind).reduce((sum, node) => sum + (game.component_costs[node.id] ?? 0), 0);
-    return costs;
-  }, {}));
+  const gameTime = (tick: number) => when(tick, game.start_minute, catalog.minutes_per_tick);
+  const tickTime = (tick: number) => clock(tick, game.start_minute, catalog.minutes_per_tick);
   const incident = $derived(game.incidents.find((item) => item.id === detail));
   const events = $derived(game.incidents.filter((item) => eventFilter === 'all' || (eventFilter === 'active' ? item.active : !item.active)));
   const activeEvents = $derived(game.incidents.filter((item) => item.active));
@@ -96,11 +98,18 @@
     if (await act(path, body)) dialog = undefined;
   }
 
+  function openFeature(id: string) {
+    detail = id;
+    confirmDisable = false;
+    dialog = 'feature';
+  }
+
   function openIncident(item: Incident) { eventId = item.id; detail = item.id; dialog = 'incident'; }
   const settingsTabs = { general: 'General', accessibility: 'Accessibility', storage: 'Storage' } as const;
 
-  const statuses = { locked: 'Locked', available: 'Available', developing: 'In development', ready: 'Ready to release', released: 'Released' };
+  const statuses = { locked: 'Locked', available: 'Available', developing: 'In development', ready: 'Ready to release' };
   function featureStatus(feature: Feature) {
+    if (feature.state === 'released') return t(feature.enabled ? 'Released and enabled' : 'Released but disabled');
     return t(feature.state === 'ready' && !feature.can_release
       ? 'Ready for release — infrastructure requirements not met.'
       : statuses[feature.state]);
@@ -126,7 +135,7 @@
     {#if definition.prereq.length}
       <ul class="requirement-list">
         {#each definition.prereq as id}
-          {@const met = game.features.some((item) => item.id === id && item.state === 'released')}
+          {@const met = game.features.some((item) => item.id === id && item.enabled)}
           <li><span class:warning={!met}>{t(met ? 'Met' : 'Missing')}</span> · {t(catalog.features[id].name)}</li>
         {/each}
       </ul>
@@ -160,8 +169,8 @@
     </div>
     <p>{message(item.symptom)}</p>
     <dl class="breakdown">
-      <div><dt>{t("Started")}</dt><dd>{when(item.start)}</dd></div>
-      <div><dt>{item.active ? t("Expected end") : t("Ended")}</dt><dd>{when(item.end)}</dd></div>
+      <div><dt>{t("Started")}</dt><dd>{gameTime(item.start)}</dd></div>
+      <div><dt>{item.active ? t("Expected end") : t("Ended")}</dt><dd>{gameTime(item.end)}</dd></div>
       <div><dt>{t("Duration")}</dt><dd>{duration(item.end - item.start)}</dd></div>
       <div><dt>{t("Failed requests during incident")}</dt><dd>{num(item.failed_requests)}</dd></div>
       {#if item.cause}<div><dt>{t("Diagnosed cause")}</dt><dd>{item.cause === 'failure' ? t("Instance failure") : item.cause === 'degradation' ? t("Reduced capacity") : t("Storage pressure")}</dd></div>{/if}
@@ -183,7 +192,7 @@
   {#if game.incidents.length}
     <ul class="list timeline">
       {#each game.incidents.slice(0, 6) as item (item.id)}
-        <li><button onclick={() => openIncident(item)}><span class:item-warn={item.severity !== 'info'} class="dot"></span><span class="mono muted">{clock(item.start)}</span><span>{message(item.title)}</span></button></li>
+        <li><button onclick={() => openIncident(item)}><span class:item-warn={item.severity !== 'info'} class="dot"></span><span class="mono muted">{tickTime(item.start)}</span><span>{message(item.title)}</span></button></li>
       {/each}
     </ul>
   {:else}<p class="muted">{t("No events recorded.")}</p>{/if}
@@ -202,9 +211,9 @@
 
   {#if section === 'home'}
     <section class="panel pad stack">
-      <div class="row spread"><div><p class="eyebrow">{t(catalog.scenarios[game.scenario]?.name ?? '')} / {when(game.tick)}</p><h2>{game.name}</h2></div><span class="badge {metric.availability >= .95 ? 'good' : 'warn'}"><i class="dot"></i>{metric.availability >= .95 ? t("Operational") : t("Degraded")}</span></div>
+      <div class="row spread"><div><p class="eyebrow">{t(catalog.scenarios[game.scenario]?.name ?? '')} / {gameTime(game.tick)}</p><h2>{game.name}</h2></div><span class="badge {metric.availability >= .95 ? 'good' : 'warn'}"><i class="dot"></i>{metric.availability >= .95 ? t("Operational") : t("Degraded")}</span></div>
       <div class="overview">
-        <div><p class="eyebrow">{t("Active users")}</p><strong>{num(game.audience)}</strong></div>
+        <div><p class="eyebrow">{t("Registered users")}</p><strong>{num(game.audience)}</strong></div>
         <div><p class="eyebrow">{t("Balance")}</p><strong>{money(game.balance)}</strong></div>
         <div><p class="eyebrow">{t("Satisfaction")}</p><strong>{pct(game.satisfaction)}</strong></div>
       </div>
@@ -214,10 +223,11 @@
     <section class="panel pad stack"><h2>{t("Recent events")}</h2>{@render timeline()}</section>
   {:else if section === 'monitor'}
     {@render statCards()}
+    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} />{/if}
     <div class="split">
       <section class="panel pad stack">
         <div><h2>{t("Traffic / throughput")}</h2><p class="muted">{t("Incoming and successful requests per second")}</p></div>
-        <Chart title={t("Request traffic")} values={history.map((point) => point.metrics.rps)} secondary={history.map((point) => point.metrics.throughput)} ticks={history.map((point) => point.tick)} />
+        <Chart title={t("Request traffic")} values={history.map((point) => point.metrics.rps)} secondary={history.map((point) => point.metrics.throughput)} ticks={history.map((point) => point.tick)} time={tickTime} />
         {#if history.length}<small><span class="accent">{t("━ Incoming")}</span> &nbsp; <span class="throughput">{t("┄ Successful")}</span></small>{/if}
       </section>
       <section class="panel inset pad stack"><h2>{t("Incident timeline")}</h2>{@render timeline()}<a class="btn" href={link('events')}>{t("View events")} <ArrowRight size={14} /></a></section>
@@ -255,7 +265,7 @@
         </div>
         <Chart title={t('Peak resource load for {0}', [t(inspectedHistory.name)])}
           values={history.map((point) => point.peak_utilization?.[inspectedHistory.id] ?? null)}
-          ticks={history.map((point) => point.tick)} format={pct}
+          ticks={history.map((point) => point.tick)} time={tickTime} format={pct}
           emptyText={t('Resume the simulation to record resource load for this component.')} />
       </section>
     {/if}
@@ -284,8 +294,8 @@
   {:else if section === 'growth'}
     <div class="split">
       <section class="panel pad stack">
-        <div><p class="eyebrow">{t("Active audience")}</p><strong class="big-stat">{num(game.audience)}</strong><p class="muted">{t("Satisfaction ·")} {pct(game.satisfaction, 1)}</p></div>
-        <Chart title={t("Active audience")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} />
+        <div><p class="eyebrow">{t("Registered users")}</p><strong class="big-stat">{num(game.audience)}</strong><p class="muted">{t("Satisfaction ·")} {pct(game.satisfaction, 1)}</p></div>
+        <Chart title={t("Registered users")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} time={tickTime} />
       </section>
       <section class="panel inset pad stack">
         <h2>{t("Growth readiness")}</h2><p class="muted">{t("Projected load during a creator campaign")}</p>
@@ -313,7 +323,7 @@
   {:else if section === 'product'}
     <div class="cards stats">
       {#each [
-        { label: 'Active features', value: game.features.filter((item) => item.state === 'released').length },
+        { label: 'Active features', value: game.features.filter((item) => item.enabled).length },
         { label: 'Features in progress', value: inDevelopment.length },
         { label: 'Projected additional load', value: `+${pct(inDevelopment.reduce((sum, item) => sum + item.demand_change, 0), 1)}` },
         { label: 'Development spend', value: money(game.economy.development) }
@@ -328,11 +338,11 @@
           {@const definition = catalog.features[feature.id]}
           <article class="feature-row" class:active={feature.id === featureId}>
             <button class="feature-select" aria-pressed={feature.id === featureId} onclick={() => featureId = feature.id}>
-              <span class="dot {feature.state === 'released' ? 'accent' : feature.state === 'developing' ? 'warning' : 'muted'}"></span>
-              <span><h3>{t(definition.name)}</h3><small>{definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger workload")}</small></span>
-              <span class="badge {feature.state === 'released' || feature.can_release ? 'good' : inDevelopment.includes(feature) ? 'warn' : 'dim'}">{t(feature.state === 'ready' && !feature.can_release ? 'Release blocked' : statuses[feature.state])}</span>
+              <span class="dot {feature.enabled ? 'accent' : feature.state === 'developing' ? 'warning' : 'muted'}"></span>
+              <span><h3>{t(definition.name)}</h3><small>{feature.id === 'premium' ? t('Additional synchronization for subscribers') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger workload")}</small></span>
+              <span class="badge {feature.enabled || feature.can_release ? 'good' : inDevelopment.includes(feature) ? 'warn' : 'dim'}">{feature.state === 'ready' && !feature.can_release ? t('Release blocked') : featureStatus(feature)}</span>
             </button>
-            <button class="btn icon-btn" aria-label={t("Feature details")} title={t("Feature details")} onclick={() => { featureId = feature.id; detail = feature.id; dialog = 'feature'; }}><ChevronRight size={16} /></button>
+            <button class="btn icon-btn" aria-label={t("Feature details")} title={t("Feature details")} onclick={() => { featureId = feature.id; openFeature(feature.id); }}><ChevronRight size={16} /></button>
           </article>
         {/each}
       </section>
@@ -345,44 +355,16 @@
           <dl class="breakdown">
             <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
             <div><dt>{t("Development time")}</dt><dd>{duration(definition.duration)}</dd></div>
-            {#if selectedFeature.state !== 'released'}<div><dt>{t("Additional request load")}</dt><dd>+{pct(selectedFeature.demand_change, 1)}</dd></div>{/if}
+            {#if selectedFeature.state !== 'released' && selectedFeature.demand_change > 0}<div><dt>{t("Additional request load")}</dt><dd>+{pct(selectedFeature.demand_change, 1)}</dd></div>{/if}
           </dl>
           {@render featureRequirements(selectedFeature)}
-          <button class="btn {selectedFeature.state === 'ready' ? 'primary' : ''}" onclick={() => { detail = selectedFeature!.id; dialog = 'feature'; }}>{t("Open feature")} <ArrowRight size={14} /></button>
+          <button class="btn {selectedFeature.state === 'ready' ? 'primary' : ''}" onclick={() => openFeature(selectedFeature!.id)}>{t("Open feature")} <ArrowRight size={14} /></button>
         </aside>
       {/if}
     </div>
+    <ProductSettings {game} {catalog} {busy} {error} save={(product) => act('/product', { product }, 'PUT')} />
   {:else if section === 'finance'}
-    <div class="cards stats">
-      {#each [
-        { label: 'Balance', amount: game.economy.balance, detail: t('{0} net to date', [preciseMoney(game.economy.profit)]) },
-        { label: 'Revenue / day', amount: game.economy.daily_revenue, detail: t('{0} earned', [preciseMoney(game.economy.revenue)]) },
-        { label: 'Operating costs / day', amount: game.economy.daily_operating, detail: t('{0} spent', [preciseMoney(game.economy.operating)]) },
-        { label: 'Net profit / day', amount: game.economy.daily_profit, detail: t('{0} margin', [pct(game.economy.daily_profit / (game.economy.daily_revenue || 1), 1)]) }
-      ] as stat}
-        <section class="panel pad"><p class="eyebrow">{t(stat.label)}</p><strong class="stat" class:danger={stat.amount < 0}>{preciseMoney(stat.amount)}</strong><small>{t(stat.detail)}</small></section>
-      {/each}
-    </div>
-    <div class="split">
-      <section class="panel pad stack"><div><h2>{t("Cash flow")}</h2><p class="muted">{t("Balance over the last in-game day")}</p></div><Chart title={t("Game balance")} values={game.business_history.map((point) => point.balance)} ticks={game.business_history.map((point) => point.tick)} /></section>
-      <section class="panel inset pad stack">
-        <h2>{t("Expense breakdown")}</h2>
-        {#each Object.entries(categories) as [label, amount]}
-          <div class="stack node-meter"><div class="row spread"><span>{t(label)}</span><strong>{preciseMoney(amount)} {t("/ day")}</strong></div><Meter value={amount / (game.economy.daily_infrastructure || 1)} label={t(label)} show={false} /></div>
-        {/each}
-        <dl class="breakdown">
-          <div><dt>{t("Development to date")}</dt><dd>{preciseMoney(game.economy.development)}</dd></div>
-          <div><dt>{t("Marketing to date")}</dt><dd>{preciseMoney(game.economy.marketing)}</dd></div>
-          <div><dt>{t("Deployments to date")}</dt><dd>{preciseMoney(game.economy.deployment)}</dd></div>
-        </dl>
-      </section>
-    </div>
-    <section class="panel pad stack">
-      <h2>{t("Production infrastructure")}</h2>
-      <dl class="breakdown">
-        {#each game.production.nodes as node (node.id)}<div><dt>{t(node.name)}</dt><dd>{preciseMoney(game.component_costs[node.id] ?? 0)} {t("/ day")}</dd></div>{/each}
-      </dl>
-    </section>
+    <Finance {game} {catalog} />
   {:else if section === 'events'}
     <div class="split event-layout">
       <section class="panel pad stack">
@@ -395,7 +377,7 @@
         {#if !events.length}<p class="muted">{t("No matching events.")}</p>{/if}
         {#each events as item (item.id)}
           <button class="event row spread" class:active={selectedIncident?.id === item.id} onclick={() => openIncident(item)}>
-            <span><strong>{message(item.title)}</strong><small>{when(item.start)} · {message(item.symptom)}</small></span>
+            <span><strong>{message(item.title)}</strong><small>{gameTime(item.start)} · {message(item.symptom)}</small></span>
             <span class="badge {item.active ? 'warn' : 'dim'}">{item.active ? t("Active") : t("Closed")}</span><ChevronRight size={16} />
           </button>
         {/each}
@@ -410,7 +392,7 @@
       <h2>{t("Deployment history")}</h2>
       {#if !game.deployments.length}<p class="muted">{t("No deployments yet.")}</p>{/if}
       {#each game.deployments as item (item.id)}
-        <div class="event row spread"><div><strong>{message(item.summary)}</strong><small>{when(item.tick)} · {preciseMoney(item.cost)}</small></div><button class="btn" disabled={busy || Boolean(game.draft)} onclick={() => { detail = item.id; dialog = 'rollback'; }}>{t("Review rollback")}</button></div>
+        <div class="event row spread"><div><strong>{message(item.summary)}</strong><small>{gameTime(item.tick)} · {preciseMoney(item.cost)}</small></div><button class="btn" disabled={busy || Boolean(game.draft)} onclick={() => { detail = item.id; dialog = 'rollback'; }}>{t("Review rollback")}</button></div>
         {#if item.comparison}<details class="event"><summary>{t("View before and after")}</summary><DeploymentComparison comparison={item.comparison} /></details>{/if}
       {/each}
       {#if game.draft && game.deployments.length}<p class="muted">{t("Discard the current draft to roll back.")}</p>{/if}
@@ -484,18 +466,32 @@
       <dl class="breakdown">
         <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
         <div><dt>{t("Development duration")}</dt><dd>{duration(definition.duration)}</dd></div>
-        <div><dt>{t("Generated demand")}</dt><dd>{definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger operations")}</dd></div>
-        {#if currentFeature.state !== 'released'}<div><dt>{t("Additional request load")}</dt><dd>+{pct(currentFeature.demand_change, 1)}</dd></div>{/if}
+        <div><dt>{t("Generated demand")}</dt><dd>{detail === 'premium' ? t('Additional synchronization for subscribers') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger operations")}</dd></div>
+        {#if currentFeature.state !== 'released' && currentFeature.demand_change > 0}<div><dt>{t("Additional request load")}</dt><dd>+{pct(currentFeature.demand_change, 1)}</dd></div>{/if}
         <div><dt>{t("Appeal contribution")}</dt><dd>+{pct(definition.appeal)}</dd></div>
       </dl>
       {@render featureRequirements(currentFeature)}
+      {#if currentFeature.dependents.length}
+        <p class="notice warn">{t('Disable these features first: {0}', [currentFeature.dependents.map((id) => t(catalog.features[id].name)).join(', ')])}</p>
+      {/if}
+      {#if detail === 'premium' && currentFeature.state === 'released'}
+        <p class="muted">{t('Disabling Premium stops new sales and renewals. Paid benefits continue until each term ends.')}</p>
+      {/if}
+      {#if confirmDisable}
+        <p class="notice warn" role="status">{t('Disable {0}?', [t(definition.name)])}</p>
+      {/if}
       {#if currentFeature.state === 'developing'}<Meter value={1 - currentFeature.remaining / definition.duration} label={t("{0} remaining", [duration(currentFeature.remaining)])} />{/if}
       {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     </div>
     {#snippet footer()}
       <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Close")}</button>
         {#if currentFeature.state === 'available'}<button class="btn primary" disabled={busy || game.balance < definition.cost} onclick={() => confirm(`/features/${detail}`, { action: 'develop' })}>{t("Start development")}</button>
-        {:else if currentFeature.state === 'ready'}<button class="btn primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</button>{/if}
+        {:else if currentFeature.state === 'ready'}<button class="btn primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</button>
+        {:else if currentFeature.state === 'released' && !currentFeature.enabled}
+          <button class="btn primary" disabled={busy || !currentFeature.can_enable} onclick={() => confirm(`/features/${detail}`, { action: 'enable' })}>{t('Enable feature')}</button>
+        {:else if currentFeature.enabled && currentFeature.can_disable}
+          <button class="btn danger" disabled={busy} onclick={() => confirmDisable ? confirm(`/features/${detail}`, { action: 'disable' }) : confirmDisable = true}>{t(confirmDisable ? 'Confirm disable' : 'Disable feature')}</button>
+        {/if}
       </div>
     {/snippet}
   </Modal>
@@ -507,7 +503,7 @@
   </Modal>
 {:else if dialog === 'rollback' && deployment}
   <Modal title={t("Review rollback")} close={() => dialog = undefined}>
-    <div class="stack"><p>{t("Restore the topology that was in production before “")}{message(deployment.summary)}{t("” on")} {when(deployment.tick)}{t(". The server revalidates the topology and charges any installation cost.")}</p>{#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}</div>
+    <div class="stack"><p>{t("Restore the topology that was in production before “")}{message(deployment.summary)}{t("” on")} {gameTime(deployment.tick)}{t(". The server revalidates the topology and charges any installation cost.")}</p>{#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}</div>
     {#snippet footer()}<div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn danger" disabled={busy} onclick={() => confirm(`/deployments/${detail}/rollback`, { revision: game.revision })}>{t("Roll back")}</button></div>{/snippet}
   </Modal>
 {:else if dialog === 'drill'}

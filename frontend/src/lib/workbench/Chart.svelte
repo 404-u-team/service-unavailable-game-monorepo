@@ -1,14 +1,14 @@
 <script lang="ts">
   import { t } from '../i18n.svelte';
   import { clock, num } from '../format';
-  let { title, values, ticks, secondary = [], emptyText, format = num }: {
+  let { title, values, ticks, secondary = [], emptyText, format = num, time = clock }: {
     title: string; values: (number | null)[]; ticks: number[]; secondary?: number[];
-    emptyText?: string; format?: (value: number) => string;
+    emptyText?: string; format?: (value: number) => string; time?: (tick: number) => string;
   } = $props();
   const data = $derived([...values.filter((value) => value !== null), ...secondary]);
   const low = $derived(data.length ? Math.min(...data) : 0);
   const high = $derived(data.length ? Math.max(...data) : 0);
-  const padding = $derived(Math.max((high - low) * .08, Math.abs(high) * .004, 0.1));
+  const padding = $derived(Math.max((high - low) * .08, Math.abs(high) * .004, data.length && high > low ? 0.0001 : 0.1));
   const minimum = $derived(low < 0 ? low - padding : Math.max(0, low - padding));
   const maximum = $derived(high + padding);
   const point = (value: number, index: number) => `${values.length === 1 ? 320 : 60 + index / Math.max(1, values.length - 1) * 575},${170 - (value - minimum) / (maximum - minimum) * 151}`;
@@ -35,7 +35,7 @@
     {#each [0, .25, .5, .75, 1] as item}
       <line x1={60 + item * 575} x2={60 + item * 575} y1="19" y2="170" />
       {#if ticks.length >= 5 || item === 0}
-        <text x={60 + item * 575} y="192" text-anchor={item === 1 ? 'end' : 'middle'}>{clock(ticks[Math.floor(item * (ticks.length - 1))] ?? 0)}</text>
+        <text x={60 + item * 575} y="192" text-anchor={item === 1 ? 'end' : 'middle'}>{time(ticks[Math.floor(item * (ticks.length - 1))] ?? 0)}</text>
       {/if}
     {/each}
     {#if secondary.length}<polyline class="secondary" points={secondary.map(point).join(' ')} />{/if}

@@ -1,25 +1,34 @@
 from random import Random
+from typing import Literal
 from uuid import UUID
 
 from src.simulation.catalog import (
+    ADVERTISING,
+    BUSINESS,
     CAMPAIGNS,
     DIFFICULTIES,
     FEATURES,
     HISTORY_LIMIT,
+    MEDIA_QUALITY,
     MINUTES_PER_TICK,
     SCENARIOS,
+    START_MINUTE_UTC,
+    SYNC_FREQUENCY,
     TICKS_PER_DAY,
 )
+from src.simulation.demand import free_share, product_settings
+from src.simulation.economy import book_tick, update_subscriptions
 from src.simulation.engine import evaluate
 from src.simulation.models import (
     Difficulty,
+    FinanceSample,
     Game,
     HistoryPoint,
     Incident,
-    Metrics,
+    OneTimeCosts,
     Snapshot,
 )
-from src.simulation.topology import RuleError, config, starter_topology, topology_cost
+from src.simulation.topology import RuleError, config, starter_topology
 
 SECONDS_PER_STEP = MINUTES_PER_TICK * 60
 EVENT_LIMIT = 100
@@ -42,12 +51,18 @@ def new_game(
         audience=profile["audience"],
         balance=profile["balance"],
         difficulty=difficulty,
+        start_minute=START_MINUTE_UTC,
     )
     game.history = [history_point(game, evaluate(game).snapshot)]
     return game
 
 
-def history_point(game: Game, snapshot: Snapshot) -> HistoryPoint:
+def history_point(
+    game: Game,
+    snapshot: Snapshot,
+    finance: FinanceSample | None = None,
+    churn: float = 0,
+) -> HistoryPoint:
     recorded = {
         node_id
         for monitor in snapshot.monitors.values()
@@ -59,6 +74,8 @@ def history_point(game: Game, snapshot: Snapshot) -> HistoryPoint:
         audience=round(game.audience),
         balance=game.balance,
         metrics=snapshot.metrics,
+        finance=finance,
+        audience_churn=churn,
         peak_utilization={
             node_id: max(metric.utilization.values())
             for node_id, metric in snapshot.components.items()
@@ -67,13 +84,19 @@ def history_point(game: Game, snapshot: Snapshot) -> HistoryPoint:
     )
 
 
-def spend(game: Game, amount: float, ledger: str) -> None:
+def spend(
+    game: Game, amount: float, ledger: Literal["development", "marketing", "deployment"]
+) -> None:
     if game.balance < amount:
         raise RuleError(
             f"This action costs ${amount:,.2f}. Available balance is ${game.balance:,.2f}."
         )
     game.balance -= amount
-    setattr(game, ledger, getattr(game, ledger) + amount)
+    field = f"{ledger}_spend"
+    setattr(game, field, getattr(game, field) + amount)
+    if amount:
+        purchase = game.recent_purchases.setdefault(game.tick, OneTimeCosts())
+        setattr(purchase, ledger, getattr(purchase, ledger) + amount)
 
 
 def add_event(
@@ -129,6 +152,7 @@ def drill(game: Game) -> None:
 
 
 def advance(game: Game, steps: int) -> None:
+    product = product_settings(game)
     for _ in range(steps):
         game.tick += 1
         for event in game.incidents:
@@ -145,13 +169,18 @@ def advance(game: Game, steps: int) -> None:
             elapsed = game.tick - start
             if 0 < elapsed <= campaign["duration"]:
                 phase = (elapsed - 0.5) / campaign["duration"]
-                game.audience += (
+                acquired = (
                     campaign["audience"]
                     * 6
                     * phase
                     * (1 - phase)
                     / campaign["duration"]
                 )
+                game.audience += acquired
+                if product.north_america:
+                    game.north_america_audience += (
+                        acquired * BUSINESS["expansion_acquisition_share"]
+                    )
             if elapsed == campaign["duration"]:
                 add_event(
                     game,
@@ -179,22 +208,51 @@ def advance(game: Game, steps: int) -> None:
         scenario = SCENARIOS[game.scenario]
         latency_penalty = min(0.48, max(0, metrics.latency - 90) / 480)
         quality = max(0.05, metrics.availability - latency_penalty)
-        game.satisfaction += (quality - game.satisfaction) * 0.09
+        enabled = game.enabled_features
+        ads = ADVERTISING[product.ad_intensity] if "advertising" in enabled else None
+        eligible_share = free_share(game) if ads else 0
+        experience = quality + SYNC_FREQUENCY[product.sync_frequency]["satisfaction"]
+        if enabled & {"images", "voice", "files"}:
+            experience += MEDIA_QUALITY[product.media_quality]["satisfaction"]
+        if ads:
+            experience -= ads["friction"] * eligible_share
+            experience += (
+                BUSINESS["premium_ad_free_satisfaction"]
+                * game.subscribers
+                / max(1, game.audience)
+            )
+        game.satisfaction += (max(0.05, min(1, experience)) - game.satisfaction) * 0.09
         game.strain = min(1, max(0, game.strain + (0.82 - quality) * 0.075))
-        appeal = sum(FEATURES[key]["appeal"] for key in game.released)
+        appeal = sum(FEATURES[key]["appeal"] for key in sorted(enabled))
         growth = scenario["organic"] * (1 + appeal) * game.satisfaction
-        churn = (0.002 + (1 - game.satisfaction) * 0.055) / (
-            1 + appeal * 0.4
-        ) + game.strain * 0.13
-        game.audience = max(50, game.audience * (1 + (growth - churn) / TICKS_PER_DAY))
-        daily_revenue, daily_expense = operating_rates(game, metrics, appeal)
-        revenue = daily_revenue / TICKS_PER_DAY
-        expense = daily_expense / TICKS_PER_DAY
-        game.revenue += revenue
-        game.operating += expense
-        game.balance += revenue - expense
-        game.history.append(history_point(game, result.snapshot))
+        churn = (
+            (0.002 + (1 - game.satisfaction) * 0.055) / (1 + appeal * 0.4)
+            + game.strain * 0.13
+            + (ads["churn"] * eligible_share if ads else 0)
+        )
+        organic_acquisition = game.audience * growth / TICKS_PER_DAY
+        churned = game.audience * churn / TICKS_PER_DAY
+        retained = 1 - churn / TICKS_PER_DAY
+        game.audience = max(
+            50, game.subscribers, game.audience - churned + organic_acquisition
+        )
+        game.north_america_audience *= retained
+        if product.north_america:
+            game.north_america_audience += (
+                organic_acquisition * BUSINESS["expansion_acquisition_share"]
+            )
+        premium_latency = max(
+            0, metrics.latency - BUSINESS["premium_latency_threshold"]
+        )
+        premium_quality = max(
+            0.05,
+            metrics.availability - premium_latency / BUSINESS["premium_latency_scale"],
+        )
+        cash = update_subscriptions(game, premium_quality, result.daily_active_users)
+        finance = book_tick(game, result, cash)
+        game.history.append(history_point(game, result.snapshot, finance, churned))
         game.history = game.history[-HISTORY_LIMIT:]
+        game.recent_purchases.pop(game.tick - TICKS_PER_DAY, None)
         for node in game.production.nodes:
             if node.kind != "database":
                 continue
@@ -213,17 +271,6 @@ def advance(game: Game, steps: int) -> None:
                     0,
                     node.id,
                 )
-
-
-def operating_rates(game: Game, metrics: Metrics, appeal: float) -> tuple[float, float]:
-    revenue = (
-        game.audience
-        * SCENARIOS[game.scenario]["daily_revenue"]
-        * (1 + appeal * 0.6)
-        * (0.3 + 0.7 * game.satisfaction)
-    )
-    expenses = topology_cost(game.production) + metrics.throughput * 0.002
-    return revenue, expenses
 
 
 def roll_event(game: Game) -> None:

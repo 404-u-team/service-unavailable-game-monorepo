@@ -1,16 +1,15 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
-from math import exp, pi, sin
-from random import Random
+from math import exp
 
 from src.simulation.catalog import (
-    CAMPAIGNS,
     FEATURES,
+    MEDIA_OPERATIONS,
+    MEDIA_QUALITY,
     MINUTES_PER_TICK,
     OPERATIONS,
-    SCENARIOS,
-    TICKS_PER_DAY,
 )
+from src.simulation.demand import active_incidents, product_settings, workload
 from src.simulation.models import (
     ComponentMetrics,
     Game,
@@ -43,48 +42,15 @@ class Evaluation:
     snapshot: Snapshot
     queues: dict[str, float] = field(default_factory=dict)
     storage: dict[str, float] = field(default_factory=dict)
-
-
-def campaign_weight(progress: float) -> float:
-    return 4 * progress * (1 - progress) if 0 < progress < 1 else 0
-
-
-def active_incidents(game: Game):
-    return (
-        event
-        for event in game.incidents
-        if event.start <= game.tick < event.end and event.resolution is None
-    )
+    daily_active_users: float = 0
+    ad_impressions_per_second: float = 0
+    ad_value_per_impression: float = 0
 
 
 def demand(
     game: Game, audience: float | None = None, boost: float = 0
 ) -> dict[str, float]:
-    scenario = SCENARIOS[game.scenario]
-    time_of_day = 0.85 + 0.21 * sin(2 * pi * ((game.tick / TICKS_PER_DAY) + 0.05))
-    noise = Random(game.seed + game.tick * 17011).uniform(0.97, 1.03)
-    campaign = sum(
-        CAMPAIGNS[key]["spike"]
-        * campaign_weight((game.tick - start) / CAMPAIGNS[key]["duration"])
-        for key, start in game.campaigns.items()
-    )
-    incident = sum(
-        event.factor - 1 for event in active_incidents(game) if event.kind == "spike"
-    )
-    activity = (
-        time_of_day * noise * scenario["activity"] * (1 + campaign + boost + incident)
-    )
-    operations = list(scenario["operations"])
-    operations.extend(
-        FEATURES[key]["operation"]
-        for key in game.released
-        if FEATURES[key]["operation"]
-    )
-    users = game.audience if audience is None else audience
-    return {
-        key: users * activity * OPERATIONS[key]["rate"]
-        for key in dict.fromkeys(operations)
-    }
+    return workload(game, audience, boost).operations
 
 
 def evaluate(
@@ -93,16 +59,30 @@ def evaluate(
     *,
     audience: float | None = None,
     boost: float = 0,
+    overview: bool = False,
 ) -> Evaluation:
     topology = topology or game.production
     graph = inspect_graph(topology)
-    workloads = demand(game, audience, boost)
+    activity = workload(game, audience, boost, overview=overview)
+    workloads = activity.operations
+    media = MEDIA_QUALITY[product_settings(game).media_quality]
+    operations = {
+        key: {
+            **operation,
+            "cpu": operation["cpu"] * media["cpu"],
+            "mb": operation["mb"] * media["size"],
+            "storage": operation["storage"] * media["size"],
+        }
+        if key in MEDIA_OPERATIONS
+        else operation
+        for key, operation in OPERATIONS.items()
+    }
     requested = sum(workloads.values())
     settings = {node.id: config(node) for node in topology.nodes}
     enforced = {
         FEATURES[key]["operation"]: FEATURES[key]["infrastructure"]
         for key in game.infrastructure_releases
-        if key in game.released
+        if key in game.enabled_features
     }
     events = list(active_incidents(game))
     factors = defaultdict(lambda: 1.0)
@@ -220,7 +200,7 @@ def evaluate(
         ) -> float:
             return sum(
                 (0.35 if field == "read" and key[0] == "search" and indexed else 1)
-                * OPERATIONS[key[0]][field]
+                * operations[key[0]][field]
                 * batch.rate
                 for key, batch in cohorts.items()
             )
@@ -329,7 +309,7 @@ def evaluate(
         cache_hits = 0.0
         for (op, origin), batch in cohorts.items():
             key = (op, origin)
-            operation = OPERATIONS[op]
+            operation = operations[op]
             accepted = batch.rate * share
             total_latency = batch.latency + latency
             if kind == "limiter" and applies(cfg["scope"], op):
@@ -560,12 +540,16 @@ def evaluate(
         )
 
     success = Batch()
+    ad_success = 0.0
     for key, batch in completed.items():
         if key in missing_queues:
             continue
         routes = async_routes.get(key, [])
         loss = sum(dropped[target] for target in routes) / len(routes) if routes else 0
-        success.add(batch.rate * (1 - loss), batch.latency)
+        served = batch.rate * (1 - loss)
+        success.add(served, batch.latency)
+        if key[0] == "ad":
+            ad_success += served
 
     monitors = {}
     visible = set()
@@ -629,10 +613,18 @@ def evaluate(
             if source in visible or target in visible or source == "traffic"
         ],
         demand=workloads,
+        demand_overview=activity.overview,
         monitored=any(monitor.history for monitor in monitors.values()),
         monitors=monitors,
     )
-    return Evaluation(snapshot, queues, storage)
+    return Evaluation(
+        snapshot,
+        queues,
+        storage,
+        activity.active_users,
+        ad_success * rollout,
+        activity.ad_value_per_impression,
+    )
 
 
 def applies(scope: str, operation: str) -> bool:

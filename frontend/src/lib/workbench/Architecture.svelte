@@ -1,7 +1,7 @@
 <script lang="ts">
   import { apiMessage, count, message, t } from '../i18n.svelte';
   import { onMount, tick } from 'svelte';
-  import { ArrowRight, ChevronRight, GitBranch, List, MousePointer2, Plus, Redo2, Search,
+  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Search,
     Trash2, Undo2, X } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
@@ -234,6 +234,7 @@
   });
 
   function select(id: string) {
+    if (selected !== id) inspectorTab = 'configuration';
     selected = id;
     if (touchSelect && id) selectMany(selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id]);
     else selection = id ? [id] : [];
@@ -447,7 +448,7 @@
       <div><h2>{t(active.name)}</h2><p class="eyebrow {metric?.status === 'failed' ? 'danger' : 'accent'}">{t(definition.name)}{metric ? ` / ${t(statusLabel[metric.status])}` : ''}</p></div>
     </div>
     {#if full}
-      <div class="switch" aria-label={t("Inspector view")}>
+      <div class="switch" role="group" aria-label={t("Inspector view")}>
         <button aria-pressed={inspectorTab === 'configuration'} onclick={() => inspectorTab = 'configuration'}>{t("Configuration")}</button>
         <button aria-pressed={inspectorTab === 'metrics'} onclick={() => inspectorTab = 'metrics'}>{t("Metrics")}</button>
       </div>
@@ -457,9 +458,9 @@
             <div><p class="eyebrow">{t("Instance size")}</p><button class="btn block instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></button></div>
             <div class="row spread"><span class="eyebrow">{t("Replicas")}</span>
               <div class="row counter">
-                <button class="btn icon-btn" aria-label={t("Remove replica")} disabled={busy || Number(activeConfig.instances) <= 1} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) - 1 })}>−</button>
+                <button class="btn icon-btn" aria-label={t("Remove replica")} disabled={busy || Number(activeConfig.instances) <= 1} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) - 1 })}><Minus size={14} /></button>
                 <strong>{activeConfig.instances}</strong>
-                <button class="btn icon-btn accent" aria-label={t("Add replica")} disabled={busy || Number(activeConfig.instances) >= 24} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) + 1 })}>+</button>
+                <button class="btn icon-btn accent" aria-label={t("Add replica")} disabled={busy || Number(activeConfig.instances) >= 24} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) + 1 })}><Plus size={14} /></button>
               </div>
             </div>
           </div>
@@ -480,6 +481,8 @@
           {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
           {#if metric.active_instances !== null}<div><dt>{t("Active instances")}</dt><dd>{metric.active_instances}</dd></div>{/if}
         </dl>
+      {:else if active.kind !== 'source' && active.kind !== 'monitor' && game.production.nodes.some((node) => node.id === active?.id)}
+        <p class="muted">{t("Component metrics require a linked Monitoring collector.")}</p>
       {/if}
       {#if active.kind === 'source'}
         <div class="bars">
@@ -513,7 +516,7 @@
             {@const rate = game.snapshot.traffic.find((traffic) => edgeKey(traffic) === edgeKey(item))?.rps}
             {#if peer}
               <button class="btn dependency" onclick={() => select(peer.id)}>
-                <span><span aria-hidden="true">{item.source === selected ? '→' : '←'}</span> {t(peer.name)}</span>
+                <span class="row">{#if item.source === selected}<ArrowRight size={13} />{:else}<ArrowLeft size={13} />{/if} {t(peer.name)}</span>
                 <small>{t(connectionLabels[connectionKind(catalog, topology.nodes.find((node) => node.id === item.source)?.kind, topology.nodes.find((node) => node.id === item.target)?.kind)])}{rate === undefined ? '' : ` · ${rps(rate)}`}</small>
               </button>
             {/if}
@@ -663,8 +666,8 @@
     </aside>
   </div>
   <footer class="live row spread">
-    <div><p class="eyebrow">{t("Live events")}</p><p>{last ? `${when(last.start)} · ${message(last.title)}` : t("No events recorded")}</p></div>
-    <span class="mono {metrics.availability < .95 ? 'warning' : 'accent'}">● {pct(metrics.availability, 1)} {t("availability")}</span>
+    <div><p class="eyebrow">{t("Live events")}</p><p>{last ? `${when(last.start, game.start_minute, catalog.minutes_per_tick)} · ${message(last.title)}` : t("No events recorded")}</p></div>
+    <span class="row mono {metrics.availability < .95 ? 'warning' : 'accent'}"><i class="dot" aria-hidden="true"></i> {pct(metrics.availability, 1)} {t("availability")}</span>
   </footer>
 </section>
 
@@ -732,7 +735,7 @@
   </Modal>
 {:else if dialog === 'inspector'}
   <Modal title={t("Component inspector")} close={() => dialog = undefined}>
-    <div class="stack">{@render inspect(true)}</div>
+    <div class="stack modal-inspector">{@render inspect(true)}</div>
   </Modal>
 {:else if dialog === 'configuration' && active}
   <Configuration component={active} definition={catalog.components[active.kind]} {busy} error={error || editError}
@@ -844,8 +847,9 @@
   .identity h2 { overflow-wrap: anywhere; }
   .identity p { margin-top: 3px; }
   .component-symbol { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; background: var(--tint); color: var(--primary); }
-  .switch { display: grid; grid-template-columns: 1fr 1fr; border-radius: 8px; background: var(--surface); overflow: hidden; }
-  .switch button { min-height: 36px; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
+  .switch { position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; border-radius: 8px; background: var(--surface); }
+  .switch button { border-radius: 8px; min-height: 36px; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
+  .modal-inspector .switch { position: static; }
   .switch button[aria-pressed="true"] { color: var(--text); background: var(--tint); font-weight: 600; }
   .instance { margin-top: 5px; justify-content: space-between; }
   .counter { gap: 7px; padding-inline: 1px; }
@@ -859,7 +863,7 @@
   .context { position: fixed; z-index: 10; width: 175px; padding: 8px; gap: 5px; }
   .mobile-sub, .mobile-heading { display: none; }
   @media (min-width: 851px) {
-    .inspector { max-height: max(550px, calc(100dvh - 232px)); overflow-y: auto; }
+    .inspector { max-height: max(550px, calc(100dvh - 232px)); overflow-y: auto; grid-auto-rows: max-content; }
   }
   @media (min-width: 1600px) {
     .workspace { grid-template-columns: 240px minmax(0, 1fr) 355px; }

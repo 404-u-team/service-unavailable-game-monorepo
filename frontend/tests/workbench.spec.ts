@@ -157,13 +157,13 @@ test('C and D · campaign and product release change workload and finances', asy
   await pause(page);
   const before = await state(page, id);
   expect(before.audience).toBeGreaterThan(9_000);
-  expect(before.economy.revenue).toBeGreaterThan(0);
+  expect(before.economy.revenue).toBe(0);
   expect(before.economy.operating).toBeGreaterThan(0);
   expect(before.economy.development).toBe(650);
   if (visualDir) await page.screenshot({ path: `${visualDir}/product-1440.png` });
   await groups.getByRole('button', { name: 'Feature details' }).click();
   await page.getByRole('button', { name: 'Release feature' }).click();
-  await expect(groups.getByText('Released', { exact: true })).toBeVisible();
+  await expect(groups.getByText('Released and enabled', { exact: true })).toBeVisible();
   const released = await state(page, id);
   expect(released.snapshot.demand.groups).toBeGreaterThan(0);
   expect(released.snapshot.metrics.rps).toBeGreaterThan(before.snapshot.metrics.rps);
@@ -302,7 +302,15 @@ test.describe('Mobile workbench', () => {
     await page.getByRole('button', { name: 'Show component list' }).tap();
     await page.getByRole('button', { name: 'Messenger API API server' }).tap();
     await page.getByRole('button', { name: 'Open component' }).tap();
-    await page.getByRole('dialog', { name: 'Component inspector' }).getByRole('button', { name: 'Edit configuration' }).tap();
+    const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+    const configuration = inspector.getByRole('button', { name: 'Configuration', exact: true });
+    const metrics = inspector.getByRole('button', { name: 'Metrics', exact: true });
+    await metrics.tap();
+    await expect(metrics).toHaveAttribute('aria-pressed', 'true');
+    await expect(inspector.getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+    await configuration.tap();
+    await expect(configuration).toHaveAttribute('aria-pressed', 'true');
+    await inspector.getByRole('button', { name: 'Edit configuration' }).tap();
     await page.getByLabel('Instances', { exact: true }).fill('2');
     await page.getByRole('button', { name: 'Save to draft' }).tap();
     await page.getByRole('dialog', { name: 'Component inspector' }).getByRole('button', { name: 'Close dialog' }).tap();
@@ -826,4 +834,101 @@ test('a new API server in a reopened save keeps its links and route through depl
   const restored = await state(page, id);
   expect(restored.production).toEqual(drafted.draft);
   expect(restored.diagram.routes[routeKey]).toEqual(route);
+});
+
+test('inspector keeps both tabs through live updates and preserves draft values', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 720 });
+  const id = await create(page, false, false);
+  const inspector = page.getByRole('complementary', { name: 'Component inspector' });
+  const config = inspector.getByRole('button', { name: 'Configuration', exact: true });
+  const metrics = inspector.getByRole('button', { name: 'Metrics', exact: true });
+  await inspector.getByRole('button', { name: 'Add replica' }).click();
+  await expect.poll(async () => (await state(page, id)).draft?.nodes.find(({ id }) => id === 'api')?.config.instances).toBe(2);
+  await metrics.click();
+  await expect(metrics).toHaveAttribute('aria-pressed', 'true');
+  await expect(inspector.getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+  await expect(inspector.getByText('Component metrics require a linked Monitoring collector.')).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Add replica' })).toHaveCount(0);
+  const tick = (await state(page, id)).tick;
+  await fast(page);
+  await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(tick + 2);
+  await pause(page);
+  await expect(metrics).toHaveAttribute('aria-pressed', 'true');
+  await config.click();
+  await expect(config).toHaveAttribute('aria-pressed', 'true');
+  await expect(inspector.getByText('2', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show component list' }).click();
+  await page.getByRole('button', { name: 'Primary database Database' }).click();
+  await expect(inspector.getByRole('heading', { name: 'Primary database' })).toBeVisible();
+  await expect(config).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('monetization controls, revenue history and server time render in both languages', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  await navigate(page, 'Product');
+  const ads = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Advertising', exact: true }) });
+  const premium = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Premium subscriptions', exact: true }) });
+  const open = (item: typeof ads) => item.getByRole('button', { name: 'Feature details' }).click();
+  for (const item of [ads, premium]) {
+    await open(item);
+    await page.getByRole('button', { name: 'Start development' }).click();
+  }
+  await fast(page);
+  await expect(premium.getByText('Ready to release')).toBeVisible({ timeout: 20_000 });
+  await pause(page);
+  for (const item of [ads, premium]) {
+    await open(item);
+    await page.getByRole('button', { name: 'Release feature' }).click();
+    await expect(item.getByText('Released and enabled')).toBeVisible();
+  }
+  await page.getByLabel('Ad intensity').selectOption('high');
+  await page.getByLabel('Price per game month (USD)').fill('5.50');
+  await page.getByLabel('Offer faster synchronization').uncheck();
+  await page.getByLabel('Acquire users in North America').check();
+  await page.getByRole('button', { name: 'Save product settings' }).click();
+  await expect.poll(async () => (await state(page, id)).product).toMatchObject({
+    ad_intensity: 'high', premium_price: 5.5, premium_fast_sync: false, north_america: true,
+  });
+  if (visualDir) await page.getByRole('heading', { name: 'Product settings' }).scrollIntoViewIfNeeded();
+  if (visualDir) await page.screenshot({ path: `${visualDir}/monetization-1440.png` });
+
+  await fast(page);
+  await expect.poll(async () => (await state(page, id)).economy.revenue_sources.advertising).toBeGreaterThan(0);
+  await pause(page);
+  await open(ads);
+  await page.getByRole('button', { name: 'Disable feature', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm disable' }).click();
+  await expect(ads.getByText('Released but disabled')).toBeVisible();
+  expect((await state(page, id)).snapshot.demand.ad).toBeUndefined();
+  await open(ads);
+  await page.getByRole('button', { name: 'Enable feature' }).click();
+  await expect(ads.getByText('Released and enabled')).toBeVisible();
+
+  await navigate(page, 'Finance');
+  await expect(page.getByRole('heading', { name: 'Revenue breakdown' })).toBeVisible();
+  await page.getByLabel('Revenue history').selectOption('advertising');
+  await expect(page.getByRole('img', { name: /Revenue per simulation step/ })).toBeVisible();
+  const final = await state(page, id);
+  expect(final.economy.revenue_sources.advertising).toBeCloseTo(final.economy.revenue);
+  expect(final.economy.daily_total_expenses).toBeCloseTo(final.economy.daily_operating + 1200);
+  await page.getByRole('button', { name: 'Dismiss notification' }).click();
+  if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-finance-1440.png`, fullPage: true });
+  await navigate(page, 'Telemetry');
+  const clock = final.snapshot.demand_overview!;
+  const time = [Math.floor(clock.utc_minute / 60), clock.utc_minute % 60].map((value) => String(value).padStart(2, '0')).join(':');
+  await expect(page.getByTestId('game-utc-time')).toHaveText(`Day ${clock.day} / ${time} UTC`);
+  expect(final.day).toBe(clock.day);
+  await expect(page.getByRole('heading', { name: 'North America' })).toBeVisible();
+
+  await page.goto('/?view=settings');
+  await page.getByLabel('Interface language').selectOption('ru');
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const [section, heading] of [['finance', 'Структура выручки'], ['product', 'Настройки продукта'], ['monitor', 'Трафик по регионам']]) {
+    await page.goto(`/game/${id}?view=${section}`);
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-${section}-ru-390.png`, fullPage: true });
+  }
 });

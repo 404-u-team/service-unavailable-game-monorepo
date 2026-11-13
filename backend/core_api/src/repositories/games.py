@@ -21,6 +21,7 @@ class GameRepository:
         return await self.pool.fetch(
             """
             SELECT id, state->>'name' AS name, state->>'scenario' AS scenario,
+                   COALESCE((state->>'start_minute')::integer, 0) AS start_minute,
                    (state->>'tick')::integer AS tick, (state->>'audience')::float AS audience,
                    (state->>'balance')::float AS balance, saved_at
             FROM games WHERE owner = $1 ORDER BY saved_at DESC

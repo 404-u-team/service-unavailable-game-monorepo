@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from src.simulation.catalog import (
     COMPONENTS,
     CONNECTIONS,
+    DAYS_PER_MONTH,
     LEGACY_DATABASE_LIMITS,
     defaults,
 )
@@ -193,7 +194,7 @@ def database_capacity(cfg: dict) -> tuple[float, float]:
 
 def daily_cost(node: Node) -> float:
     cfg = config(node)
-    base = COMPONENTS[node.kind]["daily"]
+    base = COMPONENTS[node.kind]["monthly"] / DAYS_PER_MONTH
     if not cfg:
         return base
     extras = sum(

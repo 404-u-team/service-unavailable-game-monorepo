@@ -42,6 +42,8 @@ const matches: [RegExp, string][] = [
   [/^(.+) campaign started$/, '{0} campaign started'],
   [/^(.+) campaign completed$/, '{0} campaign completed'],
   [/^(.+) released$/, '{0} released'],
+  [/^(.+) disabled$/, '{0} disabled'],
+  [/^(.+) enabled$/, '{0} enabled'],
   [/^Connect the required infrastructure: (.+)\.$/, 'Connect the required infrastructure: {0}.'],
   [/^This action costs (.+)\. Available balance is (.+)\.$/, 'This action costs {0}. Available balance is {1}.'],
   [/^(.+) has no monitoring links\.$/, '{0} has no monitoring links.'],

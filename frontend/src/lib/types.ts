@@ -17,8 +17,12 @@ export type ComponentMetrics = {
   queue_wait_minutes: number | null; jobs_dropped: number | null; jobs_expired: number | null;
 };
 export type MonitorCoverage = { capacity: number; history: boolean; covered: string[]; dropped: string[]; failed: boolean };
+export type DemandOverview = {
+  day: number; utc_minute: number; expected: number[]; campaign_lift: number; event_lift: number;
+  regions: { id: string; name: string; utc_offset: number; local_minute: number; audience: number; daily_active_users: number; requests: number }[];
+};
 export type Snapshot = {
-  metrics: Metrics; components: Record<string, ComponentMetrics>;
+  demand_overview: DemandOverview | null; metrics: Metrics; components: Record<string, ComponentMetrics>;
   traffic: (Connection & { rps: number; operations: Record<string, number> })[]; demand: Record<string, number>; monitored: boolean; monitors: Record<string, MonitorCoverage>;
 };
 export type History = { tick: number; audience: number; balance: number; metrics: Metrics; peak_utilization?: Record<string, number> };
@@ -27,10 +31,29 @@ export type Incident = {
   cause: string | null; target: string | null; resolution: string | null; failed_requests: number; acknowledged: boolean;
 };
 export type Settings = { reduced_motion: boolean; show_tutorial: boolean; show_objectives?: boolean };
-export type Save = { id: string; name: string; scenario: string; tick: number; audience: number; balance: number; saved_at: string };
-export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number };
+export type Save = { id: string; name: string; scenario: string; tick: number; day: number; audience: number; balance: number; saved_at: string };
+export type RevenueSources = { advertising: number; subscriptions: number; legacy: number };
+export type OperatingCosts = { infrastructure: number; traffic: number; payments: number; legacy: number };
+export type FinancePoint = { tick: number; revenue: RevenueSources; expenses: OperatingCosts; cash_received: number; daily_active_users: number; ad_impressions: number };
+export type AdIntensity = 'low' | 'moderate' | 'high';
+export type ProductSettings = {
+  ad_intensity: AdIntensity; premium_price: number; premium_fast_sync: boolean;
+  sync_frequency: 'relaxed' | 'standard' | 'frequent';
+  media_quality: 'compressed' | 'standard' | 'high';
+  north_america: boolean;
+};
+export type AdEstimate = { impressions: number; revenue: number; satisfaction_impact: number; churn_impact: number };
+export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number;
+  daily_total_expenses: number; daily_net_profit: number;
+  recent_purchases: { development: number; marketing: number; deployment: number };
+  revenue_sources: RevenueSources; daily_sources: RevenueSources; operating_costs: OperatingCosts; daily_costs: OperatingCosts;
+  starting_capital: number; cash_received: number; deferred_subscription_revenue: number; daily_active_users: number;
+  operating_margin: number | null; arpdau: number | null; cost_per_dau: number | null; subscribers: number;
+  conversion: number; premium_satisfaction: number; daily_ad_impressions: number; recorded_ticks: number; history: FinancePoint[];
+};
 export type Feature = {
   id: string; state: 'locked' | 'available' | 'developing' | 'ready' | 'released';
+  enabled: boolean; can_enable: boolean; can_disable: boolean; dependents: string[];
   remaining: number; requirements: string[]; demand_change: number; can_release: boolean;
   infrastructure: { id: string; description: string; met: boolean }[];
 };
@@ -41,13 +64,14 @@ export type Deployment = { id: string; tick: number; summary: string; cost: numb
   pressure_before?: ResourcePressure | null; pressure_after?: ResourcePressure | null;
 } | null };
 export type Game = Save & {
-  speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
+  start_minute: number; speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
   diagram: Diagram;
   snapshot: Snapshot; history: History[]; business_history: Pick<History, 'tick' | 'audience' | 'balance'>[]; economy: Economy; component_costs: Record<string, number>; draft_costs: Record<string, number>; features: Feature[]; campaigns: Campaign[];
+  product: ProductSettings; advertising_estimates: Partial<Record<AdIntensity, AdEstimate>>;
   incidents: Incident[]; deployments: Deployment[]; settings: Settings; tutorial: number; peak: Metrics | null;
 };
 export type Field = { label: string; default: Setting; min: number | null; max: number | null; step: number | null; options: string[] | null };
-export type Definition = { name: string; category: string; daily: number; fields: Record<string, Field>; description: string };
+export type Definition = { name: string; category: string; monthly: number; daily: number; fields: Record<string, Field>; description: string };
 export type Scenario = { name: string; available: boolean; description: string };
 export type FeatureDefinition = { name: string; cost: number; duration: number; appeal: number; operation: string | null; prereq: string[]; requires: Kind[]; infrastructure: string[] };
 export type CampaignDefinition = { name: string; cost: number; duration: number; audience: number; spike: number; description: string };
@@ -58,7 +82,7 @@ export type Catalog = {
   difficulties: Record<Difficulty, { name: string; balance: number; audience: number; incident_chance: number }>;
   operations: Record<string, string>; connections: Record<Kind, Kind[]>;
   connection_types: Record<Kind, Partial<Record<Kind, keyof typeof import('./workbench/connections').connectionLabels>>>;
-  minutes_per_tick: number;
+  minutes_per_tick: number; days_per_month: number; premium_price_min: number; premium_price_max: number;
 };
 export type Interval = { low: number; high: number };
 export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high' };

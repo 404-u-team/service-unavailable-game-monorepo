@@ -1,0 +1,114 @@
+from math import exp
+
+from src.simulation.catalog import ADVERTISING, BUSINESS, DAYS_PER_MONTH, TICKS_PER_DAY
+from src.simulation.demand import SECONDS_PER_DAY, product_settings
+from src.simulation.engine import Evaluation
+from src.simulation.models import (
+    FinanceSample,
+    Game,
+    OperatingCosts,
+    RevenueSources,
+    SubscriptionTerm,
+)
+from src.simulation.topology import topology_cost
+
+TERM_TICKS = DAYS_PER_MONTH * TICKS_PER_DAY
+STEP_SECONDS = SECONDS_PER_DAY / TICKS_PER_DAY
+
+
+def update_subscriptions(game: Game, quality: float, active_users: float) -> float:
+    memory = BUSINESS["premium_reliability_memory_days"] * TICKS_PER_DAY
+    game.premium_quality += (quality - game.premium_quality) / memory
+    if game.tick % TICKS_PER_DAY:
+        return 0
+    expiring = [term for term in game.subscriptions if term.expires <= game.tick]
+    game.subscriptions = [
+        term for term in game.subscriptions if term.expires > game.tick
+    ]
+    if "premium" not in game.enabled_features:
+        return 0
+
+    product = product_settings(game)
+    ad_free_value = (
+        ADVERTISING[product.ad_intensity]["friction"]
+        if "advertising" in game.enabled_features
+        else 0
+    )
+    price_factor = exp(
+        -BUSINESS["premium_price_sensitivity"]
+        * (product.premium_price - BUSINESS["premium_default_price"])
+    )
+    reliability = max(
+        0,
+        1
+        - BUSINESS["premium_reliability_sensitivity"]
+        * max(0, BUSINESS["premium_quality_floor"] - game.premium_quality),
+    )
+    benefits = (
+        1 if product.premium_fast_sync else BUSINESS["premium_standard_adoption_factor"]
+    )
+    renewals = (
+        sum(term.subscribers for term in expiring)
+        * BUSINESS["premium_renewal"]
+        * reliability
+        * benefits
+        * min(1, price_factor ** BUSINESS["premium_renewal_price_sensitivity"])
+    )
+    new_subscribers = (
+        max(0, active_users - game.subscribers - renewals)
+        * min(
+            BUSINESS["premium_max_daily_adoption"],
+            BUSINESS["premium_daily_adoption"]
+            * price_factor
+            * benefits
+            * (1 + BUSINESS["premium_ad_free_adoption"] * ad_free_value),
+        )
+        * reliability
+        * game.satisfaction
+    )
+    subscribers = renewals + new_subscribers
+    if subscribers > 0:
+        game.subscriptions.append(
+            SubscriptionTerm(
+                expires=game.tick + TERM_TICKS,
+                subscribers=subscribers,
+                price=product.premium_price,
+                fast_sync=product.premium_fast_sync,
+            )
+        )
+    return subscribers * product.premium_price
+
+
+def book_tick(
+    game: Game, result: Evaluation, subscription_cash: float
+) -> FinanceSample:
+    impressions = result.ad_impressions_per_second * STEP_SECONDS
+    revenue = RevenueSources(
+        advertising=impressions * result.ad_value_per_impression,
+        subscriptions=sum(term.subscribers * term.price for term in game.subscriptions)
+        / TERM_TICKS,
+    )
+    expenses = OperatingCosts(
+        infrastructure=topology_cost(game.production) / TICKS_PER_DAY,
+        traffic=result.snapshot.metrics.throughput
+        * BUSINESS["traffic_cost_per_rps_day"]
+        / TICKS_PER_DAY,
+        payments=subscription_cash * BUSINESS["payments_fee"],
+    )
+    received = revenue.advertising + subscription_cash
+    game.advertising_revenue += revenue.advertising
+    game.subscription_revenue += revenue.subscriptions
+    game.subscription_cash += subscription_cash
+    game.infrastructure_spend += expenses.infrastructure
+    game.traffic_spend += expenses.traffic
+    game.payment_spend += expenses.payments
+    game.revenue += revenue.total
+    game.operating += expenses.total
+    game.balance += received - expenses.total
+    return FinanceSample(
+        revenue=revenue,
+        expenses=expenses,
+        cash_received=received,
+        daily_active_users=result.daily_active_users,
+        ad_impressions=impressions,
+    )

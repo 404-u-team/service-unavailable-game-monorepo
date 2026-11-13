@@ -8,7 +8,7 @@
   import Brand from '#lib/Brand.svelte';
   import Guide from '#lib/Guide.svelte';
   import { createGame, loadCatalog, saves as listSaves } from '#lib/api.ts';
-  import { day, money, num } from '#lib/format.ts';
+  import { money, num } from '#lib/format.ts';
   import type { Catalog, Difficulty, Save, Settings } from '#lib/types.ts';
 
   let saves = $state<Save[]>([]);
@@ -103,7 +103,7 @@
         </div>
         {#if starting}
           <section class="panel pad starting"><p class="eyebrow">{t("Starting conditions")}</p>
-            <div class="row wrap"><span>{money(starting.balance)} {t("budget")}</span><span>{num(starting.audience)} {t("active users")}</span><span>{t("1 API server")}</span><span>{t("1 database")}</span></div>
+            <div class="row wrap"><span>{money(starting.balance)} {t("budget")}</span><span>{t("{0} registered users", [num(starting.audience)])}</span><span>{t("1 API server")}</span><span>{t("1 database")}</span></div>
           </section>
         {/if}
         <div class="row wrap seed">
@@ -120,7 +120,7 @@
         {:else}
           {#each saves as save (save.id)}
             <a class="save-row" href={`/game/${save.id}?view=build`}>
-              <div><strong>{save.name}</strong><small>{t(catalog?.scenarios[save.scenario]?.name ?? save.scenario)} {t("· Day")} {day(save.tick)}</small></div>
+              <div><strong>{save.name}</strong><small>{t(catalog?.scenarios[save.scenario]?.name ?? save.scenario)} {t("· Day")} {save.day}</small></div>
               <div><span class="mono">{num(save.audience)} {t("users")}</span><small>{money(save.balance)} {t("balance")}</small></div>
               <ChevronRight size={17} />
             </a>
@@ -150,8 +150,8 @@
           </div>
           {#if latest}
             <dl class="summary">
-              <div><dt class="eyebrow">{t("Day")}</dt><dd>{day(latest.tick)}</dd></div>
-              <div><dt class="eyebrow">{t("Active users")}</dt><dd>{num(latest.audience)}</dd></div>
+              <div><dt class="eyebrow">{t("Day")}</dt><dd>{latest.day}</dd></div>
+              <div><dt class="eyebrow">{t("Registered users")}</dt><dd>{num(latest.audience)}</dd></div>
               <div><dt class="eyebrow">{t("Balance")}</dt><dd>{money(latest.balance)}</dd></div>
             </dl>
           {:else}<p class="muted">{loading ? t("Checking for saved games…") : t("Build and operate a messenger service. Track request load, manage expenses and deploy infrastructure changes.")}</p>{/if}

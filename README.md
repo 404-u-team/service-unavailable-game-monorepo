@@ -114,7 +114,7 @@ docker run --rm --network intranet --entrypoint bun service-unavailable-stand-se
 
 ## Simulation and API
 
-The [Core API reference](backend/core_api/README.md) describes persistence, clock behavior, component routing, forecasts, and the REST endpoints. Interactive API documentation is served at [http://localhost:8000/docs](http://localhost:8000/docs).
+The [Core API reference](backend/core_api/README.md) describes persistence, clock behavior, component routing, forecasts, and the REST endpoints. [Messenger economy and balance](backend/core_api/BALANCE.md) explains monetization, regional demand, and the 35-day simulation results. Interactive API documentation is served at [http://localhost:8000/docs](http://localhost:8000/docs).
 
 Messenger is playable at three difficulty settings. The other product scenarios are shown as unavailable. Choose English or Russian under Settings. The preference is saved in the browser.
 

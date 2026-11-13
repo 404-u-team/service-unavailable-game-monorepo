@@ -8,7 +8,7 @@
   import Dashboard from '#lib/workbench/Dashboard.svelte';
   import { ApiError, gameAction, loadCatalog, loadGame } from '#lib/api.ts';
   import { desktop, mobile, sections, tutorial, type Section } from '#lib/labels.ts';
-  import { when } from '#lib/format.ts';
+  import { minuteClock, when } from '#lib/format.ts';
   import type { Catalog, Diagram, Game, Speed } from '#lib/types.ts';
 
   let game = $state.raw<Game>();
@@ -209,7 +209,7 @@
             </div>
           {/if}
         </div>
-        <span class="time mono">{when(game.tick)}</span>
+        <span class="time mono">{game.snapshot.demand_overview ? t('Day {0} / {1}', [game.snapshot.demand_overview.day, minuteClock(game.snapshot.demand_overview.utc_minute)]) : when(game.tick)}</span>
         <button class="btn icon-btn quick-save" title={saved ? t("Game saved") : t("Save game")} aria-label={t("Save game")} disabled={busy} onclick={() => act('/save')}><SaveIcon size={15} /></button>
       </div>
     {/if}
