@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -70,7 +70,7 @@ class Diagram(Model):
     groups: list[DiagramGroup] = Field(default_factory=list, max_length=80)
 
     @model_validator(mode="after")
-    def unique_groups(self) -> "Diagram":
+    def unique_groups(self) -> Self:
         groups = {group.id: group for group in self.groups}
         parent = {}
         if len(groups) != len(self.groups):
@@ -108,6 +108,9 @@ class ComponentMetrics(Model):
     utilization: dict[str, float]
     cache_hit: float | None = None
     backlog: float | None = None
+    queue_wait_minutes: float | None = None
+    jobs_dropped: float | None = None
+    jobs_expired: float | None = None
     active_instances: float | None = None
     storage_used: float | None = None
     replication_lag: float | None = None
@@ -213,6 +216,7 @@ class Game(Model):
     diagram: Diagram = Field(default_factory=Diagram)
     revision: int = 0
     released: list[str] = Field(default_factory=lambda: ["text"])
+    infrastructure_releases: list[str] = Field(default_factory=list)
     development: dict[str, int] = Field(default_factory=dict)
     campaigns: dict[str, int] = Field(default_factory=dict)
     event_sequence: int = 0

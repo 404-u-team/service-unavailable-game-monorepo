@@ -22,7 +22,7 @@ bun --bun run dev
 
 Open [http://localhost:5173](http://localhost:5173). The frontend forwards API requests to `http://127.0.0.1:8000` by default. Create a game, choose a speed in the header, and select the Messenger API in Topology to begin onboarding. Guest saves belong to the current browser and persist in PostgreSQL.
 
-If New game reports an incompatible catalog, check `docker compose ps` and open [the game catalog](http://127.0.0.1:8000/api/games/catalog). The current API includes a `difficulties` field. Stop any older local API listening on the same port and run `docker compose up --build -d --wait` again. If you changed `API_PORT`, set `CORE_API_URL` to the matching origin before starting the frontend.
+If the game reports an incompatible catalog, check `docker compose ps` and open [the game catalog](http://127.0.0.1:8000/api/games/catalog). The current API includes `difficulties` and `diagram_layout: true`. Rebuild the API from the same checkout as the frontend with `docker compose up --build -d --wait`. If you changed `API_PORT`, set `CORE_API_URL` to the matching origin before starting the frontend.
 
 To run the production frontend in Compose with the API and database, use the optional frontend file from `backend/core_api`.
 
@@ -69,6 +69,49 @@ Set `TEST_BASE_URL` to use a different frontend URL. Set `CHROMIUM_PATH` to use 
 
 For production, run `bun --bun run build` then `bun --bun run start` in `frontend`. Set `CORE_API_URL` to the API origin if the services are on separate hosts. Set the SvelteKit `ORIGIN` to the public HTTPS origin when deploying behind a proxy. Run FastAPI with the PostgreSQL connection string, a stable private `JWT_SECRET`, and `GAME_COOKIE_SECURE=true` for HTTPS.
 
+## Self-hosted stand
+
+From the repository root, prepare `.env`. Set `APP_ORIGIN` to the public HTTPS origin and use `openssl rand -hex 32` separately for `POSTGRES_PASSWORD` and `JWT_SECRET`. Keep the JWT secret across updates and restores so existing signed guest cookies can still open their saves.
+
+```sh
+test -f .env || (umask 077 && cp .env.example .env)
+# Fill in .env before continuing.
+docker network inspect intranet --format '{{.Name}}'
+docker compose -f compose.stand.yaml config --quiet
+docker compose -f compose.stand.yaml up -d --build --wait
+```
+
+In Nginx Proxy Manager Plus, add a Proxy Host for the domain in `APP_ORIGIN`. Set the scheme to **http**, the forward hostname to **service-unavailable**, and the forward port to **3000**. Choose a certificate on the SSL tab and enable **Force SSL**. The game uses HTTP requests and polling. Leave WebSockets Support off. Proxy the whole host to Bun, which serves the production frontend and forwards `/api` internally to FastAPI. The frontend joins the existing `intranet` network. FastAPI and PostgreSQL use private networks. Compose publishes zero host ports. [Nginx Proxy Manager shared-network configuration](https://nginxproxymanager.com/advanced-config/)
+
+```sh
+docker compose -f compose.stand.yaml ps
+docker compose -f compose.stand.yaml logs --tail=100 -f service-unavailable core-api db
+```
+
+For updates, back up PostgreSQL, update the checkout and run the same `up -d --build --wait` command. FastAPI runs the additive database migration in a transaction under a PostgreSQL advisory lock before accepting requests. New stand databases start without development seed accounts.
+
+PostgreSQL data lives in the `service-unavailable-stand_postgres_data` volume at `/var/lib/postgresql/data` in the database container. Ordinary Compose shutdown preserves it. Back up the database and protect a copy of `.env` separately.
+
+```sh
+umask 077
+docker compose -f compose.stand.yaml exec -T db pg_dump -U postgres -Fc core_api > "service-unavailable-$(date +%F).dump"
+```
+
+To restore into an empty stand database, stop the application services, restore the dump and start the stack again.
+
+```sh
+docker compose -f compose.stand.yaml stop service-unavailable core-api
+docker compose -f compose.stand.yaml exec -T db pg_restore --exit-on-error -U postgres -d core_api < service-unavailable-YYYY-MM-DD.dump
+docker compose -f compose.stand.yaml up -d --wait
+```
+
+To check connectivity from the proxy's network, use a disposable container after the stand is healthy.
+
+```sh
+docker run --rm --network intranet --entrypoint bun service-unavailable-stand-service-unavailable \
+  -e 'const r = await fetch("http://service-unavailable:3000/api/health"); console.log(await r.text()); if (!r.ok) process.exit(1)'
+```
+
 ## Simulation and API
 
 The [Core API reference](backend/core_api/README.md) describes persistence, clock behavior, component routing, forecasts, and the REST endpoints. Interactive API documentation is served at [http://localhost:8000/docs](http://localhost:8000/docs).
@@ -77,7 +120,7 @@ Messenger is playable at three difficulty settings. The other product scenarios 
 
 ## Architecture editor
 
-Drag cards to rearrange the saved diagram. Use Ctrl/Cmd or Shift while clicking, Shift-drag to draw a selection box, or turn on **Select multiple** for touch input. Create a named group from the selection and use its header control to collapse or expand it.
+Drag cards to rearrange the saved diagram. Production and Draft share the layout. Use Ctrl/Cmd or Shift while clicking, Shift-drag to draw a selection box, or turn on **Select multiple** for touch input. Create a named group from the selection and use its header control to collapse or expand it.
 
 Select a connection and choose **Add waypoint**. Drag the point to route around components, or use the arrow keys to nudge the focused point. Remove it with Delete or its context menu. **Reset route** restores obstacle-aware routing. These diagram changes save independently of Draft. Add, reconnect, and remove actual connections through Draft and deploy them to affect requests.
 

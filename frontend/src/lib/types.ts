@@ -14,6 +14,7 @@ export type ComponentMetrics = {
   status: 'healthy' | 'warning' | 'overloaded' | 'failed' | 'idle';
   rps: number; throughput: number; latency: number; utilization: Record<string, number>;
   cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null; replication_lag: number | null;
+  queue_wait_minutes: number | null; jobs_dropped: number | null; jobs_expired: number | null;
 };
 export type MonitorCoverage = { capacity: number; history: boolean; covered: string[]; dropped: string[]; failed: boolean };
 export type Snapshot = {
@@ -28,7 +29,11 @@ export type Incident = {
 export type Settings = { reduced_motion: boolean; show_tutorial: boolean; show_objectives?: boolean };
 export type Save = { id: string; name: string; scenario: string; tick: number; audience: number; balance: number; saved_at: string };
 export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number };
-export type Feature = { id: string; state: 'locked' | 'available' | 'developing' | 'ready' | 'released'; remaining: number; requirements: string[]; demand_change: number };
+export type Feature = {
+  id: string; state: 'locked' | 'available' | 'developing' | 'ready' | 'released';
+  remaining: number; requirements: string[]; demand_change: number; can_release: boolean;
+  infrastructure: { id: string; description: string; met: boolean }[];
+};
 export type Campaign = { id: string; remaining: number; progress: number };
 export type ResourcePressure = { component: string; resource: string; utilization: number };
 export type Deployment = { id: string; tick: number; summary: string; cost: number; comparison: {
@@ -44,9 +49,10 @@ export type Game = Save & {
 export type Field = { label: string; default: Setting; min: number | null; max: number | null; step: number | null; options: string[] | null };
 export type Definition = { name: string; category: string; daily: number; fields: Record<string, Field>; description: string };
 export type Scenario = { name: string; available: boolean; description: string };
-export type FeatureDefinition = { name: string; cost: number; duration: number; appeal: number; operation: string | null; prereq: string[]; requires: Kind[] };
+export type FeatureDefinition = { name: string; cost: number; duration: number; appeal: number; operation: string | null; prereq: string[]; requires: Kind[]; infrastructure: string[] };
 export type CampaignDefinition = { name: string; cost: number; duration: number; audience: number; spike: number; description: string };
 export type Catalog = {
+  diagram_layout: true;
   components: Record<Kind, Definition>; scenarios: Record<string, Scenario>;
   features: Record<string, FeatureDefinition>; campaigns: Record<string, CampaignDefinition>;
   difficulties: Record<Difficulty, { name: string; balance: number; audience: number; incident_chance: number }>;

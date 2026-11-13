@@ -9,9 +9,13 @@
   import { ApiError, gameAction, loadCatalog, loadGame } from '#lib/api.ts';
   import { desktop, mobile, sections, tutorial, type Section } from '#lib/labels.ts';
   import { when } from '#lib/format.ts';
-  import type { Catalog, Game, Speed } from '#lib/types.ts';
+  import type { Catalog, Diagram, Game, Speed } from '#lib/types.ts';
 
   let game = $state.raw<Game>();
+  type DiagramWrite = { gameId: string; diagram: Diagram; requestId: string };
+  let pendingDiagram = $state.raw<DiagramWrite>();
+  let writingDiagram = false;
+  let layoutFailed = $state(false);
   let dismissed = $state(false);
   let viewedEvent = '';
   let recentEvent = $state<Game['incidents'][number]>();
@@ -91,15 +95,46 @@
     const version = ++generation;
     loading = true;
     game = undefined;
+    pendingDiagram = undefined;
+    layoutFailed = false;
     error = '';
     connection = '';
     try {
-      const [state, definitions] = await Promise.all([loadGame(gameId), catalog ? Promise.resolve(catalog) : loadCatalog()]);
+      const definitions = await loadCatalog();
+      const state = await loadGame(gameId);
       if (version === generation) { game = state; catalog = definitions; }
     } catch (reason) {
       if (version === generation) connection = apiMessage(reason);
     } finally {
       if (version === generation) loading = false;
+    }
+  }
+
+  function saveDiagram(diagram: Diagram) {
+    pendingDiagram = { gameId: currentId, diagram, requestId: crypto.randomUUID() };
+    void flushDiagram();
+  }
+
+  async function flushDiagram() {
+    if (writingDiagram || !pendingDiagram) return;
+    writingDiagram = true;
+    layoutFailed = false;
+    try {
+      while (pendingDiagram) {
+        const edit: DiagramWrite = pendingDiagram;
+        try {
+          const next = await gameAction(edit.gameId, '/diagram', { diagram: edit.diagram }, 'PUT', edit.requestId);
+          accept(next);
+          if (pendingDiagram === edit) pendingDiagram = undefined;
+        } catch {
+          if (pendingDiagram === edit) {
+            layoutFailed = true;
+            break;
+          }
+        }
+      }
+    } finally {
+      writingDiagram = false;
     }
   }
 
@@ -201,7 +236,9 @@
       {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
-          <Architecture {game} {catalog} {act} {busy} {error} {note} focusId={page.url.searchParams.get('component') ?? undefined} />
+          <Architecture {game} {catalog} {act} {busy} {error} {note} {saveDiagram} {layoutFailed}
+            retryDiagram={flushDiagram} savedDiagram={pendingDiagram?.diagram ?? game.diagram}
+            focusId={page.url.searchParams.get('component') ?? undefined} />
         {:else}
           <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} />
         {/if}

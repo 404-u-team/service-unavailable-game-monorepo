@@ -20,6 +20,7 @@ from src.simulation.models import (
     Topology,
     Traffic,
 )
+from src.simulation.requirements import MEDIA_FREE_GB
 from src.simulation.topology import config, database_capacity, inspect_graph
 
 
@@ -98,6 +99,11 @@ def evaluate(
     workloads = demand(game, audience, boost)
     requested = sum(workloads.values())
     settings = {node.id: config(node) for node in topology.nodes}
+    enforced = {
+        FEATURES[key]["operation"]: FEATURES[key]["infrastructure"]
+        for key in game.infrastructure_releases
+        if key in game.released
+    }
     events = list(active_incidents(game))
     factors = defaultdict(lambda: 1.0)
     failures = defaultdict(int)
@@ -177,7 +183,12 @@ def evaluate(
     for op, rate in workloads.items():
         add(incoming["traffic"], (op, ""), rate, 18)
 
-    for node_id in graph.order:
+    # Cache misses can return to the originating API's data connections, so
+    # evaluate all caches before their possible read destinations.
+    data_kinds = {"database", "replica"}
+    for node_id in sorted(
+        graph.order, key=lambda item: graph.nodes[item].kind in data_kinds
+    ):
         node = graph.nodes[node_id]
         kind = node.kind
         if kind in {"queue", "worker", "monitor"}:
@@ -191,10 +202,27 @@ def evaluate(
         ]
         cohorts = incoming[node_id]
         rate = sum(batch.rate for batch in cohorts.values())
+        by_kind = defaultdict(list)
+        for target in targets:
+            by_kind[graph.nodes[target].kind].append(target)
 
-        def load(field: str, cohorts: dict[tuple[str, str], Batch] = cohorts) -> float:
+        def read_targets(api: str) -> list[str]:
+            return [
+                target
+                for target in graph.targets[api]
+                if graph.relationships[api, target] in {"queries", "reads"}
+            ]
+
+        def load(
+            field: str,
+            cohorts: dict[tuple[str, str], Batch] = cohorts,
+            indexed: bool = cfg.get("search_index") == "Enabled",
+        ) -> float:
             return sum(
-                OPERATIONS[key[0]][field] * batch.rate for key, batch in cohorts.items()
+                (0.35 if field == "read" and key[0] == "search" and indexed else 1)
+                * OPERATIONS[key[0]][field]
+                * batch.rate
+                for key, batch in cohorts.items()
             )
 
         instances = max(0, cfg.get("instances", 1) - failures[node_id])
@@ -234,7 +262,10 @@ def evaluate(
                     graph.relationships.get((source, node_id)) == "replication"
                     for source in graph.reachable
                 )
-                usage["Writes"] = writes * (1 + 0.08 * followers) / write_capacity
+                indexing = 0.20 if cfg["search_index"] == "Enabled" else 0
+                usage["Writes"] = (
+                    writes * (1 + 0.08 * followers + indexing) / write_capacity
+                )
                 usage["Disk I/O"] = 0.46 * usage["Reads"] + 0.77 * usage["Writes"]
                 details["storage_used"] = game.storage.get(node_id, 0)
                 usage["Storage"] = details["storage_used"] / cfg["storage"]
@@ -319,11 +350,26 @@ def evaluate(
                     )
             elif kind == "api":
                 key = (op, node_id)
-                by_kind = defaultdict(list)
-                for target in targets:
-                    by_kind[graph.nodes[target].kind].append(target)
                 if operation["write"]:
-                    forward(node_id, by_kind["database"], key, accepted, total_latency)
+                    databases = by_kind["database"]
+                    if "media_storage" in enforced.get(op, ()):
+                        with_space = [
+                            target
+                            for target in databases
+                            if settings[target]["storage"] - game.storage.get(target, 0)
+                            >= MEDIA_FREE_GB
+                        ]
+                        # Keep using remaining space after release. The database's
+                        # storage limit rejects writes when it fills.
+                        databases = with_space or databases
+                    forward(node_id, databases, key, accepted, total_latency)
+                elif "search_index" in enforced.get(op, ()):
+                    indexed = [
+                        target
+                        for target in by_kind["database"]
+                        if settings[target]["search_index"] == "Enabled"
+                    ]
+                    forward(node_id, indexed, key, accepted, total_latency)
                 elif operation["read"]:
                     forward(
                         node_id,
@@ -346,12 +392,15 @@ def evaluate(
                     )
                 else:
                     hit = 0
-                # A cache without an origin cannot populate its working set.
-                if not targets:
+                fallback = read_targets(origin)
+                if not targets and not fallback:
                     hit = 0
                 cache_hits += accepted * hit
                 add(completed, key, accepted * hit, total_latency)
-                forward(node_id, targets, key, accepted * (1 - hit), total_latency)
+                if targets:
+                    forward(node_id, targets, key, accepted * (1 - hit), total_latency)
+                else:
+                    forward(origin, fallback, key, accepted * (1 - hit), total_latency)
             elif kind == "balancer":
                 routed = [
                     target
@@ -390,6 +439,7 @@ def evaluate(
     queued_operations: dict[str, dict[str, float]] = defaultdict(
         lambda: defaultdict(float)
     )
+    missing_queues = set()
     for key, batch in completed.items():
         op, origin = key
         targets = [
@@ -397,6 +447,18 @@ def evaluate(
             for target in graph.targets[origin]
             if graph.nodes[target].kind == "queue"
         ]
+        if "background_jobs" in enforced.get(op, ()):
+            if not targets:
+                missing_queues.add(key)
+            # Prefer queues with workers when one of the links has no consumer.
+            targets = [
+                queue
+                for queue in targets
+                if any(
+                    graph.relationships[queue, worker] == "jobs"
+                    for worker in graph.targets[queue]
+                )
+            ] or targets
         if OPERATIONS[op]["jobs"] and targets:
             async_routes[key] = targets
             rate = batch.rate * OPERATIONS[op]["jobs"] / len(targets)
@@ -411,7 +473,11 @@ def evaluate(
     worker_capacity = {
         node.id: max(0, settings[node.id]["instances"] - failures[node.id])
         * factors[node.id]
-        * min(settings[node.id]["cpu"] * 10, settings[node.id]["concurrency"] * 3)
+        * min(
+            settings[node.id]["cpu"] * 10,
+            settings[node.id]["concurrency"] * 3,
+            settings[node.id]["memory"] * 10,
+        )
         for node in topology.nodes
         if node.kind == "worker"
     }
@@ -437,9 +503,11 @@ def evaluate(
             worker_capacity[worker] / worker_consumers[worker] for worker in workers
         ]
         capacity = sum(shares)
-        backlog = game.queues.get(node.id, 0) * (
-            1 - MINUTES_PER_TICK / cfg["retention"]
-        )
+        previous = game.queues.get(node.id, 0)
+        expired = previous * MINUTES_PER_TICK / cfg["retention"]
+        backlog = previous - expired
+        if failures[node.id]:
+            capacity = 0
         rate = jobs[node.id]
         volume = backlog + rate * seconds
         processed = min(volume, capacity * seconds)
@@ -464,6 +532,10 @@ def evaluate(
             0,
             {"Queue capacity": pending / cfg["capacity"]},
             backlog=queues[node.id],
+            queue_wait_minutes=queues[node.id] / capacity / 60 if capacity else None,
+            jobs_dropped=rate * seconds * dropped[node.id],
+            jobs_expired=expired,
+            failed=bool(failures[node.id]),
         )
     for worker, capacity in worker_capacity.items():
         rate = worker_load[worker]
@@ -473,13 +545,24 @@ def evaluate(
             rate,
             rate,
             0,
-            {"Processing": rate / capacity if capacity else 0},
+            {
+                "CPU": rate
+                / max(instances * factors[worker] * settings[worker]["cpu"] * 10, 1),
+                "Concurrency": rate
+                / max(
+                    instances * factors[worker] * settings[worker]["concurrency"] * 3, 1
+                ),
+                "RAM": rate
+                / max(instances * factors[worker] * settings[worker]["memory"] * 10, 1),
+            },
             failed=instances <= 0,
             active_instances=max(0, instances),
         )
 
     success = Batch()
     for key, batch in completed.items():
+        if key in missing_queues:
+            continue
         routes = async_routes.get(key, [])
         loss = sum(dropped[target] for target in routes) / len(routes) if routes else 0
         success.add(batch.rate * (1 - loss), batch.latency)

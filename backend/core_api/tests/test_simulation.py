@@ -74,9 +74,13 @@ class SimulationTests(TestCase):
 
     def test_old_saves_load_without_layout_and_keep_legacy_database_limits(self):
         game = fixture()
+        game.released.extend(["images", "voice"])
+        component(game, "api").config["cpu"] = 2.5
         component(game, "db").config = {"reads": 45.0, "writes": 30.0}
+        monitor(game, "api", "db")
         state = game.model_dump(mode="json")
         state.pop("diagram")
+        state.pop("infrastructure_releases")
         state["settings"].pop("show_objectives")
         state["history"][0].pop("peak_utilization")
         loaded = Game.model_validate(state)
@@ -84,6 +88,9 @@ class SimulationTests(TestCase):
         self.assertEqual(loaded.diagram.positions, {})
         self.assertEqual(loaded.diagram.groups, [])
         self.assertTrue(loaded.settings.show_objectives)
+        self.assertEqual(loaded.released, ["text", "images", "voice"])
+        self.assertTrue(evaluate(loaded).snapshot.monitored)
+        self.assertIn("voice", evaluate(loaded).snapshot.demand)
         self.assertEqual(database_capacity(config(component(loaded, "db"))), (45, 30))
         self.assertEqual(evaluate(loaded), evaluate(game))
         self.assertEqual(loaded.history[0].peak_utilization, {})
@@ -253,6 +260,20 @@ class SimulationTests(TestCase):
             for edge in game.production.edges
             if (edge.source, edge.target) != ("cache", "db")
         ]
+        fallback = evaluate(game).snapshot
+        self.assertEqual(
+            fallback.components["cache"].cache_hit, result.components["cache"].cache_hit
+        )
+        self.assertAlmostEqual(
+            fallback.components["db"].utilization["Reads"],
+            result.components["db"].utilization["Reads"],
+        )
+        self.assertEqual(fallback.metrics, result.metrics)
+        game.production.edges = [
+            edge
+            for edge in game.production.edges
+            if (edge.source, edge.target) != ("api", "db")
+        ]
         self.assertEqual(evaluate(game).snapshot.components["cache"].cache_hit, 0)
 
     def test_replica_requires_primary_and_offloads_reads(self):
@@ -319,6 +340,49 @@ class SimulationTests(TestCase):
         self.assertEqual(recovered.components["jobs"].backlog, 0)
         self.assertGreater(recovered.components["worker"].throughput, 0)
         self.assertGreater(recovered.metrics.throughput, overloaded.metrics.throughput)
+
+    def test_worker_memory_limits_jobs_and_backlog_does_not_add_request_latency(self):
+        game = fixture()
+        game.released.extend(["images", "voice", "files"])
+        component(game, "db").config["storage"] = 500
+        monitor(game, "jobs", "worker")
+        add_node(game, "jobs", "queue")
+        add_node(game, "worker", "worker", cpu=8, concurrency=30, memory=1)
+        link(game, "api", "jobs")
+        link(game, "jobs", "worker")
+        game.queues["jobs"] = 20_000
+        slow = evaluate(game).snapshot
+        self.assertAlmostEqual(slow.components["worker"].throughput, 10)
+        self.assertGreater(slow.components["jobs"].queue_wait_minutes, 0)
+        self.assertGreater(slow.components["jobs"].jobs_expired, 0)
+        component(game, "worker").config["memory"] = 8
+        fast = evaluate(game).snapshot
+        self.assertGreater(fast.components["worker"].throughput, 10)
+        self.assertEqual(fast.components["jobs"].backlog, 0)
+        self.assertEqual(fast.metrics.latency, slow.metrics.latency)
+
+    def test_search_requirement_routes_new_releases_to_indexed_primary(self):
+        game = fixture()
+        game.released.append("groups")
+        change_feature(game, "search", "develop")
+        advance(game, 28)
+        self.assertFalse(feature_state(game, "search").can_release)
+        monitor(game, "db", "cache")
+        add_node(game, "cache", "cache")
+        link(game, "api", "cache")
+        component(game, "db").config["search_index"] = "Enabled"
+        self.assertTrue(feature_state(game, "search").can_release)
+        change_feature(game, "search", "release")
+        snapshot = evaluate(game).snapshot
+        self.assertGreater(snapshot.demand["search"], 0)
+        queries = next(
+            edge
+            for edge in snapshot.traffic
+            if (edge.source, edge.target) == ("api", "db")
+        )
+        self.assertGreater(queries.operations["search"], 0)
+        lookups = next(edge for edge in snapshot.traffic if edge.target == "cache")
+        self.assertNotIn("search", lookups.operations)
 
     def test_observability_controls_telemetry_and_forecast_confidence(self):
         game = fixture()

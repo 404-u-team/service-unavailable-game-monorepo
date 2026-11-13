@@ -131,11 +131,19 @@ class Economy(Model):
     daily_profit: float
 
 
+class RequirementView(Model):
+    id: str
+    description: str
+    met: bool
+
+
 class FeatureView(Model):
     id: str
     state: Literal["locked", "available", "developing", "ready", "released"]
     remaining: int = 0
     requirements: list[str] = Field(default_factory=list)
+    infrastructure: list[RequirementView] = Field(default_factory=list)
+    can_release: bool = False
     demand_change: float = 0
 
 
@@ -222,6 +230,7 @@ class FeatureDefinition(Model):
     operation: str | None
     prereq: list[str]
     requires: list[str]
+    infrastructure: list[str]
 
 
 class CampaignDefinition(Model):
@@ -241,6 +250,7 @@ class DifficultyDefinition(Model):
 
 
 class Catalog(Model):
+    diagram_layout: Literal[True] = True
     components: dict[str, ComponentDefinition]
     scenarios: dict[str, ScenarioDefinition]
     difficulties: dict[Difficulty, DifficultyDefinition]

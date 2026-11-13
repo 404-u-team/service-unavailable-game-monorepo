@@ -12,7 +12,7 @@
   import { api } from '../api';
   import { more, sections, statusLabel, type Section } from '../labels';
   import { clock, duration, money, ms, num, pct, preciseMoney, rps, when } from '../format';
-  import type { Catalog, Game, Forecast, Incident } from '../types';
+  import type { Catalog, Feature, Game, Forecast, Incident } from '../types';
 
   let { section, game, catalog, link, act, busy, error, note }: {
     section: Section; game: Game; catalog: Catalog; link: (section: Section, focus?: string) => string;
@@ -100,6 +100,11 @@
   const settingsTabs = { general: 'General', accessibility: 'Accessibility', storage: 'Storage' } as const;
 
   const statuses = { locked: 'Locked', available: 'Available', developing: 'In development', ready: 'Ready to release', released: 'Released' };
+  function featureStatus(feature: Feature) {
+    return t(feature.state === 'ready' && !feature.can_release
+      ? 'Ready for release — infrastructure requirements not met.'
+      : statuses[feature.state]);
+  }
   const headers: Partial<Record<Section, { tag: string; title: string; subtitle?: string }>> = {
     home: { tag: 'Production', title: 'Service overview', subtitle: 'Current service state and recent activity.' },
     monitor: { tag: 'Observability', title: 'System telemetry' },
@@ -113,6 +118,30 @@
   };
   const heading = $derived(headers[section]);
 </script>
+
+{#snippet featureRequirements(feature: Feature)}
+  {@const definition = catalog.features[feature.id]}
+  <section class="stack">
+    <h3>{t('Development prerequisites')}</h3>
+    {#if definition.prereq.length}
+      <ul class="requirement-list">
+        {#each definition.prereq as id}
+          {@const met = game.features.some((item) => item.id === id && item.state === 'released')}
+          <li><span class:warning={!met}>{t(met ? 'Met' : 'Missing')}</span> · {t(catalog.features[id].name)}</li>
+        {/each}
+      </ul>
+    {:else}<p class="muted">{t('None')}</p>{/if}
+    <h3>{t('Production infrastructure')}</h3>
+    <ul class="requirement-list">
+      {#each feature.infrastructure as requirement (requirement.id)}
+        <li><span class:warning={!requirement.met}>{t(requirement.met ? 'Met' : 'Missing')}</span> · {t(requirement.description)}</li>
+      {/each}
+    </ul>
+    {#if feature.infrastructure.some((requirement) => !requirement.met)}
+      <a class="btn" href={link('build')}>{t('Open topology')} <ArrowRight size={14} /></a>
+    {/if}
+  </section>
+{/snippet}
 
 {#snippet statCards()}
   <div class="cards stats">
@@ -165,7 +194,7 @@
     <header class="dash-header row spread">
       <div>{#if heading.tag}<p class="eyebrow">{t(heading.tag)}</p>{/if}<h1>{t(heading.title)}</h1>{#if heading.subtitle}<p class="muted">{t(heading.subtitle)}</p>{/if}</div>
       {#if section === 'monitor'}
-        <label class="time-range"><span class="sr-only">{t("History range")}</span><select bind:value={range}><option value="24">{t("Last 24h")}</option><option value="6">{t("Last 6h")}</option><option value="1">{t("Last hour")}</option></select></label>
+        <label class="time-range"><span class="sr-only">{t("History range")}</span><select bind:value={range}><option value="24">{t("{0}h", [24])}</option><option value="6">{t("{0}h", [6])}</option><option value="1">{t("{0}h", [1])}</option></select></label>
       {:else if section === 'growth' || section === 'product'}<span class="badge dim">{t("Budget ·")} {money(game.balance)}</span>
       {:else if section === 'events'}<span class="badge {activeEvents.length ? 'warn' : 'dim'}">{activeEvents.length} {t("active")}</span>{/if}
     </header>
@@ -187,7 +216,7 @@
     {@render statCards()}
     <div class="split">
       <section class="panel pad stack">
-        <div class="row spread"><div><h2>{t("Traffic / throughput")}</h2><p class="muted">{t("Incoming and successful requests per second")}</p></div><span class="badge good">RPS</span></div>
+        <div><h2>{t("Traffic / throughput")}</h2><p class="muted">{t("Incoming and successful requests per second")}</p></div>
         <Chart title={t("Request traffic")} values={history.map((point) => point.metrics.rps)} secondary={history.map((point) => point.metrics.throughput)} ticks={history.map((point) => point.tick)} />
         {#if history.length}<small><span class="accent">{t("━ Incoming")}</span> &nbsp; <span class="throughput">{t("┄ Successful")}</span></small>{/if}
       </section>
@@ -301,7 +330,7 @@
             <button class="feature-select" aria-pressed={feature.id === featureId} onclick={() => featureId = feature.id}>
               <span class="dot {feature.state === 'released' ? 'accent' : feature.state === 'developing' ? 'warning' : 'muted'}"></span>
               <span><h3>{t(definition.name)}</h3><small>{definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger workload")}</small></span>
-              <span class="badge {feature.state === 'released' || feature.state === 'ready' ? 'good' : feature.state === 'developing' ? 'warn' : 'dim'}">{t(statuses[feature.state])}</span>
+              <span class="badge {feature.state === 'released' || feature.can_release ? 'good' : inDevelopment.includes(feature) ? 'warn' : 'dim'}">{t(feature.state === 'ready' && !feature.can_release ? 'Release blocked' : statuses[feature.state])}</span>
             </button>
             <button class="btn icon-btn" aria-label={t("Feature details")} title={t("Feature details")} onclick={() => { featureId = feature.id; detail = feature.id; dialog = 'feature'; }}><ChevronRight size={16} /></button>
           </article>
@@ -311,14 +340,14 @@
         {@const definition = catalog.features[selectedFeature.id]}
         <aside class="panel pad stack feature-detail">
           <div><h2>{t(definition.name)}</h2><p class="muted">{t("Development details")}</p></div>
-          <span class="badge {selectedFeature.state === 'developing' ? 'warn' : 'good'}">{t(statuses[selectedFeature.state])}</span>
+          <p class:warning={selectedFeature.state === 'ready' && !selectedFeature.can_release}>{featureStatus(selectedFeature)}</p>
           {#if selectedFeature.state === 'developing'}<Meter value={1 - selectedFeature.remaining / definition.duration} label={t("{0} remaining", [duration(selectedFeature.remaining)])} tone="warn" />{/if}
           <dl class="breakdown">
             <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
             <div><dt>{t("Development time")}</dt><dd>{duration(definition.duration)}</dd></div>
             {#if selectedFeature.state !== 'released'}<div><dt>{t("Additional request load")}</dt><dd>+{pct(selectedFeature.demand_change, 1)}</dd></div>{/if}
           </dl>
-          {#if selectedFeature.requirements.length}<p class="muted">{t("Requires")} {selectedFeature.requirements.map(tValue => t(tValue)).join(', ')}.</p>{/if}
+          {@render featureRequirements(selectedFeature)}
           <button class="btn {selectedFeature.state === 'ready' ? 'primary' : ''}" onclick={() => { detail = selectedFeature!.id; dialog = 'feature'; }}>{t("Open feature")} <ArrowRight size={14} /></button>
         </aside>
       {/if}
@@ -326,7 +355,7 @@
   {:else if section === 'finance'}
     <div class="cards stats">
       {#each [
-        { label: 'Balance', amount: game.economy.balance, detail: `${preciseMoney(game.economy.profit)} net to date` },
+        { label: 'Balance', amount: game.economy.balance, detail: t('{0} net to date', [preciseMoney(game.economy.profit)]) },
         { label: 'Revenue / day', amount: game.economy.daily_revenue, detail: t('{0} earned', [preciseMoney(game.economy.revenue)]) },
         { label: 'Operating costs / day', amount: game.economy.daily_operating, detail: t('{0} spent', [preciseMoney(game.economy.operating)]) },
         { label: 'Net profit / day', amount: game.economy.daily_profit, detail: t('{0} margin', [pct(game.economy.daily_profit / (game.economy.daily_revenue || 1), 1)]) }
@@ -351,7 +380,7 @@
     <section class="panel pad stack">
       <h2>{t("Production infrastructure")}</h2>
       <dl class="breakdown">
-        {#each game.production.nodes as node (node.id)}<div><dt>{node.name}</dt><dd>{preciseMoney(game.component_costs[node.id] ?? 0)} {t("/ day")}</dd></div>{/each}
+        {#each game.production.nodes as node (node.id)}<div><dt>{t(node.name)}</dt><dd>{preciseMoney(game.component_costs[node.id] ?? 0)} {t("/ day")}</dd></div>{/each}
       </dl>
     </section>
   {:else if section === 'events'}
@@ -451,23 +480,22 @@
   {@const definition = catalog.features[detail]}
   <Modal title={t("Feature details")} subtitle={t(definition.name)} close={() => dialog = undefined}>
     <div class="stack">
-      <span class="badge good">{t(statuses[currentFeature.state])}</span>
+      <p class:warning={currentFeature.state === 'ready' && !currentFeature.can_release}>{featureStatus(currentFeature)}</p>
       <dl class="breakdown">
         <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
         <div><dt>{t("Development duration")}</dt><dd>{duration(definition.duration)}</dd></div>
         <div><dt>{t("Generated demand")}</dt><dd>{definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger operations")}</dd></div>
         {#if currentFeature.state !== 'released'}<div><dt>{t("Additional request load")}</dt><dd>+{pct(currentFeature.demand_change, 1)}</dd></div>{/if}
         <div><dt>{t("Appeal contribution")}</dt><dd>+{pct(definition.appeal)}</dd></div>
-        {#if definition.requires.length}<div><dt>{t("Required infrastructure")}</dt><dd>{definition.requires.map((kind) => t(catalog.components[kind].name)).join(', ')}</dd></div>{/if}
       </dl>
-      {#if currentFeature.requirements.length}<p class="notice warn">{t("Requires")} {currentFeature.requirements.map(tValue => t(tValue)).join(', ')}.</p>{/if}
+      {@render featureRequirements(currentFeature)}
       {#if currentFeature.state === 'developing'}<Meter value={1 - currentFeature.remaining / definition.duration} label={t("{0} remaining", [duration(currentFeature.remaining)])} />{/if}
       {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     </div>
     {#snippet footer()}
       <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Close")}</button>
         {#if currentFeature.state === 'available'}<button class="btn primary" disabled={busy || game.balance < definition.cost} onclick={() => confirm(`/features/${detail}`, { action: 'develop' })}>{t("Start development")}</button>
-        {:else if currentFeature.state === 'ready'}<button class="btn primary" disabled={busy || !!currentFeature.requirements.length} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</button>{/if}
+        {:else if currentFeature.state === 'ready'}<button class="btn primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</button>{/if}
       </div>
     {/snippet}
   </Modal>
@@ -490,11 +518,13 @@
 {/if}
 
 <style>
+  .requirement-list { margin: 0; padding-inline-start: 18px; }
+  .requirement-list li + li { margin-top: 6px; }
   .dashboard { gap: 22px; padding: 27px 30px 35px; max-width: 1700px; margin: 0 auto; align-content: start; }
   .dash-header { align-items: flex-start; min-height: 75px; gap: 14px; }
   .dash-header h1 { margin: 7px 0 4px; }
   .dash-header p { margin-top: 2px; }
-  .time-range { width: 146px; flex: 0 0 auto; }
+  .time-range { width: 90px; flex: 0 0 auto; }
   .cards, .split { display: grid; gap: 21px; }
   .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .stat { display: block; font-size: clamp(22px, 2.4vw, 34px); line-height: 1.15; margin: 8px 0 4px; }
@@ -555,7 +585,6 @@
     .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .split, .split.equal, .campaigns { grid-template-columns: 1fr; }
     .campaigns > article { grid-template-rows: none; }
-    .time-range { width: 109px; }
     .feature-detail, .incident-preview { display: none; }
     .settings-tabs { display: flex; flex-wrap: wrap; }
     .settings-tabs .btn { flex: 1; justify-content: center; }

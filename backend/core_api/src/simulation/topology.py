@@ -58,7 +58,7 @@ def inspect_graph(topology: Topology) -> Graph:
                     isinstance(value, (float, int))
                     and field["min"] <= value <= field["max"]
                 )
-                if key in {"instances", "cpu", "slots"}:
+                if key in {"instances", "slots"}:
                     valid = valid and int(value) == value
             if not valid:
                 raise RuleError(
@@ -138,7 +138,8 @@ def deployment_warnings(graph: Graph) -> list[str]:
             writes.add(node_id)
     if "traffic" not in writes:
         raise RuleError(
-            "Connect traffic to an API server with a direct connection to a primary database."
+            "Connect traffic to an API server, then connect that API directly to a primary database to handle writes.",
+            code="missing_write_path",
         )
     warnings = []
     for node in graph.nodes.values():
@@ -163,13 +164,8 @@ def deployment_warnings(graph: Graph) -> list[str]:
                 f"{node.name} is disconnected and will still incur operating costs."
             )
         elif node.kind in {"api", "limiter", "balancer"} and node.id not in writes:
-            warnings.append(f"{node.name} has no route for writes.")
-        elif node.kind == "cache" and not any(
-            graph.nodes[t].kind in {"database", "replica"}
-            for t in graph.targets[node.id]
-        ):
             warnings.append(
-                f"{node.name} cannot serve cache misses without a data connection."
+                f"{node.name} has no write path. Route traffic to an API with a direct connection to a primary database."
             )
         elif node.kind == "replica" and not any(
             graph.nodes[t].kind == "database" for t in graph.targets[node.id]

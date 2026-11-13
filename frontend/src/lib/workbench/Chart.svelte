@@ -58,4 +58,7 @@
   polyline.secondary { stroke: #77b9ba; stroke-dasharray: 5 4; }
   circle { fill: var(--primary); }
   .chart-empty { min-height: 155px; border: 1px solid var(--border); border-radius: 8px; display: grid; place-items: center; padding: 18px; text-align: center; }
+  @media (max-width: 600px) {
+    text { font-size: 17px; }
+  }
 </style>

@@ -35,6 +35,7 @@ const matches: [RegExp, string][] = [
   [/^Remove (.+) and add a new component to change its type\.$/, 'Remove {0} and add a new component to change its type.'],
   [/^(.+) is disconnected and will still incur operating costs\.$/, '{0} is disconnected and will still incur operating costs.'],
   [/^(.+) has no route for writes\.$/, '{0} has no route for writes.'],
+  [/^(.+) has no write path\. Route traffic to an API with a direct connection to a primary database\.$/, '{0} has no write path. Route traffic to an API with a direct connection to a primary database.'],
   [/^(.+) cannot serve cache misses without a data connection\.$/, '{0} cannot serve cache misses without a data connection.'],
   [/^(.+) needs a connection to a primary database\.$/, '{0} needs a connection to a primary database.'],
   [/^(.+) has no worker\. Its backlog will build up\.$/, '{0} has no worker. Its backlog will build up.'],
@@ -62,12 +63,21 @@ const errorKeys: Record<string, string> = {
   invalid_setting: '{0}: invalid value for {1}.',
   duplicate_connection: 'A connection already exists between these components.',
   connection_cycle: 'Connections cannot form a cycle.',
-  multiple_primaries: '{0} can replicate from one primary database.'
+  multiple_primaries: '{0} can replicate from one primary database.',
+  feature_infrastructure_missing: 'Production infrastructure does not meet the release requirements.',
+  feature_not_ready: 'This feature is not ready for that action.',
+  missing_write_path: 'Connect traffic to an API server, then connect that API directly to a primary database to handle writes.',
+  invalid_values: 'Some submitted values are invalid.',
+  save_not_found: 'Save not found.',
+  request_id_conflict: 'This request ID was already used for a different action.',
+  revision_conflict: 'The architecture changed in another session. Reload the latest draft and retry.',
+  upstream_unavailable: 'The game server is unavailable. Try again shortly.',
+  incompatible_catalog: 'The game server returned an incompatible catalog. Check the API address and rebuild the API container, then retry.'
 };
 
 export function apiMessage(error: unknown): string {
-  if (error instanceof ApiError && error.code && locale() === 'ru' && errorKeys[error.code]) {
+  if (error instanceof ApiError && error.code && errorKeys[error.code]) {
     return t(errorKeys[error.code], error.values.map((value) => t(value)));
   }
-  return error instanceof Error ? error.message : 'The request could not be completed.';
+  return message(error instanceof Error ? error.message : 'The request could not be completed.');
 }

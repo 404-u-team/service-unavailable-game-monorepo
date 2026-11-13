@@ -15,14 +15,14 @@
   import '@fontsource/ibm-plex-mono/cyrillic-600.css';
   import '#lib/theme.css';
   import { onMount } from 'svelte';
-  import { setLanguage } from '#lib/i18n.svelte.ts';
+  import { setLanguage, t } from '#lib/i18n.svelte.ts';
   onMount(() => setLanguage(localStorage.getItem('workbench-language') === 'ru' ? 'ru' : 'en'));
   let { children } = $props();
 </script>
 
 <svelte:head>
   <title>Service Unavailable</title>
-  <meta name="description" content="An infrastructure simulation game." />
+  <meta name="description" content={t("An infrastructure simulation game.")} />
   <meta name="theme-color" content="#0c1013" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 </svelte:head>

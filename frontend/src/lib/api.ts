@@ -18,9 +18,10 @@ export async function api<T>(path: string, method = 'GET', data?: object): Promi
     const message = Array.isArray(result?.detail)
       ? 'Some submitted values are invalid.'
       : result?.detail;
-    const code = response.headers.get('x-game-error-code') ?? undefined;
+    const code = response.headers.get('x-game-error-code') ??
+      (response.status === 422 && Array.isArray(result?.detail) ? 'invalid_values' : undefined);
     const values = JSON.parse(response.headers.get('x-game-error-values') ?? '[]') as string[];
-    throw new ApiError(response.status, message || 'The request could not be completed.', code, values);
+    throw new ApiError(response.status, typeof message === 'string' ? message : 'The request could not be completed.', code, values);
   }
   return result as T;
 }
@@ -34,7 +35,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function loadCatalog(): Promise<Catalog> {
   const catalog = await api<unknown>('/catalog');
   const profiles = isRecord(catalog) ? catalog.difficulties : undefined;
-  if (!isRecord(catalog) ||
+  if (!isRecord(catalog) || catalog.diagram_layout !== true ||
       !['components', 'scenarios', 'features', 'campaigns', 'operations', 'connections'].every((key) => isRecord(catalog[key])) ||
       typeof catalog.minutes_per_tick !== 'number' || !isRecord(profiles) ||
       difficulties.some((key) => {
@@ -42,7 +43,7 @@ export async function loadCatalog(): Promise<Catalog> {
         return !isRecord(option) || typeof option.name !== 'string' ||
           typeof option.balance !== 'number' || typeof option.audience !== 'number';
       })) {
-    throw new ApiError(502, 'The game server returned an incompatible catalog. Check the API address and rebuild the API container, then retry.');
+    throw new ApiError(502, 'The game server returned an incompatible catalog. Check the API address and rebuild the API container, then retry.', 'incompatible_catalog');
   }
   return catalog as Catalog;
 }

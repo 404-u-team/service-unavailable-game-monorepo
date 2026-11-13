@@ -25,7 +25,10 @@ const proxy: RequestHandler = async ({ request, params, url }) => {
     for (const cookie of upstream.headers.getSetCookie()) result.append('set-cookie', cookie);
     return new Response(upstream.body, { status: upstream.status, headers: result });
   } catch {
-    return Response.json({ detail: 'The game server is unavailable. Try again shortly.' }, { status: 503 });
+    return Response.json({ detail: 'The game server is unavailable. Try again shortly.' }, {
+      status: 503,
+      headers: { 'x-game-error-code': 'upstream_unavailable' }
+    });
   }
 };
 

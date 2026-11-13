@@ -18,6 +18,7 @@ from src.api.game_schemas import (
     IncidentView,
     Modification,
     Range,
+    RequirementView,
     SaveSummary,
 )
 from src.repositories.games import GameRepository
@@ -47,7 +48,9 @@ from src.simulation.progression import (
     operating_rates,
     spend,
 )
+from src.simulation.requirements import REQUIREMENTS, requirement_met
 from src.simulation.topology import (
+    Graph,
     RuleError,
     config,
     daily_cost,
@@ -118,7 +121,9 @@ class GameService:
                     connection, owner, game_id, request.request_id, fingerprint
                 )
             except ValueError as error:
-                raise RevisionConflict(str(error)) from error
+                raise RevisionConflict(
+                    str(error), code="request_id_conflict"
+                ) from error
             if fresh:
                 change(game)
                 if speed != game.speed:
@@ -155,7 +160,8 @@ def advance_clock(game: Game, anchor: datetime, now: datetime) -> tuple[datetime
 def check_revision(game: Game, revision: int) -> None:
     if game.revision != revision:
         raise RevisionConflict(
-            "The architecture changed in another session. Reload the latest draft and retry."
+            "The architecture changed in another session. Reload the latest draft and retry.",
+            code="revision_conflict",
         )
 
 
@@ -390,10 +396,20 @@ def deploy(
         game.tutorial = 3
 
 
-def feature_state(game: Game, key: str) -> FeatureView:
+def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureView:
     feature = FEATURES[key]
+    graph = graph or inspect_graph(game.production)
+    infrastructure = [
+        RequirementView(
+            id=rule_id,
+            description=rule.description,
+            met=requirement_met(rule, graph, game),
+        )
+        for rule_id in feature["infrastructure"]
+        for rule in (REQUIREMENTS[rule_id],)
+    ]
     if key in game.released:
-        return FeatureView(id=key, state="released")
+        return FeatureView(id=key, state="released", infrastructure=infrastructure)
     operation = feature["operation"]
     base = SCENARIOS[game.scenario]["operations"]
     released = [
@@ -405,18 +421,13 @@ def feature_state(game: Game, key: str) -> FeatureView:
     demand_change = OPERATIONS[operation]["rate"] / workload if operation else 0
     if key in game.development:
         remaining = max(0, game.development[key] - game.tick)
-        graph = inspect_graph(game.production)
-        active = {graph.nodes[node].kind for node in graph.reachable}
-        requirements = [
-            COMPONENTS[kind]["name"]
-            for kind in feature["requires"]
-            if kind not in active
-        ]
         return FeatureView(
             id=key,
             state="developing" if remaining else "ready",
             remaining=remaining,
-            requirements=requirements,
+            requirements=[rule.description for rule in infrastructure if not rule.met],
+            infrastructure=infrastructure,
+            can_release=not remaining and all(rule.met for rule in infrastructure),
             demand_change=demand_change,
         )
     prereqs = [
@@ -428,6 +439,7 @@ def feature_state(game: Game, key: str) -> FeatureView:
         id=key,
         state="locked" if prereqs else "available",
         requirements=prereqs,
+        infrastructure=infrastructure,
         demand_change=demand_change,
     )
 
@@ -439,11 +451,13 @@ def change_feature(game: Game, key: str, action: str) -> None:
         spend(game, feature["cost"], "development_spend")
         game.development[key] = game.tick + feature["duration"]
     elif action == "release" and state.state == "ready":
-        if state.requirements:
+        if not state.can_release:
             raise RuleError(
-                f"Connect the required infrastructure: {', '.join(state.requirements)}."
+                "Production infrastructure does not meet the release requirements.",
+                code="feature_infrastructure_missing",
             )
         game.released.append(key)
+        game.infrastructure_releases.append(key)
         del game.development[key]
         add_event(
             game,
@@ -454,7 +468,9 @@ def change_feature(game: Game, key: str, action: str) -> None:
             0,
         )
     else:
-        raise RuleError("This feature is not ready for that action.")
+        raise RuleError(
+            "This feature is not ready for that action.", code="feature_not_ready"
+        )
 
 
 def start_campaign(game: Game, key: str) -> None:
@@ -491,6 +507,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
         + game.deployment_spend
     )
     history = game.history if snapshot.monitored else []
+    graph = inspect_graph(game.production)
     return GameView(
         id=game.id,
         name=game.name,
@@ -529,7 +546,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
         draft_costs={node.id: daily_cost(node) for node in game.draft.nodes}
         if game.draft
         else {},
-        features=[feature_state(game, key) for key in FEATURES],
+        features=[feature_state(game, key, graph) for key in FEATURES],
         campaigns=[
             CampaignView(
                 id=key,

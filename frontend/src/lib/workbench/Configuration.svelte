@@ -79,7 +79,7 @@
               {#each field.options as option}<option value={option}>{t(option)}</option>{/each}
             </select>
           {:else}
-            <input id={`config-${key}`} type="number" min={field.min ?? undefined} max={field.max ?? undefined} step={['instances', 'cpu', 'slots'].includes(key) ? 1 : 'any'}
+            <input id={`config-${key}`} type="number" min={field.min ?? undefined} max={field.max ?? undefined} step={['instances', 'slots'].includes(key) ? 1 : 'any'}
               value={values[key]} oninput={(event) => { values[key] = event.currentTarget.valueAsNumber; }} required />
           {/if}
           <small class="muted">{field.options ? '' : `${field.min}–${field.max} · `}{t("Default")} {t(String(field.default))}{#if values[key] !== initial.values[key]} {t("· Current")} {initial.values[key]}{/if}</small>

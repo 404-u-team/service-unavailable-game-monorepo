@@ -498,6 +498,89 @@ test('layout edits persist without Draft and preserve production', async ({ page
   expect(after.diagram.routes['api:db']).toHaveLength(1);
 });
 
+test('production node dragging sends one layout write and survives Draft and reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const initial = await state(page, id);
+  const api = page.locator('.svelte-flow__node-workbench[data-id="api"]');
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().endsWith('/diagram')) writes.push(request.method());
+  });
+  const box = (await api.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 - 65, { steps: 12 });
+  expect(writes).toEqual([]);
+  const response = page.waitForResponse((candidate) => candidate.url().endsWith('/diagram'));
+  await page.mouse.up();
+  const saved = await response;
+  expect(saved.status()).toBe(200);
+  expect(writes).toEqual(['PUT']);
+  const updated: Game = await saved.json();
+  expect(updated.diagram.positions.api.y).toBeLessThan(initial.production.nodes.find((node) => node.id === 'api')!.position.y);
+  expect(updated.production).toEqual(initial.production);
+  expect(updated.revision).toBe(initial.revision);
+  await page.reload();
+  await expect(api).toBeVisible();
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect(page.getByRole('button', { name: 'Review deployment' })).toBeVisible();
+  expect((await state(page, id)).diagram.positions.api).toEqual(updated.diagram.positions.api);
+  await page.getByRole('button', { name: 'View production' }).click();
+  await expect(api).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review deployment' })).toBeHidden();
+  await page.getByRole('button', { name: 'Return to draft' }).click();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Discard draft' }).click();
+  await expect.poll(async () => (await state(page, id)).draft).toBeNull();
+  expect((await state(page, id)).diagram.positions.api).toEqual(updated.diagram.positions.api);
+});
+
+test('Russian Monitoring and feature requirements render on desktop and mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const pageErrors: string[] = [];
+  const failedResponses: number[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('response', (response) => { if (response.status() >= 500) failedResponses.push(response.status()); });
+  const mutate = async (path: string, method: string, data: object) => {
+    const response = await page.request.fetch(`/api/games/${id}${path}`, {
+      method, data: { request_id: crypto.randomUUID(), ...data }
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return await response.json() as Game;
+  };
+  const first = await state(page, id);
+  const opened = await mutate('/draft', 'POST', { revision: first.revision });
+  const topology = opened.draft!;
+  topology.nodes.push({ id: 'monitor', name: 'Monitoring', kind: 'monitor', position: { x: 740, y: 360 }, config: { detail: 'Service history' } });
+  topology.edges.push({ source: 'api', target: 'monitor' }, { source: 'db', target: 'monitor' });
+  const edited = await mutate('/draft', 'PUT', { revision: opened.revision, topology });
+  await mutate('/deployments', 'POST', { revision: edited.revision });
+  await mutate('/clock', 'PUT', { speed: 3 });
+  await expect.poll(async () => (await state(page, id)).history.length).toBeGreaterThan(2);
+  await mutate('/clock', 'PUT', { speed: 0 });
+  await page.goto('/?view=settings');
+  await page.getByLabel('Interface language').selectOption('ru');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.goto(`/game/${id}?view=monitor`);
+    await expect(page.getByRole('heading', { name: 'Мониторинг системы' })).toBeVisible();
+    await expect(page.getByRole('img', { name: /пиковая загрузка/i })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    if (visualDir) await page.screenshot({ path: `${visualDir}/russian-monitoring-${width}.png`, fullPage: true });
+    await page.goto(`/game/${id}?view=product`);
+    const voice = page.locator('.feature-row').filter({ has: page.getByRole('heading', { name: 'Голосовые сообщения' }) });
+    await voice.getByRole('button', { name: 'Сведения о функции' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Рабочая инфраструктура');
+    await expect(dialog).toContainText('хотя бы один воркер');
+    if (visualDir) await page.screenshot({ path: `${visualDir}/russian-product-${width}.png` });
+  }
+  expect(pageErrors).toEqual([]);
+  expect(failedResponses).toEqual([]);
+});
+
 test('Russian is persisted across menus, editor, settings, and game screens', async ({ page }) => {
   await page.goto('/?view=settings');
   await page.getByLabel('Interface language').selectOption('ru');

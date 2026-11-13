@@ -77,7 +77,7 @@ def token_subject(token: str | None, kind: str) -> str | None:
             options={"require": ["exp", "sub", "type"]},
         )
         return str(UUID(payload["sub"])) if payload["type"] == kind else None
-    except (jwt.InvalidTokenError, ValueError):
+    except jwt.InvalidTokenError, ValueError:
         return None
 
 
@@ -118,12 +118,12 @@ Service = Annotated[GameService, Depends(get_service)]
 
 def game_errors(error: Exception) -> HTTPException:
     if isinstance(error, SaveNotFound):
-        return HTTPException(404, "Save not found.")
-    if isinstance(error, RevisionConflict):
-        return HTTPException(409, str(error))
+        return HTTPException(
+            404, "Save not found.", headers={"X-Game-Error-Code": "save_not_found"}
+        )
     if isinstance(error, RuleError):
         return HTTPException(
-            422,
+            409 if isinstance(error, RevisionConflict) else 422,
             str(error),
             headers={
                 "X-Game-Error-Code": error.code,

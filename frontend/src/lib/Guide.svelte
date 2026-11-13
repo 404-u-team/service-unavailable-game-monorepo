@@ -46,6 +46,11 @@
       </details>
     {/each}
     <details>
+      <summary>{t("Background processing")}</summary>
+      <p>{t("After saving a message or upload, the API can submit a notification or media job to a queue. The request finishes after submission. The job completes when a worker processes it. Database writes and synchronous API work still use their normal capacity.")}</p>
+      <p>{t("For example, if 30 jobs per second arrive and workers can process 20, the backlog grows by about 10 jobs per second before expiration and overflow. Increase worker capacity to drain it. A larger queue can absorb a longer burst and allows more jobs to wait.")}</p>
+    </details>
+    <details>
       <summary>{t("Scaling and shared dependencies")}</summary>
       <p>{t("Scale vertically to add resources to one instance or horizontally to add instances. Shared databases still receive the requests handled by all API instances. Check reads and writes independently when evaluating a database bottleneck.")}</p>
     </details>

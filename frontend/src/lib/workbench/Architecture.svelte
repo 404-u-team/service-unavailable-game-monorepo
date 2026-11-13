@@ -18,14 +18,17 @@
   import { ms, num, pct, preciseMoney, rps, when } from '../format';
   import type { Catalog, Component, Connection, Diagram, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
-  let { game, catalog, act, busy, error, note, focusId }: {
+  let { game, catalog, act, busy, error, note, focusId, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
     note: (interaction: 'inspect' | 'monitor') => void; focusId?: string;
+    savedDiagram: Diagram; saveDiagram: (diagram: Diagram) => void;
+    layoutFailed: boolean; retryDiagram: () => void;
   } = $props();
 
   let compact = $state(false);
   let layout = $state<'canvas' | 'list'>('canvas');
+  let showProduction = $state(false);
   let selected = $state('api');
   let selectedEdge = $state('');
   let search = $state('');
@@ -47,12 +50,9 @@
   let editingDraft = false;
   let canvas: HTMLDivElement | undefined = $state();
 
-  let diagramEdit = $state.raw<Diagram>();
   let diagramHistory = $state.raw<Diagram[]>([]);
   let diagramFuture = $state.raw<Diagram[]>([]);
   let lastEdit = $state<'diagram' | 'topology'>('topology');
-  let savingLayout = $state(false);
-  let layoutFailed = $state(false);
   let previewRoute = $state.raw<{ key: string; points: Point[] }>();
   let groupSelected = $state('');
   let selection = $state.raw(['api']);
@@ -62,32 +62,16 @@
   let groupMembers = $state.raw<string[]>([]);
   let groupParent = $state('');
   let replacedEdge = $state('');
-  const savedDiagram = $derived(diagramEdit ?? game.diagram ?? { positions: {}, routes: {}, groups: [] });
   const diagram = $derived(previewRoute
     ? { ...savedDiagram, routes: { ...savedDiagram.routes, [previewRoute.key]: previewRoute.points } }
     : savedDiagram);
   const group = $derived(diagram.groups.find((item) => item.id === groupSelected));
 
-  $effect(() => {
-    const pending = diagramEdit;
-    if (!pending || busy || savingLayout || layoutFailed) return;
-    void persistDiagram(pending);
-  });
-
-  async function persistDiagram(pending: Diagram) {
-    savingLayout = true;
-    const result = await act('/diagram', { diagram: pending }, 'PUT');
-    if (result && diagramEdit === pending) diagramEdit = undefined;
-    if (!result) layoutFailed = true;
-    savingLayout = false;
-  }
-
   function changeDiagram(next: Diagram) {
     diagramHistory = [...diagramHistory, savedDiagram].slice(-50);
     diagramFuture = [];
-    diagramEdit = next;
+    saveDiagram(next);
     lastEdit = 'diagram';
-    layoutFailed = false;
   }
 
   function undoDiagram(redo: boolean) {
@@ -101,8 +85,7 @@
       diagramFuture = [...diagramFuture, savedDiagram];
       diagramHistory = stack.slice(0, -1);
     }
-    diagramEdit = next;
-    layoutFailed = false;
+    saveDiagram(next);
   }
 
   function chooseGroup(id: string) {
@@ -185,13 +168,14 @@
     updateRoute(selectedEdge, [...points, { x: (entry.x + b.x) / 2, y: (entry.y + b.y + (compact ? 43 : 50.5)) / 2 }], true);
   }
 
-  const topology = $derived(game.draft ?? game.production);
+  const viewingDraft = $derived(Boolean(game.draft) && !showProduction);
+  const topology = $derived(viewingDraft ? game.draft! : game.production);
   const active = $derived(topology.nodes.find((node) => node.id === selected));
   const metric = $derived(game.snapshot.components[selected]);
   const monitors = $derived(game.snapshot.monitors ?? {});
   const connections = $derived(topology.edges.filter((item) => item.source === selected || item.target === selected));
   const activeConfig = $derived(active && Object.fromEntries(Object.entries(catalog.components[active.kind].fields).map(([key, field]) => [key, active.config[key] ?? field.default])));
-  const removed = $derived(game.draft ? game.production.nodes.filter((node) => !topology.nodes.some((item) => item.id === node.id)) : []);
+  const removed = $derived(viewingDraft ? game.production.nodes.filter((node) => !topology.nodes.some((item) => item.id === node.id)) : []);
   const visibleGroups = $derived(diagram.groups.filter((item) => groupComponents(item, diagram.groups)
     .some((id) => topology.nodes.some((node) => node.id === id))));
   const kinds = $derived((Object.keys(catalog.components) as Kind[]).filter((kind) => kind !== 'source'));
@@ -203,7 +187,7 @@
     !connectionError(topology, catalog, { source: origin.id, target: node.id }, replacedEdge)) : []);
   const delta = $derived(Object.entries(game.draft_costs).reduce((sum, [, cost]) => sum + cost, 0) - game.economy.daily_infrastructure);
   const pendingChanges = $derived.by(() => {
-    if (!game.draft) return [];
+    if (!viewingDraft) return [];
     const live = new Map(game.production.nodes.map((node) => [node.id, node]));
     const items: { label: string; note: string; tone: string }[] = [];
     for (const node of topology.nodes) {
@@ -212,7 +196,6 @@
       const fields = catalog.components[node.kind].fields;
       const settings = Object.keys(fields).filter((key) => (before.config[key] ?? fields[key].default) !== (node.config[key] ?? fields[key].default));
       if (before.name !== node.name || settings.length) items.push({ label: node.name, note: settings.map((key) => t(fields[key].label)).join(', ') || 'Name changed', tone: 'warn' });
-      if (before.position.x !== node.position.x || before.position.y !== node.position.y) items.push({ label: node.name, note: 'Position updated', tone: 'dim' });
     }
     for (const node of removed) items.push({ label: node.name, note: 'Component removed', tone: 'bad' });
     const oldEdges = new Set(game.production.edges.map(edgeKey));
@@ -270,6 +253,7 @@
   }
 
   async function draft() {
+    showProduction = false;
     if (game.draft) return game;
     const result = await act('/draft', { revision: game.revision });
     if (result) { history = []; future = []; localRevision = result.revision; }
@@ -297,7 +281,7 @@
   async function undo(redo = false) {
     const list = redo ? future : history;
     const item = list.at(-1);
-    if (!item || !game.draft || busy) return;
+    if (!item || !viewingDraft || !game.draft || busy) return;
     const before = game.draft;
     if (localRevision !== game.revision) { history = []; future = []; return; }
     editingDraft = true;
@@ -340,7 +324,7 @@
   }
 
   async function remove() {
-    if (busy) return;
+    if (busy || !viewingDraft) return;
     if (edge) {
       const key = edgeKey(edge);
       if (await edit((value) => ({ ...value, edges: value.edges.filter((item) => edgeKey(item) !== key) }))) selectedEdge = '';
@@ -355,7 +339,16 @@
   }
 
   function move(positions: Record<string, Point>) {
-    if (Object.keys(positions).length) changeDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, ...positions } });
+    const changed: Record<string, Point> = {};
+    const clamp = (value: number) => Math.max(-100_000, Math.min(100_000, value));
+    for (const node of topology.nodes) {
+      const point = positions[node.id];
+      if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+      const next = { x: clamp(point.x), y: clamp(point.y) };
+      const prior = savedDiagram.positions[node.id] ?? node.position;
+      if (next.x !== prior.x || next.y !== prior.y) changed[node.id] = next;
+    }
+    if (Object.keys(changed).length) changeDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, ...changed } });
   }
 
   async function configure() {
@@ -412,7 +405,7 @@
       if (lastEdit === 'diagram') undoDiagram(redo);
       else void undo(redo);
     }
-    if (event.key === 'Delete' && game.draft) { event.preventDefault(); void remove(); }
+    if (event.key === 'Delete' && viewingDraft) { event.preventDefault(); void remove(); }
     if (event.key === 'Escape') context = undefined;
     if (event.key === 'Enter' && event.target instanceof HTMLElement) {
       const node = event.target.closest<HTMLElement>('.svelte-flow__node');
@@ -472,13 +465,19 @@
           </div>
         {:else}<p class="muted">{t(definition.description)}</p>{/if}
       {:else if metric}
+        {@const background = active.kind === 'queue' || active.kind === 'worker'}
         <dl class="metrics">
-          <div><dt>{t("Incoming")}</dt><dd>{rps(metric.rps)}</dd></div><div><dt>{t("Processed")}</dt><dd>{rps(metric.throughput)}</dd></div>
-          <div><dt>{t("Local latency")}</dt><dd>{ms(metric.latency)}</dd></div>
+          <div><dt>{t("Incoming")}</dt><dd>{background ? t('{0} jobs/s', [num(metric.rps)]) : rps(metric.rps)}</dd></div>
+          <div><dt>{t(active.kind === 'queue' ? 'Accepted jobs' : 'Processed')}</dt><dd>{background ? t('{0} jobs/s', [num(metric.throughput)]) : rps(metric.throughput)}</dd></div>
+          {#if !background}<div><dt>{t("Local latency")}</dt><dd>{ms(metric.latency)}</dd></div>{/if}
           {#if metric.cache_hit !== null}<div><dt>{t("Cache hit rate")}</dt><dd>{pct(metric.cache_hit, 1)}</dd></div>{/if}
           {#if metric.backlog !== null}<div><dt>{t("Queued jobs")}</dt><dd>{num(metric.backlog)}</dd></div>{/if}
+          {#if metric.queue_wait_minutes != null}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('{0} min', [num(metric.queue_wait_minutes)])}</dd></div>
+          {:else if metric.backlog}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('No active processing capacity')}</dd></div>{/if}
+          {#if metric.jobs_dropped != null}<div><dt>{t('Rejected jobs per step')}</dt><dd>{num(metric.jobs_dropped)}</dd></div>{/if}
+          {#if metric.jobs_expired != null}<div><dt>{t('Expired jobs per step')}</dt><dd>{num(metric.jobs_expired)}</dd></div>{/if}
           {#if metric.storage_used !== null}<div><dt>{t("Storage used")}</dt><dd>{num(metric.storage_used)} {t("GB")}</dd></div>{/if}
-          {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{num(metric.replication_lag)} s</dd></div>{/if}
+          {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
           {#if metric.active_instances !== null}<div><dt>{t("Active instances")}</dt><dd>{metric.active_instances}</dd></div>{/if}
         </dl>
       {/if}
@@ -521,10 +520,10 @@
           {/each}
         </div>
       {/if}
-      <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((game.draft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
+      <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
       {#if active.kind !== 'source'}<button class="btn primary block large" disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
       {#if Number(activeConfig?.instances) > 1}<button class="btn block" aria-pressed={cluster} onclick={() => { cluster = !cluster; if (compact) dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</button>{/if}
-      {#if game.draft}
+      {#if viewingDraft}
         <div class="row wrap"><button class="btn" onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</button>
         {#if active.kind !== 'source'}<button class="btn danger" disabled={busy} onclick={remove}><Trash2 size={13} /> {t("Remove")}</button>{/if}</div>
       {/if}
@@ -544,8 +543,12 @@
   {:else if edge}
     {@const from = topology.nodes.find((node) => node.id === edge?.source)}
     {@const to = topology.nodes.find((node) => node.id === edge?.target)}
+    {@const kind = connectionKind(catalog, from?.kind, to?.kind)}
     <div class="stack"><h2>{t("Connection")}</h2><p>{t(from?.name ?? '')} → {t(to?.name ?? '')}</p>
-    <p class="muted">{t(connectionLabels[connectionKind(catalog, from?.kind, to?.kind)])}</p>
+    <p class="muted">{t(connectionLabels[kind])}</p>
+    {#if kind === 'cache'}<p>{t("Keep a direct API-to-primary connection for writes. Add API-to-cache for read lookups.")}</p>
+    {:else if kind === 'telemetry'}<p>{t("This link sends metrics to the collector and uses one collection slot.")}</p>
+    {:else if kind === 'replication'}<p>{t("The read replica subscribes to its primary using this link.")}</p>{/if}
     <div class="row wrap">
       <button class="btn" disabled={layout !== 'canvas' || (diagram.routes[selectedEdge]?.length ?? 0) >= 24} onclick={addWaypoint}>{t("Add waypoint")}</button>
       {#if diagram.routes[selectedEdge]?.length}
@@ -565,7 +568,7 @@
 
 <section class="architecture">
   <header class="topology-header">
-    <div><p class="eyebrow">{t("Production /")} {game.name}</p><h1><span class="desktop-heading">{t("Infrastructure topology")}</span><span class="mobile-heading">{t("Topology")}</span></h1><p class="mobile-sub muted">{game.draft ? t("Draft") : t("Production")} · {count(topology.nodes.length, 'component', 'components', ['компонент', 'компонента', 'компонентов'])}</p></div>
+    <div><p class="eyebrow">{t("Production /")} {game.name}</p><h1><span class="desktop-heading">{t("Infrastructure topology")}</span><span class="mobile-heading">{t("Topology")}</span></h1><p class="mobile-sub muted">{viewingDraft ? t("Draft") : t("Production")} · {count(topology.nodes.length, 'component', 'components', ['компонент', 'компонента', 'компонентов'])}</p></div>
     <div class="service-metrics">
       {#each summary as item}<div><span class="eyebrow">{t(item.label)}</span><strong>{item.value}</strong></div>{/each}
     </div>
@@ -573,10 +576,9 @@
   <div class="workspace">
     <aside class="library" aria-label={t("Component library")}><h2 class="eyebrow">{t("Component library")}</h2>{@render catalogList()}</aside>
     <div class="drawing">
-      <div class="canvas-bar row spread wrap" class:editing={game.draft}>
+      <div class="canvas-bar row spread wrap" class:editing={viewingDraft}>
         <div class="row wrap">
-          <span class="eyebrow desktop-only">{game.draft ? t("Draft topology") : t("Production topology")}</span>
-          <span class="badge good"><i class="dot"></i>{game.draft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</span>
+          <span class="badge good"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</span>
         </div>
         <div class="row wrap">
           <label class="request-type">
@@ -588,7 +590,7 @@
               {/each}
             </select>
           </label>
-          {#if layoutFailed}<button class="btn" onclick={() => layoutFailed = false}>{t("Retry saving layout")}</button>{/if}
+          {#if layoutFailed}<button class="btn danger" onclick={retryDiagram}>{t("Retry saving layout")}</button>{/if}
           <button class="btn" aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</button>
           {#if selection.length > 1}<button class="btn" onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</button>{/if}
           <button class="btn icon-btn" aria-label={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} title={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} onclick={() => layout = layout === 'canvas' ? 'list' : 'canvas'}>{#if layout === 'canvas'}<List size={16} />{:else}<MousePointer2 size={16} />{/if}</button>
@@ -600,7 +602,7 @@
         <div class="canvas" bind:this={canvas}>
           {#if canvas}
           {#key compact}
-            <TopologyGraph {topology} {diagram} {game} {catalog} {requestType} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={Boolean(game.draft) && !busy}
+            <TopologyGraph {topology} {diagram} {game} {catalog} {requestType} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft && !busy}
               {compact} {removed} {touchSelect} {select} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
               {cluster} container={canvas} menu={openMenu} clear={() => { context = undefined; select(''); }} />
           {/key}
@@ -627,19 +629,28 @@
         </div>
       {/if}
       <div class="edit-bar row wrap">
-        {#if game.draft}
+        {#if viewingDraft}
+          <button class="btn" onclick={() => showProduction = true}>{t('View production')}</button>
           <button class="btn icon-btn" aria-label={t("Undo draft edit")} title={t("Undo")} disabled={busy || !history.length} onclick={() => undo()}><Undo2 size={16} /></button>
           <button class="btn icon-btn" aria-label={t("Redo draft edit")} title={t("Redo")} disabled={busy || !future.length} onclick={() => undo(true)}><Redo2 size={16} /></button>
           <button class="btn" disabled={busy} onclick={openConnect}>{t("Connect")}</button>
           <button class="btn" disabled={busy} onclick={() => { review = undefined; dialog = 'discard'; }}>{t("Discard")}</button>
           <button class="btn primary" disabled={busy} onclick={inspectReview}>{t("Review deployment")} <ArrowRight size={14} /></button>
+        {:else if game.draft}<button class="btn" onclick={() => showProduction = false}>{t('Return to draft')}</button>
         {:else}<button class="btn" disabled={busy} onclick={draft}><GitBranch size={15} /> {t("Create draft")}</button>{/if}
       </div>
+      <ul class="edge-legend row wrap" aria-label={t('Connection types')}>
+        <li style:--edge-color="#c7f46c">{t('Application requests')}</li>
+        <li style:--edge-color="#5ed5c6">{t('Data dependencies')}</li>
+        <li style:--edge-color="#ffd587">{t('Background jobs')}</li>
+        <li class="dashed" style:--edge-color="#d7aeed">{t('Replication subscription')}</li>
+        <li class="dashed" style:--edge-color="#8cbdf3">{t('Metrics collection')}</li>
+      </ul>
     </div>
     <aside class="inspector" aria-label={t("Component inspector")}>
       <p class="eyebrow desktop-only">{t("Component inspector")}</p>
       {@render inspect(!compact)}
-      {#if game.draft && !compact}
+      {#if viewingDraft && !compact}
         <section class="draft-summary stack">
           <div><p class="eyebrow accent">{t("Draft summary")}</p><h2>{pendingChanges.length} {t("pending changes")}</h2></div>
           {#each pendingChanges.slice(0, 3) as item}
@@ -665,7 +676,7 @@
       <button class="btn" onclick={() => { addWaypoint(); context = undefined; }}>{t("Add waypoint")}</button>
       {#if diagram.routes[selectedEdge]?.length}<button class="btn" onclick={() => { updateRoute(selectedEdge, [], true); context = undefined; }}>{t("Reset route")}</button>{/if}
     {/if}
-    {#if edge || (game.draft && active && active.kind !== 'source')}<button class="btn danger" onclick={remove}>{t("Remove selected")}</button>{/if}
+    {#if viewingDraft && (edge || (active && active.kind !== 'source'))}<button class="btn danger" onclick={remove}>{t("Remove selected")}</button>{/if}
     <button class="btn" onclick={() => context = undefined}><X size={14} /> {t("Close menu")}</button>
   </div>
 {/if}
@@ -738,7 +749,11 @@
       <label class="field"><span>{t("Target component")}</span><select bind:value={target} required>
         <option value="">{t("Select a compatible target")}</option>{#each targets as node}<option value={node.id}>{t(node.name)}</option>{/each}
       </select></label>
-      {#if target}<p class="muted">{t(connectionLabels[connectionKind(catalog, origin?.kind, targets.find((node) => node.id === target)?.kind)])}</p>{/if}
+      {#if target}
+        {@const kind = connectionKind(catalog, origin?.kind, targets.find((node) => node.id === target)?.kind)}
+        <p class="muted">{t(connectionLabels[kind])}</p>
+        {#if kind === 'cache'}<p>{t("Keep a direct API-to-primary connection for writes. Add API-to-cache for read lookups.")}</p>{/if}
+      {/if}
       {#if !targets.length}<p class="muted">{t("There are no new compatible connections from this component.")}</p>{/if}
     </form>
     {#snippet footer()}<button class="btn primary block" type="submit" form="connect-components" disabled={busy || !target}>{t("Connect components")}</button>{/snippet}
@@ -764,7 +779,7 @@
             {/if}
           {/each}
           {#each review.details as item}
-            <div class="review-item"><p class="eyebrow">{item.component} / {t(item.field)}</p><p class="mono">{t(String(item.before))} → {t(String(item.after))}</p></div>
+            <div class="review-item"><p class="eyebrow">{t(item.component)} / {t(item.field)}</p><p class="mono">{t(String(item.before))} → {t(String(item.after))}</p></div>
           {/each}
           {#if !Object.values(review.changes).some((items) => items.length)}<p class="muted">{t("No changes to deploy.")}</p>{/if}
           <div class="row spread wrap"><span>{t("Daily infrastructure")}</span><strong>{preciseMoney(review.daily_before)} → {preciseMoney(review.daily_after)}</strong></div>
@@ -784,6 +799,9 @@
 {/if}
 
 <style>
+  .edge-legend { margin: 0; padding: 5px 10px 8px; list-style: none; gap: 6px 14px; color: var(--muted); font-size: 11px; }
+  .edge-legend li::before { content: ''; display: inline-block; width: 15px; margin: 0 5px 3px 0; border-top: 2px solid var(--edge-color); }
+  .edge-legend li.dashed::before { border-top-style: dashed; }
   .architecture { min-width: 0; display: grid; grid-template-rows: auto minmax(550px, 1fr) auto; min-height: calc(100dvh - 65px); }
   .topology-header { display: grid; grid-template-columns: .95fr 1.1fr; align-items: center; gap: 12px; min-height: 91px; background: var(--background); padding: 12px 26px; }
   .topology-header h1 { font-size: 26px; margin-top: 5px; }
@@ -805,7 +823,7 @@
   .catalog-item span { min-width: 0; overflow-wrap: anywhere; }
   .search { display: flex; align-items: center; gap: 4px; padding-left: 8px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
   .search :global(input) { border: 0; background: none; min-height: 35px; font-size: 12px; padding-left: 5px; }
-  .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--background); }
+  .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: var(--background); }
   .canvas-bar { z-index: 1; padding: 11px 15px; min-height: 55px; border-bottom: 1px solid var(--border); }
   .request-type { min-width: 0; }
   .request-type select { min-height: 34px; max-width: 185px; }

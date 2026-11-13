@@ -68,6 +68,9 @@ COMPONENTS: dict[Kind, dict] = {
             "storage": number("Storage (GB)", 32, 4, 10000),
             "disk": choice("Storage type", "SSD", "SSD", "NVMe"),
             "connections": number("Connection pool limit", 350, 25, 10000, 25),
+            "search_index": choice(
+                "Message search index", "Disabled", "Disabled", "Enabled"
+            ),
         },
         "description": "Serves persistent reads and writes. Throughput depends on CPU, memory, and disk. The connection pool limits admission.",
     },
@@ -95,7 +98,7 @@ COMPONENTS: dict[Kind, dict] = {
                 "Cacheable reads", "All reads", "All reads", "History only"
             ),
         },
-        "description": "Absorbs repeated reads. Misses follow its outgoing data connections. Writes still reach a primary.",
+        "description": "Serves repeated reads. On a miss, the cache uses its linked data sources or the API's data connections. Writes go directly to a primary database.",
     },
     "limiter": {
         "name": "Rate limiter",
@@ -119,7 +122,7 @@ COMPONENTS: dict[Kind, dict] = {
             "capacity": number("Capacity (jobs)", 30000, 100, 2_000_000, 100),
             "retention": number("Retention (minutes)", 60, 10, 1440, 10),
         },
-        "description": "Buffers background work for workers. Full queues cause failures and old jobs can expire.",
+        "description": "Buffers background jobs such as notifications and media processing. Workers drain the backlog. When capacity is exhausted, new submissions fail.",
     },
     "worker": {
         "name": "Worker",
@@ -128,9 +131,10 @@ COMPONENTS: dict[Kind, dict] = {
         "fields": {
             "instances": number("Instances", 1, 1, 24),
             "cpu": number("vCPU per instance", 2, 1, 32),
+            "memory": number("RAM per instance (GB)", 4, 1, 128),
             "concurrency": number("Concurrency per instance", 10, 1, 200),
         },
-        "description": "Processes queued jobs. Add CPU or concurrency to drain backlogs faster.",
+        "description": "Consumes jobs from connected queues. Instances, CPU, RAM and concurrency limit processing speed. For example, workers can transcode voice messages after upload.",
     },
     "monitor": {
         "name": "Monitoring",
@@ -251,6 +255,7 @@ def feature(
     operation_id: str | None,
     prereq: tuple = ("text",),
     requires: tuple = (),
+    infrastructure: tuple[str, ...] = (),
 ) -> dict:
     return {
         "name": name,
@@ -260,23 +265,63 @@ def feature(
         "operation": operation_id,
         "prereq": prereq,
         "requires": requires,
+        "infrastructure": infrastructure,
     }
 
 
 FEATURES = {
-    "text": feature("Text messaging", 0, 0, 0, None, ()),
-    "groups": feature("Group chats", 650, 12, 0.17, "groups"),
+    "text": feature("Text messaging", 0, 0, 0, None, (), infrastructure=("primary",)),
+    "groups": feature(
+        "Group chats", 650, 12, 0.17, "groups", infrastructure=("primary",)
+    ),
     "images": feature(
-        "Image attachments", 950, 20, 0.23, "upload", requires=("database",)
+        "Image attachments",
+        950,
+        20,
+        0.23,
+        "upload",
+        requires=("database",),
+        infrastructure=("media_storage",),
     ),
     "voice": feature(
-        "Voice messages", 1200, 24, 0.18, "voice", ("images",), ("database",)
+        "Voice messages",
+        1200,
+        24,
+        0.18,
+        "voice",
+        ("images",),
+        ("database",),
+        infrastructure=("media_storage", "background_jobs"),
     ),
-    "search": feature("Message search", 1600, 28, 0.24, "search", ("groups",)),
+    "search": feature(
+        "Message search",
+        1600,
+        28,
+        0.24,
+        "search",
+        ("groups",),
+        infrastructure=("search_index",),
+    ),
     "files": feature(
-        "File sharing", 2000, 36, 0.22, "files", ("images",), ("queue", "worker")
+        "File sharing",
+        2000,
+        36,
+        0.22,
+        "files",
+        ("images",),
+        ("queue", "worker"),
+        infrastructure=("media_storage", "background_jobs"),
     ),
-    "calls": feature("Voice calls", 3100, 48, 0.31, "calls", ("voice",), ("balancer",)),
+    "calls": feature(
+        "Voice calls",
+        3100,
+        48,
+        0.31,
+        "calls",
+        ("voice",),
+        ("balancer",),
+        infrastructure=("signaling",),
+    ),
 }
 
 CAMPAIGNS = {

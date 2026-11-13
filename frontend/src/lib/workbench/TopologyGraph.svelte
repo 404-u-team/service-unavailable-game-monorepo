@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { message, t } from '../i18n.svelte';
+  import { locale, message, t } from '../i18n.svelte';
   import { Background, BackgroundVariant, Controls, MarkerType, MiniMap, Position, SvelteFlow,
     type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
@@ -127,7 +127,7 @@
     const next: CanvasNode[] = [];
     for (const group of diagram.groups) {
       const bounds = groupBoxes.get(group.id);
-      if (!bounds) continue;
+      if (!bounds || hiddenGroups.has(group.id)) continue;
       const members = groupComponents(group, diagram.groups).filter((id) => components[id]);
       const stats = members.flatMap((id) => game.snapshot.components[id] ? [game.snapshot.components[id]] : []);
       const warnings = stats.filter((metric) => !['idle', 'healthy'].includes(metric.status)).length;
@@ -158,8 +158,8 @@
       const tone = status === 'failed' || status === 'overloaded' ? 'bad' : status === 'warning' ? 'warn' : status === 'healthy' || node.kind === 'source' ? 'good' : 'dim';
       const instances = Number(settings.instances ?? 1);
       const meta = node.kind === 'source' ? rps(game.snapshot.metrics.rps)
-        : node.kind === 'api' ? `${instances > 1 ? `${instances}× · ` : ''}${settings.cpu} vCPU · ${settings.memory} GB`
-        : node.kind === 'worker' ? `${instances}× · ${settings.cpu} vCPU`
+        : node.kind === 'api' ? `${instances > 1 ? `${instances}× · ` : ''}${t('{0} vCPU · {1} GB', [num(Number(settings.cpu)), num(Number(settings.memory))])}`
+        : node.kind === 'worker' ? `${instances}× · ${t('{0} vCPU', [num(Number(settings.cpu))])}`
         : node.kind === 'balancer' ? t(String(settings.algorithm)) : t(definition.name);
       const compatible = linkStart && linkStart.id !== node.id ? !connectionError(topology, catalog, linkStart.isTarget
         ? { source: node.id, target: linkStart.id } : { source: linkStart.id, target: node.id }, reconnectKey) : undefined;
@@ -179,7 +179,7 @@
           next.push({
             id: `${node.id}~${i + 1}`, type: 'workbench', ...card,
             position: { x: p.x + (i % 3) * (card.width + 18), y: p.y + 124 + Math.floor(i / 3) * (card.height + 14) },
-            data: { ...base.data, name: t('Instance {0}', [i + 1]), meta: `${settings.cpu} vCPU`, health: t('Cluster member'), change: '', use: undefined, editable: false },
+            data: { ...base.data, name: t('Instance {0}', [i + 1]), meta: t('{0} vCPU', [num(Number(settings.cpu))]), health: t('Cluster member'), change: '', use: undefined, editable: false },
             selectable: false, focusable: false, draggable: false, deletable: false, connectable: false, zIndex: 1
           });
         }
@@ -248,8 +248,11 @@
       const flow = known.length ? known.reduce((sum, value) => sum + value, 0) : undefined;
       const live = item.originals.every((edge) => liveEdges.has(edgeKey(edge)));
       const selected = item.key === edgeSelected;
-      const dim = requestType && (!flow || flow <= 0) && !selected;
-      const color = dim ? '#53636b' : selected || !live ? '#ffb35c' : item.kind === 'telemetry' ? '#8cbdf3' : item.kind === 'replication' ? '#d7aeed' : '#c7f46c';
+      const diagnostic = item.kind === 'telemetry' || item.kind === 'replication';
+      const dim = requestType && !diagnostic && (!flow || flow <= 0) && !selected;
+      const color = dim ? '#53636b' : item.kind === 'telemetry' ? '#8cbdf3' : item.kind === 'replication' ? '#d7aeed'
+        : selected || !live ? '#ffb35c' : ['queries', 'reads', 'cache'].includes(item.kind) ? '#5ed5c6'
+        : ['enqueue', 'jobs'].includes(item.kind) ? '#ffd587' : '#c7f46c';
       const label = flow === undefined || (requestType && !flow) ? (item.aggregated ? `${item.originals.length}×` : undefined) : t('{0}/s', [num(Math.round(flow))]);
       const width = flow === undefined ? 1.7 : Math.min(3.8, 1.6 + flow / 120);
       const old = previous.get(item.key);
@@ -274,8 +277,8 @@
   function trackDrag(dragged: CanvasNode[]) {
     const positions: Record<string, Point> = {};
     for (const item of dragged) {
-      if (item.type === 'workbench') positions[item.id] = project(item.position, item.id, true);
-      else {
+      if (item.type === 'workbench' && components[item.id]) positions[item.id] = project(item.position, item.id, true);
+      else if (item.type === 'groupCard') {
         const group = diagram.groups.find((group) => group.id === item.id);
         if (!group) continue;
         const bounds = groupBoxes.get(group.id);
@@ -292,6 +295,19 @@
       }
     }
     return positions;
+  }
+  function nudge(event: KeyboardEvent) {
+    const delta = { ArrowLeft: [-5, 0], ArrowRight: [5, 0], ArrowUp: [0, -5], ArrowDown: [0, 5] }[event.key];
+    const element = event.target;
+    if (!delta || !(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
+    const dragged = nodes.filter((node) => node.selected && node.draggable);
+    if (!dragged.some((node) => node.id === element.dataset.id)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const scale = event.shiftKey ? 4 : 1;
+    finishMove(trackDrag(dragged.map((node) => ({
+      ...node, position: { x: node.position.x + delta[0] * scale, y: node.position.y + delta[1] * scale }
+    }))));
   }
   const startConnection: OnConnectStart = (_, params) => {
     linkFeedback = '';
@@ -318,11 +334,7 @@
     linkStart = undefined;
     reconnectKey = '';
   };
-</script>
-
-<SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView={!initialViewport} {initialViewport} fitViewOptions={{ padding: .12, maxZoom: compact ? 1 : 1.13 }}
-  minZoom={0.15} maxZoom={2.5} colorMode="dark" attributionPosition="bottom-right"
-  ariaLabelConfig={{
+  const localizedLabels = $derived({
     'controls.ariaLabel': t('Canvas controls'),
     'controls.zoomIn.ariaLabel': t('Zoom in'),
     'controls.zoomOut.ariaLabel': t('Zoom out'),
@@ -331,9 +343,16 @@
     'handle.ariaLabel': t('Connection port'),
     'node.a11yDescription.default': t('Use arrow keys to move the selected node.'),
     'node.a11yDescription.keyboardDisabled': t('Use Enter to select a component.'),
-    'node.a11yDescription.ariaLiveMessage': ({ x, y }) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
+    'node.a11yDescription.ariaLiveMessage': ({ x, y }: Point) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
     'edge.a11yDescription.default': t('Use Enter to select a connection.')
-  }}
+  });
+</script>
+
+{#key locale()}
+<div class="flow-shell" role="presentation" onkeydowncapture={nudge}>
+<SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView={!initialViewport} {initialViewport} fitViewOptions={{ padding: .12, maxZoom: compact ? 1 : 1.13 }}
+  minZoom={0.15} maxZoom={2.5} colorMode="dark" attributionPosition="bottom-right"
+  ariaLabelConfig={localizedLabels}
   autoPanOnConnect={false} nodesConnectable={editable} deleteKey={null} multiSelectionKey={['Control', 'Meta', 'Shift']}
   isValidConnection={valid}
   onbeforeconnect={(connection: FlowConnection) => { if (valid(connection)) connect({ source: connection.source, target: connection.target }); return false; }}
@@ -372,11 +391,14 @@
   <Controls position="bottom-left" showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}
 </SvelteFlow>
+</div>
+{/key}
 {#if linkStart || linkFeedback}
   <p class="link-feedback notice" role="status">{linkStart ? t("Highlighted ports accept this connection.") : message(linkFeedback)}</p>
 {/if}
 
 <style>
+  .flow-shell { position: absolute; inset: 0; }
   .link-feedback { position: absolute; top: 9px; left: 9px; right: 9px; width: fit-content; max-width: calc(100% - 18px); pointer-events: none; background: var(--surface); }
   :global(.svelte-flow) {
     --xy-background-color: var(--background);

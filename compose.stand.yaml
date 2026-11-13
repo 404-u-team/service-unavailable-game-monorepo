@@ -1,0 +1,64 @@
+name: service-unavailable-stand
+
+services:
+  service-unavailable:
+    build: ./frontend
+    environment:
+      CORE_API_URL: http://core-api:8000
+      ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to the public HTTPS origin}
+    networks: [intranet, app]
+    depends_on:
+      core-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3000/api/games/catalog'); if (!r.ok || (await r.json()).diagram_layout !== true) process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  core-api:
+    build: ./backend/core_api
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/core_api
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a long random value}
+      GAME_COOKIE_SECURE: "true"
+    networks: [app, database]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/health', timeout=3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: core_api
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    networks: [database]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "core_api"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+networks:
+  intranet:
+    external: true
+  app:
+    internal: true
+  database:
+    internal: true
+
+volumes:
+  postgres_data:
