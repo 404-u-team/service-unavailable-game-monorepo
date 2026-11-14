@@ -16,6 +16,7 @@ from src.services.games import (
     view,
 )
 from src.simulation.catalog import CAMPAIGNS
+from src.simulation.database import standalone_limits
 from src.simulation.engine import demand, evaluate
 from src.simulation.models import Edge, Game, Kind, Node, Position
 from src.simulation.progression import advance, drill, new_game
@@ -23,7 +24,6 @@ from src.simulation.topology import (
     RuleError,
     config,
     daily_cost,
-    database_capacity,
     inspect_graph,
     topology_cost,
 )
@@ -91,7 +91,7 @@ class SimulationTests(TestCase):
         self.assertEqual(loaded.released, ["text", "images", "voice"])
         self.assertTrue(evaluate(loaded).snapshot.monitored)
         self.assertIn("voice", evaluate(loaded).snapshot.demand)
-        self.assertEqual(database_capacity(config(component(loaded, "db"))), (45, 30))
+        self.assertEqual(standalone_limits(config(component(loaded, "db"))), (45, 30))
         self.assertEqual(evaluate(loaded), evaluate(game))
         self.assertEqual(loaded.history[0].peak_utilization, {})
 
@@ -213,7 +213,7 @@ class SimulationTests(TestCase):
         db.config = {"cpu": 8, "memory": 32, "disk": "NVMe"}
         self.assertGreater(evaluate(game).snapshot.metrics.throughput, base.throughput)
         self.assertGreater(daily_cost(db), base_cost)
-        reads, writes = database_capacity(config(db))
+        reads, writes = standalone_limits(config(db))
         self.assertGreater(reads, writes)
         db.config["cpu"] = 17
         with self.assertRaises(RuleError):

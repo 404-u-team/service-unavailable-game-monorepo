@@ -1,21 +1,28 @@
 <script lang="ts">
-  import { apiMessage, message, t } from '#lib/i18n.svelte.ts';
+  import { apiMessage, locale, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { Activity, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Database, Diamond, GitFork, Radio, Server } from '@lucide/svelte';
+  import { Activity, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Database, Diamond, Download, GitFork, Radio, Server, Upload } from '@lucide/svelte';
   import Language from '#lib/Language.svelte';
   import Brand from '#lib/Brand.svelte';
   import Guide from '#lib/Guide.svelte';
-  import { createGame, loadCatalog, saves as listSaves } from '#lib/api.ts';
-  import { money, num } from '#lib/format.ts';
-  import type { Catalog, Difficulty, Save, Settings } from '#lib/types.ts';
+  import Modal from '#lib/Modal.svelte';
+  import { createGame, downloadSave, importSave, loadCatalog, previewSave, saves as listSaves } from '#lib/api.ts';
+  import { money, num, preciseMoney } from '#lib/format.ts';
+  import type { Catalog, Difficulty, Save, SavePreview, Settings } from '#lib/types.ts';
 
   let saves = $state<Save[]>([]);
   let catalog = $state<Catalog>();
   let loading = $state(true);
   let busy = $state(false);
   let error = $state('');
+  let transferError = $state<unknown>();
+  let exportId = $state('');
+  let importFile = $state<File>();
+  let preview = $state<SavePreview>();
+  let importing = $state(false);
+  let imported = $state<Save>();
   let name = $state('Pulse Messenger');
   let difficulty = $state<Difficulty>('beginner');
   let seed = $state<number>();
@@ -49,6 +56,49 @@
     try { [saves, catalog] = await Promise.all([listSaves(), loadCatalog()]); }
     catch (reason) { error = apiMessage(reason); }
     finally { loading = false; }
+  }
+
+  async function exportGame(id: string) {
+    exportId = id;
+    transferError = undefined;
+    try { await downloadSave(id); }
+    catch (reason) { transferError = reason; }
+    finally { exportId = ''; }
+  }
+
+  async function selectSaveFile(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const selected = input.files?.[0];
+    input.value = '';
+    if (!selected) return;
+    importing = true;
+    imported = undefined;
+    transferError = undefined;
+    try {
+      preview = await previewSave(selected);
+      importFile = selected;
+    } catch (reason) { transferError = reason; }
+    finally { importing = false; }
+  }
+
+  function closeImport() {
+    if (importing) return;
+    preview = undefined;
+    importFile = undefined;
+    transferError = undefined;
+  }
+
+  async function confirmImport() {
+    if (!importFile || importing) return;
+    importing = true;
+    transferError = undefined;
+    try {
+      imported = await importSave(importFile);
+      saves = [imported, ...saves];
+      preview = undefined;
+      importFile = undefined;
+    } catch (reason) { transferError = reason; }
+    finally { importing = false; }
   }
 
   function remember() {
@@ -113,20 +163,65 @@
         <div class="row setup-actions"><a href="/" class="btn large">{t("Cancel")}</a><button class="btn primary large" disabled={busy || loading || !starting}>{busy ? t("Creating game…") : t("Create game")} <ArrowRight size={15} /></button></div>
       </form>
     {:else if current === 'saves'}
-      <div class="intro"><h1>{t("Saved games")}</h1><p class="muted">{t("Open a service to continue playing.")}</p></div>
+      <div class="intro row spread wrap">
+        <div><h1>{t("Saved games")}</h1><p class="muted">{t("Use save files to move a game between browsers or devices.")}</p></div>
+        <label class="btn primary import-file">
+          <Upload size={15} /> {importing && !preview ? t('Checking save…') : t('Import save')}
+          <input type="file" accept=".json,application/json" aria-label={t('Select a save file')}
+            disabled={loading || importing} onchange={selectSaveFile} />
+        </label>
+      </div>
+      {#if transferError && !preview}<p class="notice error" role="alert">{apiMessage(transferError)}</p>{/if}
+      {#if imported}
+        <div class="notice row spread wrap" role="status">
+          <span>{t('Save imported successfully.')}</span>
+          <a class="btn" href={`/game/${imported.id}?view=build`}>{t('Open imported save')}</a>
+        </div>
+      {/if}
       <section class="panel pad stack">
         {#if loading}<p class="muted">{t("Loading saved games…")}</p>
         {:else if !saves.length}<p class="muted">{t("No saved games.")}</p><a href="/?view=new" class="btn primary">{t("New game")}</a>
         {:else}
           {#each saves as save (save.id)}
-            <a class="save-row" href={`/game/${save.id}?view=build`}>
-              <div><strong>{save.name}</strong><small>{t(catalog?.scenarios[save.scenario]?.name ?? save.scenario)} {t("· Day")} {save.day}</small></div>
+            <div class="save-row">
+              <a href={`/game/${save.id}?view=build`} class="row spread">
+                <div><strong>{save.name}</strong><small>{t(catalog?.scenarios[save.scenario]?.name ?? save.scenario)} {t("· Day")} {save.day}</small></div>
+                <ChevronRight size={17} />
+              </a>
               <div><span class="mono">{num(save.audience)} {t("users")}</span><small>{money(save.balance)} {t("balance")}</small></div>
-              <ChevronRight size={17} />
-            </a>
+              <button class="btn" type="button" disabled={Boolean(exportId)} onclick={() => exportGame(save.id)}
+                aria-label={t('Export {0}', [save.name])}>
+                <Download size={15} /> {exportId === save.id ? t('Exporting…') : t('Export')}
+              </button>
+            </div>
           {/each}
         {/if}
       </section>
+      {#if preview}
+        <Modal title={t('Import preview')} close={closeImport}>
+          <div class="stack">
+            <dl class="import-preview">
+              <div><dt>{t('Service name')}</dt><dd>{preview.name}</dd></div>
+              <div><dt>{t('Product scenario')}</dt><dd>{t(catalog?.scenarios[preview.scenario]?.name ?? preview.scenario)}</dd></div>
+              <div><dt>{t('Game day')}</dt><dd>{num(preview.day)}</dd></div>
+              <div><dt>{t('Registered users')}</dt><dd>{num(preview.audience)}</dd></div>
+              <div><dt>{t('Balance')}</dt><dd>{preciseMoney(preview.balance)}</dd></div>
+              <div><dt>{t('Save version')}</dt><dd>{preview.version}</dd></div>
+              {#if preview.exported_at}
+                <div><dt>{t('Export date')}</dt><dd>{new Intl.DateTimeFormat(locale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(preview.exported_at))}</dd></div>
+              {/if}
+            </dl>
+            <p class="muted">{t('Importing this file creates a new save in this browser.')}</p>
+            {#if transferError}<p class="notice error" role="alert">{apiMessage(transferError)}</p>{/if}
+          </div>
+          {#snippet footer()}
+            <div class="row spread wrap">
+              <button class="btn" disabled={importing} onclick={closeImport}>{t('Cancel')}</button>
+              <button class="btn primary" disabled={importing} onclick={confirmImport}>{t('Import as new save')}</button>
+            </div>
+          {/snippet}
+        </Modal>
+      {/if}
     {:else if current === 'guide'}
       <div class="intro"><h1>{t("Guide")}</h1><p class="muted">{t("Components and simulation mechanics")}</p></div>
       {#if catalog}<Guide {catalog} />{:else if loading}<p class="muted">{t("Loading guide…")}</p>{/if}
@@ -221,7 +316,22 @@
   .seed { font-size: 12px; }
   .seed-field { max-width: 155px; }
   .notice { margin-bottom: 16px; }
-  .save-row { display: grid; grid-template-columns: 1fr auto auto; gap: 15px; align-items: center; }
+  .save-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 15px; align-items: center; }
+  .save-row > a { min-width: 0; overflow-wrap: anywhere; }
+  .save-row > a:hover { color: var(--primary); }
+  .save-row > a :global(svg) { flex-shrink: 0; margin-left: 8px; }
+  .import-file { position: relative; cursor: pointer; }
+  .import-file input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: inherit; }
+  .import-file:has(:focus-visible) { outline: 2px solid var(--primary); outline-offset: 3px; }
+  .import-file:has(:disabled) { opacity: .6; cursor: default; }
+  .import-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+  .import-preview dt { color: var(--muted); font-size: 13px; }
+  .import-preview dd { overflow-wrap: anywhere; }
+  @media (max-width: 530px) {
+    .save-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .save-row > a { grid-column: 1 / -1; }
+    .save-row > button { grid-row: 2; grid-column: 2; }
+  }
   fieldset { min-width: 0; display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
   legend { margin-bottom: 6px; }
   .scenario { display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; }

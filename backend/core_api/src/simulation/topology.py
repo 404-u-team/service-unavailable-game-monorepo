@@ -194,15 +194,6 @@ def config(node: Node) -> dict:
     return defaults(node.kind) | node.config
 
 
-def database_capacity(cfg: dict) -> tuple[float, float]:
-    cpu = (cfg["cpu"] / 2) ** 0.74
-    memory = (cfg["memory"] / 8) ** 0.22
-    disk = 1.45 if cfg["disk"] == "NVMe" else 1.0
-    reads = min(155 * cpu * memory, 420 * disk) * disk
-    writes = min(62 * cpu, 115 * disk) * disk
-    return min(reads, cfg.get("reads", reads)), min(writes, cfg.get("writes", writes))
-
-
 def daily_cost(node: Node) -> float:
     cfg = config(node)
     base = COMPONENTS[node.kind]["monthly"] / DAYS_PER_MONTH

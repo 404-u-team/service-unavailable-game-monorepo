@@ -1,7 +1,7 @@
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 import asyncpg
@@ -29,16 +29,20 @@ class GameRepository:
             owner,
         )
 
-    async def create(self, owner: str, game: Game) -> None:
-        await self.pool.execute(
+    async def create(
+        self, owner: str, game: Game, elapsed: timedelta = timedelta()
+    ) -> datetime | None:
+        return await self.pool.fetchval(
             """
             INSERT INTO games (owner, id, state, clock_at, saved_at)
-            VALUES ($1, $2, $3::jsonb, clock_timestamp(), clock_timestamp())
-            ON CONFLICT (owner, id) DO NOTHING
+            SELECT $1, $2, $3::jsonb, stamp - $4::interval, stamp
+            FROM (SELECT clock_timestamp() AS stamp) AS snapshot
+            ON CONFLICT (owner, id) DO NOTHING RETURNING saved_at
             """,
             owner,
             game.id,
             game.model_dump_json(),
+            elapsed,
         )
 
     @asynccontextmanager

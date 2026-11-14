@@ -1,0 +1,75 @@
+<script lang="ts">
+  import { t } from '../i18n.svelte';
+  import { num, pct } from '../format';
+  import type { ComponentMetrics, DatabaseUpgrade } from '../types';
+
+  let { metric, guide, configureHref, configure, busy = false, showHealthy = false }: {
+    metric: ComponentMetrics;
+    guide: string;
+    configureHref?: string;
+    configure?: () => void;
+    busy?: boolean;
+    showHealthy?: boolean;
+  } = $props();
+  const data = $derived(metric.database);
+  const diagnostic = $derived(data?.diagnostic);
+  const titles = {
+    write_exceeded: 'Database write capacity exceeded',
+    write_pressure: 'Database writes near capacity',
+    resource_pressure: 'Database resources under pressure'
+  };
+  const actions: Record<DatabaseUpgrade, string> = {
+    cpu: 'Increase vCPU to raise read and write processing capacity.',
+    memory: 'Increase RAM to relieve memory pressure and improve read processing.',
+    connections: 'Raise the connection pool limit to admit more reads and writes.',
+    storage: 'Increase storage space to keep accepting writes.',
+    nvme: 'Switch to NVMe to raise the shared disk I/O budget.',
+    legacy: 'Clear the legacy throughput throttles to let hardware set the limit.'
+  };
+</script>
+
+{#if data && (diagnostic || showHealthy)}
+  <div class="stack database-details" class:notice={Boolean(diagnostic)} class:warn={Boolean(diagnostic)}>
+    {#if diagnostic}<strong>{t(titles[diagnostic.level])}</strong>{/if}
+    <dl>
+      <div><dt>{t('Read demand')}</dt><dd>{t('{0} units/s', [num(data.read_demand)])}</dd></div>
+      <div><dt>{t('Disk I/O')}</dt><dd>{pct(metric.utilization['Disk I/O'])}</dd></div>
+      {#if data.write_capacity !== null}
+        <div><dt>{t('Write demand')}</dt><dd>{t('{0} units/s', [num(data.write_demand)])}</dd></div>
+        <div><dt>{t('Sustainable writes at current read load')}</dt><dd>{t('{0} units/s', [num(data.write_capacity)])}</dd></div>
+      {:else}
+        <div><dt>{t('Replication replay demand')}</dt><dd>{t('{0} units/s', [num(data.replication_demand)])}</dd></div>
+        <div><dt>{t('Replication replay throughput')}</dt><dd>{t('{0} units/s', [num(data.replication_throughput)])}</dd></div>
+        {#if data.replication_backlog > 0}
+          <div><dt>{t('Pending replication work')}</dt><dd>{t('{0} units', [num(data.replication_backlog)])}</dd></div>
+          {#if metric.replication_lag == null}<div><dt>{t('Replication lag')}</dt><dd>{t('Replay stalled')}</dd></div>{/if}
+        {/if}
+      {/if}
+    </dl>
+    {#if diagnostic}
+      <p>{t('Resources under pressure')}{#each diagnostic.resources as resource}<span class="resource">{t(resource)} · {pct(metric.utilization[resource] ?? 0)}</span>{/each}</p>
+      {#if diagnostic.level === 'write_exceeded' || diagnostic.level === 'write_pressure'}
+        <p>{t('Application writes stay on the primary. A read replica cannot reduce that write workload.')}</p>
+      {/if}
+      {#if diagnostic.upgrades.length}
+        <ul>{#each diagnostic.upgrades as upgrade}<li>{t(actions[upgrade])}</li>{/each}</ul>
+        {#if configureHref}<a class="btn" href={configureHref}>{t('Edit configuration')}</a>
+        {:else if configure}<button class="btn" disabled={busy} onclick={configure}>{t('Edit configuration')}</button>{/if}
+      {/if}
+      {#if diagnostic.read_options}
+        <p>{t('A cache can remove repeated reads. A read replica can share eligible reads and uses extra disk I/O for replication.')}</p>
+      {/if}
+    {/if}
+    <a href={guide}>{t('Database Guide')}</a>
+  </div>
+{/if}
+
+<style>
+  .database-details { font-size: 13px; overflow-wrap: anywhere; }
+  .database-details dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .database-details dt { color: var(--muted); }
+  .database-details dd { font: 600 13px var(--mono); margin: 0; }
+  .database-details ul { margin: 0; padding-inline-start: 18px; }
+  .resource { display: block; }
+  .database-details a:not(.btn) { color: var(--primary); text-decoration: underline; }
+</style>

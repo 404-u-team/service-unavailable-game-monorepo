@@ -205,6 +205,16 @@ class SaveSummary(Model):
     saved_at: datetime
 
 
+class SavePreview(Model):
+    name: str
+    scenario: str
+    day: int
+    audience: int
+    balance: float
+    version: int
+    exported_at: datetime | None
+
+
 class BusinessPoint(Model):
     tick: int
     audience: int

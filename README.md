@@ -128,6 +128,11 @@ Monitoring links collect diagnostic metrics from their origin. Each linked compo
 
 The resource history chart records peak utilization for components covered by a collector in Service history mode. Gaps show ticks without a recorded reading. Deployment comparisons report monitored resource pressure at the time of the deployment.
 
-A database starts at 155 reads and 62 writes per simulated second on two vCPUs, 8 GB RAM, and SSD. CPU scales both limits with a diminishing return. RAM raises read capacity, and NVMe raises I/O limits at an additional 35% base daily cost. Connection limits can restrict admission. Existing read/write settings are retained as throttles capped by the derived hardware capacity. Replication lag is estimated from replica pressure and primary availability, with an 8% primary write overhead per attached reachable replica.
+A database starts at 155 read and 62 write compute units per simulated second on two vCPUs and 8 GB RAM. Disk I/O has a shared budget. NVMe gives it 45% more headroom at an additional 35% of base daily cost. CPU, RAM, connection pools, storage space and legacy throttles can constrain throughput separately. A replica shares eligible reads and replays committed writes using its own hardware. Each available follower adds 8% of base disk work to primary writes. The in-game **Database Guide** explains the metrics, cache and replica routing, and recommended links.
 
 Press **Ctrl/Cmd + S** to flush layout changes and save, **Space** to pause or resume, and **1**, **2**, or **3** to select 1×, 3×, or 5×. Press **Escape** to close the current dialog or clear a canvas selection.
+
+
+## Portable saves
+
+In **Saved games**, select **Export** to download a JSON file. In another browser or on another device, open **Saved games**, select **Import save**, choose the file, and check the preview. **Import as new save** creates a new copy each time. The file limit is 8 MB. A running save resumes from its exported simulation time when imported. To freeze the game at that point, pause before exporting.

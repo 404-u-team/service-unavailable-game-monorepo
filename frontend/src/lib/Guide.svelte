@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DatabaseGuide from './workbench/DatabaseGuide.svelte';
   import { Check } from '@lucide/svelte';
   import { t } from './i18n.svelte';
   import { connectionKind, connectionLabels } from './workbench/connections';
@@ -30,6 +31,7 @@
       {/if}
     </section>
   {/if}
+  <DatabaseGuide {catalog} />
   <section class="panel pad stack">
     <h2>{t("Component reference")}</h2>
     {#each kinds as kind}
@@ -54,6 +56,8 @@
       <summary>{t("Background processing")}</summary>
       <p>{t("After saving a message or upload, the API can submit a notification or media job to a queue. The request finishes after submission. The job completes when a worker processes it. Database writes and synchronous API work still use their normal capacity.")}</p>
       <p>{t("For example, if 30 jobs per second arrive and workers can process 20, the backlog grows by about 10 jobs per second before expiration and overflow. Increase worker capacity to drain it. A larger queue can absorb a longer burst and allows more jobs to wait.")}</p>
+      <p>{t("Worker throughput per instance is the lowest of 10 jobs/s per vCPU, 3 jobs/s per concurrency slot and 10 jobs/s per GB of RAM. A worker shares that capacity across its connected queues. Jobs expire from the backlog according to retention. Overflow rejects new jobs, which can also reduce the service’s successful request rate.")}</p>
+      <p>{t("Use API → Queue → Worker for Messenger notifications or media processing. Jobs are generated after the synchronous database operation succeeds. Workers do not write back to the database. Queue capacity, worker count and retention leave the primary’s write capacity unchanged. The game has no batching control.")}</p>
     </details>
     <details>
       <summary>{t("Scaling and shared dependencies")}</summary>

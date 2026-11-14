@@ -8,6 +8,7 @@
   import Help from './Help.svelte';
   import { componentNotes } from './details';
   import TopologyGraph from './TopologyGraph.svelte';
+  import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
@@ -19,10 +20,10 @@
   import { ms, num, pct, preciseMoney, rps, when } from '../format';
   import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
-  let { game, catalog, act, busy, error, note, focusId, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
+  let { game, catalog, act, busy, error, note, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
-    note: (interaction: 'inspect' | 'monitor') => void; focusId?: string;
+    note: (interaction: 'inspect' | 'monitor') => void; focusId?: string; openConfiguration?: boolean; guideHref: string;
     savedDiagram: Diagram; saveDiagram: (diagram: Diagram) => void;
     layoutFailed: boolean; retryDiagram: () => void;
   } = $props();
@@ -227,7 +228,10 @@
   ]);
 
   onMount(() => {
-    if (focusId && topology.nodes.some((item) => item.id === focusId)) select(focusId, false);
+    if (focusId && topology.nodes.some((item) => item.id === focusId)) {
+      select(focusId, false);
+      if (openConfiguration) void configure();
+    }
     const query = matchMedia('(max-width: 850px)');
     const update = () => { compact = query.matches; };
     update();
@@ -471,7 +475,7 @@
         <div class="notice stack">
           <strong>{primary ? t('Primary database: {0}', [t(primary.name)]) : t('Connect this replica to a primary database.')}</strong>
           <small>{t('This replica serves ordinary reads from APIs or caches that use its primary. Writes and indexed search go to the primary.')}</small>
-          <small>{t('Replication health: {0}', [t(!primary ? 'Disconnected' : metric?.replication_lag == null ? 'Metrics unavailable' : metric.replication_lag >= 5 ? 'Lagging' : 'Healthy')])}</small>
+          <small>{t('Replication health: {0}', [t(!primary ? 'Disconnected' : !metric ? 'Metrics unavailable' : metric.database?.replication_backlog ? 'Lagging' : metric.replication_lag == null ? 'Metrics unavailable' : 'Healthy')])}</small>
         </div>
       {/if}
       {#if inspectorTab === 'configuration'}
@@ -505,6 +509,12 @@
         </dl>
       {:else if active.kind !== 'source' && active.kind !== 'monitor' && game.production.nodes.some((node) => node.id === active?.id)}
         <p class="muted">{t("Component metrics require a linked Monitoring collector.")}</p>
+      {/if}
+      {#if metric?.database}
+        <DatabaseDiagnostics {metric} guide={guideHref} {configure} {busy} showHealthy={inspectorTab === 'metrics'} />
+      {:else if !metric && (active.kind === 'database' || active.kind === 'replica') &&
+        game.production.nodes.some((node) => node.id === selected) && metrics.errors > 0}
+        <p class="muted">{t('{0} requests per second are failing across the service.', [num(metrics.errors)])}</p>
       {/if}
       {#if active.kind === 'source'}
         <div class="bars">
@@ -546,7 +556,7 @@
         </div>
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
-      {#if active.kind !== 'source'}<button class="btn primary block large" data-guide={active.kind === 'api' ? 'edit-api' : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
+      {#if active.kind !== 'source' && !metric?.database?.diagnostic?.upgrades.length}<button class="btn primary block large" data-guide={active.kind === 'api' ? 'edit-api' : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
       {#if Number(activeConfig?.instances) > 1}<button class="btn block" aria-pressed={cluster} onclick={() => { cluster = !cluster; if (compact) dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</button>{/if}
       {#if viewingDraft}
         <div class="row wrap"><button class="btn" onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</button>

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import exp
 
 from src.simulation.catalog import (
@@ -9,6 +9,7 @@ from src.simulation.catalog import (
     MINUTES_PER_TICK,
     OPERATIONS,
 )
+from src.simulation.database import WARNING, DatabaseLoad
 from src.simulation.demand import active_incidents, product_settings, workload
 from src.simulation.models import (
     ComponentMetrics,
@@ -19,7 +20,7 @@ from src.simulation.models import (
     Topology,
     Traffic,
 )
-from src.simulation.topology import config, database_capacity, inspect_graph
+from src.simulation.topology import config, inspect_graph
 
 
 @dataclass
@@ -41,6 +42,7 @@ class Evaluation:
     snapshot: Snapshot
     queues: dict[str, float] = field(default_factory=dict)
     storage: dict[str, float] = field(default_factory=dict)
+    replication: dict[str, float] = field(default_factory=dict)
     daily_active_users: float = 0
     ad_impressions_per_second: float = 0
     ad_value_per_impression: float = 0
@@ -104,6 +106,8 @@ def evaluate(
     completed: dict[tuple[str, str], Batch] = {}
     queues = {}
     storage = dict(game.storage)
+    replication = {}
+    committed_writes: dict[str, float] = defaultdict(float)
     rejected = 0.0
     seconds = MINUTES_PER_TICK * 60
 
@@ -147,7 +151,7 @@ def evaluate(
             status = "failed"
         elif maximum > 1.0 or (rate and accepted < rate * 0.97):
             status = "overloaded"
-        elif maximum >= 0.78:
+        elif maximum >= WARNING:
             status = "warning"
         elif not rate:
             status = "idle"
@@ -165,6 +169,11 @@ def evaluate(
         for node in topology.nodes
         if node.kind in {"api", "replica"}
     }
+
+    followers: dict[str, int] = defaultdict(int)
+    for node_id, primary in primary_for.items():
+        if primary and graph.nodes[node_id].kind == "replica" and not failures[node_id]:
+            followers[primary] += 1
 
     def read_targets(api: str, source: str) -> list[str]:
         primary = primary_for.get(api)
@@ -186,9 +195,9 @@ def evaluate(
 
     # Cache misses can return to the originating API's data connections, so
     # evaluate all caches before their possible read destinations.
-    data_kinds = {"database", "replica"}
+    data_order = {"database": 1, "replica": 2}
     for node_id in sorted(
-        graph.order, key=lambda item: graph.nodes[item].kind in data_kinds
+        graph.order, key=lambda item: data_order.get(graph.nodes[item].kind, 0)
     ):
         node = graph.nodes[node_id]
         kind = node.kind
@@ -243,59 +252,45 @@ def evaluate(
             }
             base = 3
         elif kind in {"database", "replica"}:
-            read_capacity, write_capacity = database_capacity(cfg)
-            reads = load("read")
-            writes = load("write")
-            usage = {
-                "Reads": reads / read_capacity,
-                "RAM": (0.8 + reads * 0.014 + writes * 0.02) / cfg["memory"],
-                "Connections": (reads + writes) / cfg["connections"],
-            }
-            if kind == "database":
-                followers = sum(
-                    primary_for.get(source) == node_id
-                    and graph.nodes[source].kind == "replica"
-                    and not failures[source]
-                    for source in primary_for
-                )
-                indexing = 0.20 if cfg["search_index"] == "Enabled" else 0
-                usage["Writes"] = (
-                    writes * (1 + 0.08 * followers + indexing) / write_capacity
-                )
-                usage["Disk I/O"] = 0.46 * usage["Reads"] + 0.77 * usage["Writes"]
-                details["storage_used"] = game.storage.get(node_id, 0)
-                usage["Storage"] = details["storage_used"] / cfg["storage"]
-            else:
-                primary = primary_for[node_id]
+            primary = primary_for[node_id] if kind == "replica" else None
+            pending = 0.0
+            if kind == "replica":
                 if not primary:
                     capacity = 0
                 else:
-                    stale = bool(failures[primary] or failures[node_id])
-                    details["replication_lag"] = (
-                        30.0
-                        if stale
-                        else round(
-                            0.2
-                            + 1.8
-                            * (reads / read_capacity) ** 2
-                            / max(factors[primary] * factor, 0.1),
-                            2,
-                        )
+                    pending = (
+                        game.replication.get(node_id, 0)
+                        + committed_writes[primary] * seconds
                     )
+            database = DatabaseLoad(
+                cfg=cfg,
+                reads=load("read"),
+                writes=load("write") if kind == "database" else pending / seconds,
+                factor=capacity,
+                followers=followers[node_id],
+                primary=kind == "database",
+                stored=game.storage.get(node_id, 0),
+                storage_rate=load("storage") if kind == "database" else 0,
+            )
+            if kind == "database":
+                details["storage_used"] = database.stored
             base = 21
         elif kind == "cache":
             usage = {"CPU": rate / (160 + cfg["memory"] * 35)}
             base = 4
 
-        usage = {
-            key: value
-            / (
-                max(instances, 1)
-                if key == "RAM" and kind == "api"
-                else max(capacity, 0.001)
-            )
-            for key, value in usage.items()
-        }
+        if kind in data_order:
+            usage = database.utilization()
+        else:
+            usage = {
+                key: value
+                / (
+                    max(instances, 1)
+                    if key == "RAM" and kind == "api"
+                    else max(capacity, 0.001)
+                )
+                for key, value in usage.items()
+            }
         pressure = max((v for key, v in usage.items() if key != "Storage"), default=0)
         share = min(1.0, 1 / max(pressure, 1)) if capacity else 0
         latency = base * (1 + 2.2 * min(pressure, 1.8) ** 3)
@@ -313,9 +308,49 @@ def evaluate(
 
         write_share = 1.0
         if kind == "database":
-            free = max(0, cfg["storage"] - details["storage_used"])
-            additional = load("storage") * share * seconds
+            free = max(0, cfg["storage"] - database.stored)
+            additional = database.storage_rate * share * seconds
             write_share = min(1, free / additional) if additional else float(free > 0)
+
+        if kind in data_order:
+            replayed = 0.0
+            if kind == "replica" and primary:
+                replayed = database.writes * share
+                remaining = max(0.0, pending - replayed * seconds)
+                replication[node_id] = remaining
+                if replayed or not remaining:
+                    details["replication_lag"] = round(
+                        0.2 + (remaining / replayed if replayed else 0), 2
+                    )
+            telemetry = database.telemetry(usage, replayed)
+            telemetry.replication_backlog = replication.get(node_id, 0.0)
+            if kind == "database" and telemetry.diagnostic:
+                # Only suggest offloading actual eligible traffic from this primary.
+                eligible = sum(
+                    operations[op]["read"] * batch.rate
+                    for (op, _), batch in cohorts.items()
+                    if not operations[op]["write"]
+                    and "search_index" not in enforced.get(op, ())
+                )
+                without_eligible = replace(
+                    database, reads=max(0, database.reads - eligible)
+                )
+                before = pressure
+                after = max(
+                    v
+                    for key, v in without_eligible.utilization().items()
+                    if key != "Storage"
+                )
+                telemetry.diagnostic.read_options = (
+                    eligible > 0
+                    and before >= WARNING
+                    and (after < before - 0.01)
+                    and (
+                        telemetry.diagnostic.level != "write_exceeded"
+                        or without_eligible.sustainable_writes() >= database.writes
+                    )
+                )
+            details["database"] = telemetry
 
         accepted_total = 0.0
         cache_hits = 0.0
@@ -336,6 +371,7 @@ def evaluate(
             if kind in {"database", "replica"}:
                 add(completed, key, accepted, total_latency)
                 if kind == "database":
+                    committed_writes[node_id] += accepted * operation["write"]
                     storage[node_id] = (
                         storage.get(node_id, 0)
                         + accepted * operation["storage"] * seconds
@@ -625,13 +661,16 @@ def evaluate(
     )
     ad_share = ad_success * rollout / workloads["ad"] if workloads.get("ad") else 0
     return Evaluation(
-        snapshot,
-        queues,
-        storage,
-        activity.active_users,
-        ad_success * rollout,
-        activity.ad_value_per_impression,
-        {key: rate * ad_share for key, rate in activity.regional_ad_rates.items()},
+        snapshot=snapshot,
+        queues=queues,
+        storage=storage,
+        replication=replication,
+        daily_active_users=activity.active_users,
+        ad_impressions_per_second=ad_success * rollout,
+        ad_value_per_impression=activity.ad_value_per_impression,
+        regional_ad_rates={
+            key: rate * ad_share for key, rate in activity.regional_ad_rates.items()
+        },
     )
 
 

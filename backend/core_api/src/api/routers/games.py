@@ -1,4 +1,4 @@
-from asyncio import timeout
+from asyncio import timeout, to_thread
 from datetime import UTC, datetime, timedelta
 from json import dumps
 from typing import Annotated, Literal
@@ -37,6 +37,7 @@ from src.api.game_schemas import (
     OnboardingAction,
     PatchDiagram,
     ProductAction,
+    SavePreview,
     SaveSummary,
     SettingsAction,
     TutorialAction,
@@ -71,6 +72,12 @@ from src.services.markets import (
     develop_language,
     market_action,
     targeted_campaign,
+)
+from src.services.save_files import (
+    MAX_SAVE_BYTES,
+    SaveFileV1,
+    export_file,
+    parse_save_file,
 )
 from src.simulation.catalog import (
     ALLOWED,
@@ -205,6 +212,52 @@ async def create_game(body: CreateGame, owner_id: Owner, service: Service):
         raise game_errors(error) from error
 
 
+async def read_save_upload(request: Request) -> SaveFileV1:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_SAVE_BYTES:
+            raise HTTPException(
+                413,
+                "The save file is larger than 8 MB.",
+                headers={"X-Game-Error-Code": "save_file_too_large"},
+            )
+        body.extend(chunk)
+    try:
+        return await to_thread(parse_save_file, body)
+    except RuleError as error:
+        raise game_errors(error) from error
+
+
+@router.post("/import/preview", response_model=SavePreview)
+async def preview_import(request: Request):
+    return (await read_save_upload(request)).preview()
+
+
+@router.post("/import", response_model=SaveSummary, status_code=201)
+async def import_save(request: Request, owner_id: Owner, service: Service):
+    save = await read_save_upload(request)
+    return await service.import_game(owner_id, save.game)
+
+
+@router.get("/{game_id}/export")
+async def export_save(game_id: UUID, owner_id: Owner, service: Service):
+    try:
+        filename, save = await service.read(
+            owner_id, game_id, lambda game, _: export_file(game), capture_clock=True
+        )
+    except SaveNotFound as error:
+        raise game_errors(error) from error
+    return Response(
+        save.model_dump_json(),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get("/{game_id}", response_model=GameView)
 async def get_game(game_id: UUID, owner_id: Owner, service: Service):
     try:
@@ -235,8 +288,8 @@ async def game_live(socket: WebSocket, game_id: UUID, service: Service):
             state = await service.read(
                 owner_id,
                 game_id,
-                lambda game, saved_at: (
-                    view(game, saved_at) if saved_at != version else None
+                lambda game, saved_at, previous_version=version: (
+                    view(game, saved_at) if saved_at != previous_version else None
                 ),
             )
             if state is not None:

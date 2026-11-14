@@ -113,6 +113,23 @@ class Metrics(Model):
     rejected: float = 0
 
 
+class DatabaseDiagnostic(Model):
+    level: Literal["write_exceeded", "write_pressure", "resource_pressure"]
+    resources: list[str]
+    upgrades: list[Literal["cpu", "memory", "connections", "storage", "nvme", "legacy"]]
+    read_options: bool = False
+
+
+class DatabaseTelemetry(Model):
+    read_demand: float
+    write_demand: float
+    write_capacity: float | None
+    replication_demand: float = 0
+    replication_throughput: float = 0
+    replication_backlog: float = 0
+    diagnostic: DatabaseDiagnostic | None = None
+
+
 class ComponentMetrics(Model):
     status: Literal["healthy", "warning", "overloaded", "failed", "idle"]
     rps: float
@@ -127,6 +144,7 @@ class ComponentMetrics(Model):
     active_instances: float | None = None
     storage_used: float | None = None
     replication_lag: float | None = None
+    database: DatabaseTelemetry | None = None
 
 
 class Traffic(Model):
@@ -354,6 +372,7 @@ class Game(Model):
     history: list[HistoryPoint] = Field(default_factory=list)
     queues: dict[str, float] = Field(default_factory=dict)
     storage: dict[str, float] = Field(default_factory=lambda: {"db": 2.0})
+    replication: dict[NodeId, float] = Field(default_factory=dict)
     settings: GameSettings = Field(default_factory=GameSettings)
     tutorial: int = 0
     onboarding: Onboarding | None = None

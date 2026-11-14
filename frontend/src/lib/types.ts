@@ -11,10 +11,20 @@ export type DiagramGroup = { id: string; name: string; members: string[]; collap
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };
 export type Metrics = { rps: number; throughput: number; availability: number; latency: number; errors: number; rejected: number };
+export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'nvme' | 'legacy';
+export type DatabaseTelemetry = {
+  read_demand: number; write_demand: number; write_capacity: number | null;
+  replication_demand: number; replication_throughput: number; replication_backlog: number;
+  diagnostic: {
+    level: 'write_exceeded' | 'write_pressure' | 'resource_pressure';
+    resources: string[]; upgrades: DatabaseUpgrade[]; read_options: boolean;
+  } | null;
+};
 export type ComponentMetrics = {
   status: 'healthy' | 'warning' | 'overloaded' | 'failed' | 'idle';
   rps: number; throughput: number; latency: number; utilization: Record<string, number>;
   cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null; replication_lag: number | null;
+  database?: DatabaseTelemetry | null;
   queue_wait_minutes: number | null; jobs_dropped: number | null; jobs_expired: number | null;
 };
 export type MonitorCoverage = { capacity: number; history: boolean; covered: string[]; dropped: string[]; failed: boolean };
@@ -94,4 +104,8 @@ export type Review = {
   revision: number; errors: string[]; warnings: string[]; changes: Record<string, string[]>;
   details: { component: string; field: string; before: Setting; after: Setting }[];
   daily_before: number; daily_after: number; install: number; forecast: Forecast | null;
+};
+
+export type SavePreview = Pick<Save, 'name' | 'scenario' | 'day' | 'audience' | 'balance'> & {
+  version: number; exported_at: string | null;
 };

@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from math import floor
 from random import SystemRandom
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
@@ -130,7 +130,12 @@ class GameService:
         return await self.read(owner, request.id, view)
 
     async def read[T](
-        self, owner: str, game_id: UUID, project: Callable[[Game, datetime], T]
+        self,
+        owner: str,
+        game_id: UUID,
+        project: Callable[[Game, datetime], T],
+        *,
+        capture_clock: bool = False,
     ) -> T:
         async with self.repository.lock(owner, game_id) as (connection, row):
             game = self.repository.restore(row)
@@ -140,7 +145,36 @@ class GameService:
             if ticks:
                 saved_at = now
                 await self.repository.save(connection, owner, game, anchor, saved_at)
+            if capture_clock and game.speed:
+                game.clock_fraction = min(
+                    (now - anchor).total_seconds() * game.speed / SECONDS_PER_TICK,
+                    0.999999,
+                )
             return project(game, saved_at)
+
+    async def import_game(self, owner: str, snapshot: Game) -> SaveSummary:
+        game = snapshot.model_copy(update={"id": uuid4()})
+        elapsed = (
+            timedelta(seconds=game.clock_fraction * SECONDS_PER_TICK / game.speed)
+            if game.speed
+            else timedelta()
+        )
+        if game.speed:
+            game.clock_fraction = 0
+        saved_at = await self.repository.create(owner, game, elapsed)
+        if saved_at is None:
+            raise RuntimeError("Generated save ID already exists")
+        return SaveSummary(
+            id=game.id,
+            name=game.name,
+            scenario=game.scenario,
+            tick=game.tick,
+            day=(game.start_minute + game.tick * MINUTES_PER_TICK) // MINUTES_PER_DAY
+            + 1,
+            audience=round(game.audience),
+            balance=game.balance,
+            saved_at=saved_at,
+        )
 
     async def mutate(
         self, owner: str, game_id: UUID, request: Action, scope: str, change: Mutation
@@ -463,6 +497,18 @@ def deploy(
         )
     )
     game.deployments = game.deployments[-20:]
+    previous_graph, next_graph = (
+        inspect_graph(game.production),
+        inspect_graph(candidate),
+    )
+    game.replication = {
+        replica: backlog
+        for replica, backlog in game.replication.items()
+        if replica in next_graph.nodes
+        and next_graph.nodes[replica].kind == "replica"
+        and next_graph.primaries(replica)
+        and next_graph.primaries(replica) == previous_graph.primaries(replica)
+    }
     game.production = candidate
     game.draft = None
     game.revision += 1

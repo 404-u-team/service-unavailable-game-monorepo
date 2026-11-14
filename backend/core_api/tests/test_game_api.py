@@ -33,6 +33,20 @@ def call(client, path="", method="GET", payload=None):
             return error.code, json.load(error)
 
 
+def file_request(client, path, raw=None):
+    request = Request(
+        f"{API_URL}/api/games{path}",
+        raw,
+        {"Content-Type": "application/json"} if raw is not None else {},
+    )
+    try:
+        with client.open(request, timeout=15) as response:
+            return response.status, response.headers, response.read()
+    except HTTPError as error:
+        with error:
+            return error.code, error.headers, error.read()
+
+
 def action(**kwargs):
     return {"request_id": str(uuid4()), **kwargs}
 
@@ -91,6 +105,70 @@ class GameApiTests(TestCase):
             payload=self.create_body | {"scenario": "social"},
         )
         self.assertEqual(status, 422, error)
+
+    def test_portable_save_transfer_uses_new_owner_and_preserves_state(self):
+        draft = call(self.client, self.path + "/draft", "POST", action(revision=0))[1]
+        diagram = {
+            "positions": {"db": {"x": 900, "y": 200}},
+            "routes": {"api:db": [{"x": 800, "y": 210}]},
+            "groups": [
+                {"id": "g", "name": "Storage", "members": ["db"], "collapsed": True}
+            ],
+        }
+        updated = call(
+            self.client, self.path + "/diagram", "PUT", action(diagram=diagram)
+        )[1]
+        self.assertEqual(updated["draft"], draft["draft"])
+        call(self.client, self.path + "/campaigns/community", "POST", action())
+        code, headers, raw = file_request(self.client, self.path + "/export")
+        self.assertEqual(code, 200)
+        self.assertRegex(
+            headers["Content-Disposition"],
+            r'attachment; filename="service-unavailable-integration-messenger-.*\.json"',
+        )
+        exported = json.loads(raw)
+        self.assertEqual(set(exported), {"format", "version", "exported_at", "game"})
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
+        recipient = session()
+        self.assertEqual(file_request(recipient, self.path + "/export")[0], 404)
+        self.assertEqual(file_request(recipient, "/import/preview", raw)[0], 200)
+        self.assertEqual(call(recipient)[1], [])
+        imports = []
+        for _ in range(2):
+            status, _, content = file_request(recipient, "/import", raw)
+            self.assertEqual(status, 201, content)
+            copy = json.loads(content)
+            imports.append(copy["id"])
+            self.assertNotEqual(copy["id"], self.game["id"])
+            self.assertEqual(file_request(self.client, f"/{copy['id']}/export")[0], 404)
+            status, _, reexported = file_request(recipient, f"/{copy['id']}/export")
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(reexported)["game"], exported["game"] | {"id": copy["id"]}
+            )
+        self.assertEqual(len(set(imports)), 2)
+        self.assertEqual(len(call(recipient)[1]), 2)
+        self.assertEqual(len(call(self.client)[1]), 1)
+
+    def test_invalid_upload_is_rejected_on_preview_and_confirmation(self):
+        _, _, file = file_request(self.client, self.path + "/export")
+        data = json.loads(file)
+        unknown_version = json.dumps(data | {"version": 2}).encode()
+        data["game"].pop("production")
+        incomplete = json.dumps(data).encode()
+        for raw, expected, code in (
+            (b"invalid", 422, "save_file_json"),
+            (incomplete, 422, "save_file_invalid"),
+            (unknown_version, 422, "save_file_version"),
+            (b" " * (8 * 1024 * 1024 + 1), 413, "save_file_too_large"),
+        ):
+            for path in ("/import/preview", "/import"):
+                with self.subTest(path=path, error=code):
+                    status, headers, _ = file_request(self.client, path, raw)
+                    self.assertEqual(status, expected)
+                    self.assertEqual(headers["X-Game-Error-Code"], code)
+        self.assertEqual(len(call(self.client)[1]), 1)
 
     def test_voice_release_revalidates_production_and_generates_worker_load(self):
         def mutate(path, method="POST", **body):

@@ -227,6 +227,7 @@ def advance(game: Game, steps: int) -> None:
         result = evaluate(game)
         game.queues = result.queues
         game.storage = result.storage
+        game.replication = result.replication
         metrics = result.snapshot.metrics
         for event in game.incidents:
             if event.resolution is None:

@@ -196,7 +196,17 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   expect(constrained.snapshot.components.db.status).toBe('overloaded');
   expect(constrained.snapshot.components.api).toBeUndefined();
 
-  config = await editDatabase();
+  await page.goto(`/game/${id}?view=monitor`);
+  const diagnosis = page.locator('[data-guide="diagnostics"]');
+  await expect(diagnosis.getByText('Database write capacity exceeded')).toBeVisible();
+  await expect(diagnosis.getByText('Sustainable writes at current read load')).toBeVisible();
+  await expect(diagnosis.getByText('Increase vCPU to raise read and write processing capacity.')).toBeVisible();
+  await diagnosis.getByRole('link', { name: 'Database Guide' }).click();
+  await expect(page.getByRole('heading', { name: 'Cache versus read replica' })).toBeVisible();
+  await page.goto(`/game/${id}?view=monitor`);
+  await diagnosis.getByRole('link', { name: 'Edit configuration' }).click();
+  config = page.getByRole('dialog', { name: 'Component configuration' });
+  await expect(config).toBeVisible();
   await config.getByLabel('Connection pool limit', { exact: true }).fill('700');
   let releaseForecast!: () => void;
   let forecastStarted!: () => void;
