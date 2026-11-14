@@ -264,7 +264,7 @@
           <Architecture {game} {catalog} {act} {busy} {error} {note} {saveDiagram} {layoutFailed}
             retryDiagram={() => { if (game) void layout?.retry(game.diagram); }} savedDiagram={pendingDiagram ?? game.diagram}
             focusId={page.url.searchParams.get('component') ?? undefined}
-            openConfiguration={page.url.searchParams.get('configure') === '1'} guideHref={`${link('guide')}#database-guide`} />
+            openConfiguration={page.url.searchParams.get('configure') === '1'} guideHref={link('guide')} />
         {:else}
           <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} resumeTutorial={() => guide('resume')} />
         {/if}

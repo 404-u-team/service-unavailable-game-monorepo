@@ -24,6 +24,10 @@ def choice(label: str, default: str, *options: str) -> dict:
     return {"label": label, "default": default, "options": list(options)}
 
 
+# Disk throughput multiplier and surcharge as a fraction of base daily cost.
+DATABASE_DISKS = {"SSD": (1.0, 0.0), "NVMe": (1.45, 0.35), "NVMe array": (4.5, 2.4)}
+
+
 COMPONENTS: dict[Kind, dict] = {
     "source": {
         "name": "Traffic source",
@@ -65,10 +69,10 @@ COMPONENTS: dict[Kind, dict] = {
         "category": "Data",
         "monthly": 360,
         "fields": {
-            "cpu": number("Database vCPU", 2, 1, 16),
+            "cpu": number("Database vCPU", 2, 1, 32),
             "memory": number("RAM (GB)", 8, 1, 128),
             "storage": number("Storage (GB)", 32, 4, 10000),
-            "disk": choice("Storage type", "SSD", "SSD", "NVMe"),
+            "disk": choice("Storage type", "SSD", *DATABASE_DISKS),
             "connections": number("Connection pool limit", 350, 25, 10000, 25),
             "search_index": choice(
                 "Message search index", "Disabled", "Disabled", "Enabled"
@@ -83,7 +87,7 @@ COMPONENTS: dict[Kind, dict] = {
         "fields": {
             "cpu": number("Database vCPU", 2, 1, 16),
             "memory": number("RAM (GB)", 8, 1, 128),
-            "disk": choice("Storage type", "SSD", "SSD", "NVMe"),
+            "disk": choice("Storage type", "SSD", *DATABASE_DISKS),
             "connections": number("Connection pool limit", 350, 25, 10000, 25),
         },
         "description": "Serves application reads. Subscribe to one primary database for replication. Reads can lag behind writes.",

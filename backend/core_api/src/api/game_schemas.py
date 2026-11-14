@@ -166,6 +166,15 @@ class Range(Model):
     high: float
 
 
+class DatabaseForecast(Model):
+    current_utilization: dict[str, float]
+    projected_utilization: dict[str, Range]
+    current_write_capacity: float | None
+    current_write_demand: float | None
+    projected_write_capacity: Range | None
+    projected_write_demand: Range | None
+
+
 class Forecast(Model):
     rps: Range
     latency: Range
@@ -173,6 +182,7 @@ class Forecast(Model):
     audience: Range
     confidence: Literal["low", "medium", "high"]
     plan: CampaignPlan | None = None
+    databases: dict[NodeId, DatabaseForecast] = Field(default_factory=dict)
 
 
 class Modification(Model):

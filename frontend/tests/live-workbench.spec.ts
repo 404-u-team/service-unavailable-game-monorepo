@@ -134,6 +134,12 @@ test('raw utilization values render equal meter fills in English and Russian', a
     queue_wait_minutes: null, jobs_dropped: null, jobs_expired: null
   };
   await page.route(`**/api/games/${game.id}`, (route) => route.fulfill({ json: sample }));
+  // Fitting the canvas can persist a viewport and return a newer REST snapshot.
+  await page.route(`**/api/games/${game.id}/diagram`, async (route) => {
+    const response = await route.fetch();
+    const state: Game = await response.json();
+    await route.fulfill({ response, json: { ...state, snapshot: sample.snapshot } });
+  });
   await page.routeWebSocket(`**/api/games/${game.id}/live`, (socket) => {
     socket.send(JSON.stringify({ type: 'snapshot', seq: 1, state: sample }));
   });

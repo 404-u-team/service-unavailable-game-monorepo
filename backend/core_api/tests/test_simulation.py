@@ -215,7 +215,7 @@ class SimulationTests(TestCase):
         self.assertGreater(daily_cost(db), base_cost)
         reads, writes = standalone_limits(config(db))
         self.assertGreater(reads, writes)
-        db.config["cpu"] = 17
+        db.config["cpu"] = 33
         with self.assertRaises(RuleError):
             inspect_graph(game.production)
 

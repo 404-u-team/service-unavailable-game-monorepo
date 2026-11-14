@@ -2,13 +2,15 @@
   import { apiMessage, message, t } from '../i18n.svelte';
   import Modal from '../Modal.svelte';
   import Forecast from './Forecast.svelte';
+  import DatabaseForecast from './DatabaseForecast.svelte';
+  import { fieldArticle, guideArticleHref } from '../guide';
   import Help from './Help.svelte';
   import { fieldNotes } from './details';
   import { preciseMoney } from '../format';
   import type { Component, Definition, Review, Setting } from '../types';
 
-  let { component, definition, busy, error, close, apply, preview }: {
-    component: Component; definition: Definition; busy: boolean; error: string;
+  let { component, definition, busy, error, close, apply, preview, guideHref }: {
+    component: Component; definition: Definition; guideHref: string; busy: boolean; error: string;
     close: () => void; preview: (name: string, settings: Record<string, Setting>) => Promise<Review>; apply: (name: string, settings: Record<string, Setting>) => void;
   } = $props();
   let name = $state('');
@@ -73,7 +75,7 @@
     <div class="form-grid">
       {#each Object.entries(definition.fields) as [key, field]}
         <div class="field">
-          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label><Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} /></div>
+          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label><Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab /></div>
           {#if field.options}
             <select id={`config-${key}`} bind:value={values[key]}>
               {#each field.options as option}<option value={option}>{t(option)}</option>{/each}
@@ -94,11 +96,21 @@
     </button>
     {#if previewError}<p class="notice error" role="alert">{message(previewError)}</p>{/if}
     {#if estimate}
-      <p>{t("Daily infrastructure ·")} {preciseMoney(estimate.daily_before)} → {preciseMoney(estimate.daily_after)}</p>
+      {@const dailyChange = estimate.daily_after - estimate.daily_before}
+      <p>{t('Daily infrastructure ·')} {preciseMoney(estimate.daily_before)} → {preciseMoney(estimate.daily_after)}
+        ({dailyChange > 0 ? '+' : ''}{preciseMoney(dailyChange)})</p>
       <p>{t("Deployment cost ·")} {preciseMoney(estimate.install)}</p>
       {#each estimate.errors as issue}<p class="notice error">{message(issue)}</p>{/each}
       {#each estimate.warnings as issue}<p class="notice warn">{message(issue)}</p>{/each}
-      {#if estimate.forecast}<Forecast forecast={estimate.forecast} />{/if}
+      {#if estimate.forecast}
+        {@const database = estimate.forecast.databases?.[component.id]}
+        <Forecast forecast={estimate.forecast} />
+        {#if database}
+          <DatabaseForecast {database} {guideHref} />
+        {:else if ['database', 'replica'].includes(component.kind)}
+          <p class="muted">{t('Database forecasts require current and draft monitoring coverage.')}</p>
+        {/if}
+      {/if}
     {/if}
   </form>
   {#snippet footer()}

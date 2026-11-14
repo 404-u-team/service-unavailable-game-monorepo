@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from src.simulation.catalog import (
     COMPONENTS,
     CONNECTIONS,
+    DATABASE_DISKS,
     DAYS_PER_MONTH,
     LEGACY_DATABASE_LIMITS,
     defaults,
@@ -214,7 +215,7 @@ def daily_cost(node: Node) -> float:
             "connections",
         }
     )
-    disk = 0.35 if cfg.get("disk") == "NVMe" else 0
+    disk = DATABASE_DISKS[cfg["disk"]][1] if "disk" in cfg else 0
     history = 0.20 if cfg.get("detail") == "Service history" else 0
     return round(base * cfg.get("instances", 1) * (1 + extras + disk + history), 2)
 

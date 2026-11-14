@@ -344,10 +344,10 @@ def evaluate(
                 telemetry.diagnostic.read_options = (
                     eligible > 0
                     and before >= WARNING
-                    and (after < before - 0.01)
                     and (
-                        telemetry.diagnostic.level != "write_exceeded"
-                        or without_eligible.sustainable_writes() >= database.writes
+                        after < before - 0.01
+                        or without_eligible.sustainable_writes()
+                        > (telemetry.write_capacity or 0) + 0.01
                     )
                 )
             details["database"] = telemetry

@@ -8,6 +8,7 @@
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
   import Guide from '../Guide.svelte';
+  import { guideArticleHref } from '../guide';
   import Chart from './Chart.svelte';
   import Finance from './Finance.svelte';
   import ProductSettings from './ProductSettings.svelte';
@@ -149,11 +150,15 @@
     finance: { tag: 'Economy', title: 'Finance', subtitle: 'Balance, income and expenses.' },
     events: { tag: 'Operations / Events', title: 'Events and incidents', subtitle: 'Review service changes and investigate degraded performance.' },
     product: { tag: 'Product / Development', title: 'Product features', subtitle: 'Develop features and review their infrastructure requirements.' },
-    guide: { tag: 'Reference', title: 'Guide', subtitle: 'Tutorials and component mechanics.' },
+    guide: { tag: '', title: 'Guide' },
     settings: { tag: 'Service preferences', title: 'Settings' },
     more: { tag: '', title: 'More', subtitle: 'Service management' }
   };
   const heading = $derived(headers[section]);
+  const helpArticles: Partial<Record<Section, string>> = {
+    home: 'game-basics', monitor: 'monitoring-charts', growth: 'campaigns', finance: 'finances',
+    events: 'availability', product: 'product-features', settings: 'save-files'
+  };
 </script>
 
 {#snippet featureRequirements(feature: Feature)}
@@ -230,10 +235,13 @@
   {#if heading}
     <header class="dash-header row spread">
       <div>{#if heading.tag}<p class="eyebrow">{t(heading.tag)}</p>{/if}<h1>{t(heading.title)}</h1>{#if heading.subtitle}<p class="muted">{t(heading.subtitle)}</p>{/if}</div>
+      <div class="row wrap">
+      {#if helpArticles[section]}<a class="btn" href={guideArticleHref(link('guide'), helpArticles[section]!)}>{t('Guide')}</a>{/if}
       {#if section === 'monitor'}
         <label class="time-range"><span class="sr-only">{t("History range")}</span><select bind:value={range}><option value="24">{t("{0}h", [24])}</option><option value="6">{t("{0}h", [6])}</option><option value="1">{t("{0}h", [1])}</option></select></label>
       {:else if section === 'growth' || section === 'product'}<span class="badge dim">{t("Budget ·")} {money(game.balance)}</span>
       {:else if section === 'events'}<span class="badge {activeEvents.length ? 'warn' : 'dim'}">{activeEvents.length} {t("active")}</span>{/if}
+      </div>
     </header>
   {/if}
 
@@ -315,13 +323,14 @@
           {#each pressured as [id, item]}
             <div class="stack">
               <p><a class="warning" href={link('build', id)}>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</a> · {t(statusLabel[item.status])}{#if !item.database?.diagnostic && Object.keys(item.utilization).length} · {t(Object.entries(item.utilization).sort((a, b) => b[1] - a[1])[0][0])}{/if}</p>
-              <DatabaseDiagnostics metric={item} guide={`${link('guide')}#database-guide`}
+              <DatabaseDiagnostics metric={item} guide={link('guide')}
                 configureHref={game.draft?.nodes.every((node) => node.id !== id) ? undefined : `${link('build', id)}&configure=1`} />
             </div>
           {/each}
         {:else}<p class="muted">{telemetry.length ? t("Monitored components are within their limits.") : t("Only service-level symptoms are available.")}</p>{/if}
         {#if databaseCoverageMissing}
-          <p class="muted">{t('Database causes require deployed Monitoring with a free slot linked from each database.')}</p>
+          <p class="muted">{t('Database causes require deployed Monitoring with a free slot linked from each database.')}
+            <a class="accent" href={guideArticleHref(link('guide'), 'monitoring-setup')}>{t('Monitoring setup')}</a></p>
           {#if metric.errors > 0}<p>{t('{0} requests per second are failing across the service.', [num(metric.errors)])}</p>{/if}
         {/if}
         <a class="btn" href={link('build')}>{t("Open topology")} <ArrowRight size={14} /></a>
@@ -652,6 +661,6 @@
   }
   @media (max-width: 400px) {
     .dashboard .pad { padding: 13px; }
-    .dash-header > .badge { max-width: 100px; }
+    .dash-header .badge { max-width: 100px; }
   }
 </style>

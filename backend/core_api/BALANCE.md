@@ -55,3 +55,35 @@ Figures are means across the three seeds. Net includes one-time development and 
 On Beginner, $4 Premium ended $255.3 ahead after setup with 12.9% audience growth. On Expert, the same setup was $165.0 short of recovering setup costs but earned $59.6 in operating profit on the final day. Standard's $12 plan ended with about 38 paying users versus 802 for the $4 plan. Manual downsizing saved $104 in operating costs relative to the moderate-ad reference over 35 days, with a 50.0% audience decline. Frequent failures cut the mixed plan's net by about $440 and left about 132 fewer paying subscribers.
 
 Scaling is manual through drafts and deployments. Time-based media retention is outside the simulation. Finance retains one game day of detailed samples and cumulative totals. The balance results cover the modeled strategies and seeds above.
+
+## Database write pressure
+
+Run the deterministic workload cases from Core API:
+
+```sh
+poetry run python -m unittest tests.test_database_pressure -v
+```
+
+The reported snapshot can be reproduced to display precision with 251.3 message sends, 172.83 history requests and 10 authentication requests per second. The primary starts with 8 vCPU, 12 GB RAM, a 600-unit pool, NVMe, and the message search index. The fixture gives upstream components enough capacity to deliver this load. It excludes incidents and uses a nearly empty data volume. The results are representative of the observed workload, whose saved topology and feature mix were unavailable.
+
+The primary receives 321.1 read and 253.8 write units per second. CPU is at 176.1% and I/O at 235.4%. Memory (86.4%) and pool admission (95.8%) are close to their limits. The search index adds 20% CPU and disk work per write. The sustainable write estimate reserves disk bandwidth for current reads, leaving `(1 − 321.1 / 609) × 166.75 / 1.2 = 65.7` write units/s. Without eligible reads, even NVMe's write-only ceiling is 139.0 indexed units/s before replication. The old maximum of 16 vCPU also processed only 240.7 indexed write units/s. The prior hardware options could not sustain this mix at its reported write rate.
+
+| Change from baseline | Sustainable writes (units/s) | Service throughput (req/s) | Errors (req/s) | Avg latency (ms) | Infrastructure/day |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| NVMe baseline | 65.7 | 184.4 | 249.7 | 323.6 | $96.76 |
+| SSD | 22.6 | 127.2 | 306.9 | 323.6 | $92.56 |
+| 32 vCPU only | 65.7 | 184.4 | 249.7 | 323.6 | $122.68 |
+| RAM to 32 GB only | 65.7 | 184.4 | 249.7 | 323.6 | $102.16 |
+| Pool to 800 only | 65.7 | 184.4 | 249.7 | 323.6 | $96.76 |
+| NVMe array only | 144.1 | 246.5 | 187.6 | 306.5 | $121.36 |
+| Low-hit cache (21% of history reads) | 80.5 | 213.2 | 220.9 | 279.1 | $101.76 |
+| High-hit cache (91% of history reads) | 130.3 | 303.9 | 130.3 | 175.8 | $104.46 |
+| High-hit cache + one read replica | 125.1 | 300.4 | 133.7 | 167.8 | $126.78 |
+| High-hit cache + two read replicas | 118.7 | 294.4 | 139.7 | 162.3 | $149.10 |
+| Half as many history requests | 101.2 | 165.7 | 182.0 | 323.5 | $96.76 |
+| Reduce demand to 60 write units/s | 65.7 | 240.3 | 0 | 94.8 | $96.76 |
+| NVMe array, 32 vCPU, 16 GB RAM, pool of 800 | 358.0 | 434.1 | 0 | 74.3 | $148.36 |
+
+Daily costs cover the whole test topology. The last row adds $51.60/day to the baseline. The latency model caps its overload penalty, so pushing farther past saturation can increase errors without raising average latency. Moving eligible reads to replicas lowers read demand but each follower adds disk work for committed writes. With a high cache hit rate in this workload, adding followers costs more primary I/O than it saves. Authentication includes writes and stays on the primary.
+
+The NVMe array uses 4.5× SSD's I/O budget with a 240% surcharge on base daily database cost. It offers up to 517.5 write units/s before index, reads and replication. Primary CPU is capped at 32 vCPU with the existing diminishing returns and pricing. Existing SSD and NVMe budgets, compute formulas, routing and saved configurations keep their prior behavior. For larger workloads, reduce demand or offload eligible reads where the numbers show room. The simulation has no dataset-aware sharding, write batching, or replica promotion.

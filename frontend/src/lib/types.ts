@@ -11,13 +11,13 @@ export type DiagramGroup = { id: string; name: string; members: string[]; collap
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };
 export type Metrics = { rps: number; throughput: number; availability: number; latency: number; errors: number; rejected: number };
-export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'nvme' | 'legacy';
+export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'nvme' | 'nvme_array' | 'legacy';
 export type DatabaseTelemetry = {
   read_demand: number; write_demand: number; write_capacity: number | null;
   replication_demand: number; replication_throughput: number; replication_backlog: number;
   diagnostic: {
     level: 'write_exceeded' | 'write_pressure' | 'resource_pressure';
-    resources: string[]; upgrades: DatabaseUpgrade[]; read_options: boolean;
+    resources: string[]; limiting?: string[]; upgrades: DatabaseUpgrade[]; read_options: boolean;
   } | null;
 };
 export type ComponentMetrics = {
@@ -99,7 +99,12 @@ export type Catalog = {
   minutes_per_tick: number; days_per_month: number; premium_price_min: number; premium_price_max: number;
 };
 export type Interval = { low: number; high: number };
-export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high'; plan?: CampaignPlan | null };
+export type DatabaseForecast = {
+  current_utilization: Record<string, number>; projected_utilization: Record<string, Interval>;
+  current_write_capacity: number | null; current_write_demand?: number | null; projected_write_capacity: Interval | null;
+  projected_write_demand: Interval | null;
+};
+export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high'; plan?: CampaignPlan | null; databases?: Record<string, DatabaseForecast> };
 export type Review = {
   revision: number; errors: string[]; warnings: string[]; changes: Record<string, string[]>;
   details: { component: string; field: string; before: Setting; after: Setting }[];

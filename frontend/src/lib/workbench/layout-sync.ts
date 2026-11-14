@@ -90,3 +90,17 @@ export function syncLayout(id: string, display: (diagram?: Diagram) => void,
     }
   };
 }
+
+// The inspector is a browser preference, independent of a save's shared diagram.
+const inspectorKey = 'workbench-inspector-width';
+
+export function inspectorPreference(width?: number | null): number | undefined {
+  try {
+    if (width === null) localStorage.removeItem(inspectorKey);
+    else if (width !== undefined) localStorage.setItem(inspectorKey, String(width));
+    else {
+      const saved = Number(localStorage.getItem(inspectorKey));
+      return Number.isFinite(saved) && saved > 0 ? saved : undefined;
+    }
+  } catch { /* A restricted browser can still resize for the current session. */ }
+}

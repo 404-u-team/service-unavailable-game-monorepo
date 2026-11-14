@@ -13,6 +13,7 @@ from src.api.game_schemas import (
     CampaignPlan,
     CampaignView,
     CreateGame,
+    DatabaseForecast,
     DeploymentView,
     DraftReview,
     Economy,
@@ -322,6 +323,8 @@ def forecast(
     topology: Topology,
     campaign_id: str | None = None,
     plan: CampaignPlan | None = None,
+    *,
+    compare_databases: bool = False,
 ) -> Forecast:
     telemetry = evaluate(game).snapshot
     coverage = len(telemetry.components)
@@ -351,15 +354,59 @@ def forecast(
         audience += campaign["audience"] * 0.8
         boost = campaign["spike"] * 0.85
         assumed.tick += int(campaign["duration"] * 0.65)
-    low = evaluate(
+    low_snapshot = evaluate(
         assumed, topology, audience=audience * (1 - uncertainty), boost=boost
-    ).snapshot.metrics
-    high = evaluate(
+    ).snapshot
+    high_snapshot = evaluate(
         assumed, topology, audience=audience * (1 + uncertainty), boost=boost
-    ).snapshot.metrics
+    ).snapshot
+    low, high = low_snapshot.metrics, high_snapshot.metrics
 
     def span(first: float, second: float) -> Range:
         return Range(low=min(first, second), high=max(first, second))
+
+    databases = {}
+    if compare_databases:
+        for node_id, current in telemetry.components.items():
+            if current.database is None:
+                continue
+            low_node = low_snapshot.components.get(node_id)
+            high_node = high_snapshot.components.get(node_id)
+            if (
+                not low_node
+                or not high_node
+                or not low_node.database
+                or not high_node.database
+            ):
+                continue
+            low_data, high_data = low_node.database, high_node.database
+            databases[node_id] = DatabaseForecast(
+                current_utilization=current.utilization,
+                projected_utilization={
+                    resource: span(
+                        low_node.utilization[resource], high_node.utilization[resource]
+                    )
+                    for resource in high_node.utilization
+                    if resource in low_node.utilization
+                },
+                current_write_capacity=current.database.write_capacity,
+                current_write_demand=(
+                    current.database.write_demand
+                    if current.database.write_capacity is not None
+                    else None
+                ),
+                projected_write_capacity=(
+                    span(low_data.write_capacity, high_data.write_capacity)
+                    if low_data.write_capacity is not None
+                    and high_data.write_capacity is not None
+                    else None
+                ),
+                projected_write_demand=(
+                    span(low_data.write_demand, high_data.write_demand)
+                    if high_data.write_capacity is not None
+                    else None
+                ),
+            )
 
     return Forecast(
         rps=span(low.rps, high.rps),
@@ -368,6 +415,7 @@ def forecast(
         audience=span(audience * (1 - uncertainty), audience * (1 + uncertainty)),
         confidence=confidence,
         plan=plan,
+        databases=databases,
     )
 
 
@@ -395,7 +443,7 @@ def review(game: Game, revision: int, topology: Topology | None = None) -> Draft
             warnings.append(
                 "Live routing changes can cause a brief interruption while traffic shifts."
             )
-        estimate = forecast(game, candidate)
+        estimate = forecast(game, candidate, compare_databases=True)
         if estimate.availability.low < 0.95:
             warnings.append("Some projected load exceeds the draft's service capacity.")
         if install > game.balance:

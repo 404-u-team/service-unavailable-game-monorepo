@@ -223,7 +223,7 @@
         </Modal>
       {/if}
     {:else if current === 'guide'}
-      <div class="intro"><h1>{t("Guide")}</h1><p class="muted">{t("Components and simulation mechanics")}</p></div>
+      <div class="intro"><h1>{t("Guide")}</h1></div>
       {#if catalog}<Guide {catalog} />{:else if loading}<p class="muted">{t("Loading guide…")}</p>{/if}
     {:else if current === 'settings'}
       <div class="intro"><h1>{t("Settings")}</h1><p class="muted">{t("Defaults for new games on this browser.")}</p></div>

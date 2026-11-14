@@ -200,6 +200,11 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   const diagnosis = page.locator('[data-guide="diagnostics"]');
   await expect(diagnosis.getByText('Database write capacity exceeded')).toBeVisible();
   await expect(diagnosis.getByText('Sustainable writes at current read load')).toBeVisible();
+  const diskHelp = diagnosis.getByRole('link', { name: 'Help with Disk I/O' });
+  await diskHelp.click();
+  await expect(page).toHaveURL(/article=database-io#io$/);
+  await expect(page.getByRole('heading', { name: 'Disk I/O utilization' })).toBeVisible();
+  await page.goBack();
   await expect(diagnosis.getByText('Increase vCPU to raise read and write processing capacity.')).toBeVisible();
   await diagnosis.getByRole('link', { name: 'Database Guide' }).click();
   await expect(page.getByRole('heading', { name: 'Cache versus read replica' })).toBeVisible();
@@ -227,6 +232,8 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   await config.getByLabel('Connection pool limit', { exact: true }).fill('700');
   await config.getByRole('button', { name: 'Preview cost and capacity' }).click();
   await expect(config.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
+  await expect(config.getByRole('heading', { name: 'Database upgrade forecast' })).toBeVisible();
+  await expect(config.getByRole('row', { name: /Sustainable writes/ })).toBeVisible();
   await config.getByRole('button', { name: 'Save to draft' }).click();
   await expect(config).toBeHidden();
   await page.getByRole('button', { name: 'Review deployment' }).click();
@@ -287,31 +294,33 @@ test('E · failed instance reduces availability and redundancy restores service'
 test.describe('Mobile workbench', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-  test('F · navigation, component list, mobile inspector and deployment', async ({ page }) => {
+  test('F · navigation, component list, mobile inspector and deployment', async ({ page, browserName }) => {
     const id = await create(page, true);
     const graph = page.locator('.svelte-flow');
     await expect(graph).toBeVisible();
     if (visualDir) await page.screenshot({ path: `${visualDir}/topology-390.png` });
-    const cdp = await page.context().newCDPSession(page);
-    const viewport = graph.locator('.svelte-flow__viewport');
-    const transform = () => viewport.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
-    const bounds = (await graph.boundingBox())!;
-    const x = bounds.x + bounds.width * .16;
-    const y = bounds.y + bounds.height * .66;
-    const pane = graph.locator('.svelte-flow__pane');
-    await expect(pane).toHaveCSS('touch-action', 'none');
-    const before = await transform();
-    await cdp.send('Input.dispatchTouchEvent', {
-      type: 'touchStart', touchPoints: [{ x, y: y - 20, id: 1 }, { x, y: y + 20, id: 2 }]
-    });
-    for (const distance of [30, 45, 60, 75]) {
+    if (browserName === 'chromium') {
+      const cdp = await page.context().newCDPSession(page);
+      const viewport = graph.locator('.svelte-flow__viewport');
+      const transform = () => viewport.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+      const bounds = (await graph.boundingBox())!;
+      const x = bounds.x + bounds.width * .16;
+      const y = bounds.y + bounds.height * .66;
+      const pane = graph.locator('.svelte-flow__pane');
+      await expect(pane).toHaveCSS('touch-action', 'none');
+      const before = await transform();
       await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchMove', touchPoints: [{ x, y: y - distance, id: 1 }, { x, y: y + distance, id: 2 }]
+        type: 'touchStart', touchPoints: [{ x, y: y - 20, id: 1 }, { x, y: y + 20, id: 2 }]
       });
+      for (const distance of [30, 45, 60, 75]) {
+        await cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchMove', touchPoints: [{ x, y: y - distance, id: 1 }, { x, y: y + distance, id: 2 }]
+        });
+      }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await expect.poll(transform).toBeGreaterThan(before);
+      await cdp.detach();
     }
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await expect.poll(transform).toBeGreaterThan(before);
-    await cdp.detach();
     await page.getByRole('button', { name: 'Show component list' }).tap();
     await page.getByRole('button', { name: 'Messenger API API server' }).tap();
     await page.getByRole('button', { name: 'Open component' }).tap();
@@ -756,8 +765,10 @@ test('complex topology supports nested groups, telemetry capacity and configurat
   await page.goto(`/game/${id}?view=build&component=db`);
   await page.getByRole('button', { name: 'Edit configuration' }).click();
   const config = page.getByRole('dialog', { name: 'Component configuration' });
-  await config.getByRole('button', { name: 'Help with Connection pool limit' }).click();
+  const fieldHelp = config.getByRole('link', { name: 'Help with Connection pool limit' });
+  await fieldHelp.focus();
   await expect(config.getByRole('tooltip').filter({ hasText: 'limits' })).toBeVisible();
+  await expect(fieldHelp).toHaveAttribute('href', /article=read-write-throughput#connections$/);
   if (visualDir) await page.screenshot({ path: `${visualDir}/configuration-help.png` });
   await config.getByLabel('Database vCPU', { exact: true }).fill('8');
   await config.getByRole('button', { name: 'Preview cost and capacity' }).click();

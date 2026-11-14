@@ -3,8 +3,8 @@
   import type { Snippet } from 'svelte';
   import { X } from '@lucide/svelte';
 
-  let { title, subtitle, children, footer, close, wide = false }: {
-    title: string; subtitle?: string; children: Snippet; footer?: Snippet; close: () => void; wide?: boolean;
+  let { title, subtitle, children, footer, close, wide = false, fullscreen = false }: {
+    title: string; subtitle?: string; children: Snippet; footer?: Snippet; close: () => void; wide?: boolean; fullscreen?: boolean;
   } = $props();
   let dialog: HTMLDialogElement;
   $effect(() => {
@@ -17,7 +17,7 @@
   });
 </script>
 
-<dialog bind:this={dialog} class:wide aria-label={title} oncancel={(event) => { event.preventDefault(); close(); }}>
+<dialog bind:this={dialog} class:wide class:fullscreen aria-label={title} oncancel={(event) => { event.preventDefault(); close(); }}>
   <header class="row spread">
     <div><h2>{title}</h2>{#if subtitle}<p class="muted">{subtitle}</p>{/if}</div>
     <button class="btn icon-btn ghost" aria-label={t("Close dialog")} onclick={close}><X size={17} /></button>
@@ -28,6 +28,7 @@
 
 <style>
   dialog { color: var(--text); width: min(540px, calc(100% - 28px)); max-height: min(90dvh, 850px); padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 20px 80px #0008; overflow: auto; }
+  dialog.fullscreen { width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; }
   dialog.wide { width: min(828px, calc(100% - 28px)); border-top: 5px solid var(--primary); }
   .wide header, .wide footer, .wide .dialog-body { padding-inline: 28px; }
   .wide header h2 { font-size: 28px; }
@@ -39,7 +40,7 @@
   footer { position: sticky; bottom: 0; border-top: 1px solid var(--border); }
   .dialog-body { padding: 20px 22px; }
   @media (max-width: 600px) {
-    dialog, dialog.wide { width: calc(100% - 22px); max-height: 91dvh; }
+    dialog:not(.fullscreen), dialog.wide { width: calc(100% - 22px); max-height: 91dvh; }
     dialog.wide { width: 100%; max-width: none; height: calc(100dvh - 66px); max-height: none; margin: 66px 0 0; border-inline: 0; border-radius: 0; }
     .wide header, .wide footer, .wide .dialog-body { padding-inline: 17px; }
     header, footer, .dialog-body { padding: 14px 15px; }

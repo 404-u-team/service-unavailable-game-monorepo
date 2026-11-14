@@ -1,85 +1,222 @@
 <script lang="ts">
-  import DatabaseGuide from './workbench/DatabaseGuide.svelte';
-  import { Check } from '@lucide/svelte';
-  import { t } from './i18n.svelte';
+  import { ArrowRight, Check, ChevronRight, List, Search } from '@lucide/svelte';
+  import { page } from '$app/state';
+  import { tick } from 'svelte';
+  import { locale, t } from './i18n.svelte';
+  import { articles, categories, guideArticleHref, searchArticles, type Category } from './guide';
   import { connectionKind, connectionLabels } from './workbench/connections';
-  import { componentNotes } from './workbench/details';
   import { preciseMoney } from './format';
-  import { componentIcon } from './labels';
   import { onboarding } from './workbench/onboarding';
   import type { Catalog, Game, Kind } from './types';
-  let { catalog, game, link, resumeTutorial }: { catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string; resumeTutorial?: () => void } = $props();
+
+  let { catalog, game, link, resumeTutorial }: {
+    catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string; resumeTutorial?: () => void;
+  } = $props();
+  let query = $state('');
+  let mobileNav = $state(false);
+  const base = $derived(game ? `/game/${game.id}?view=guide` : '/?view=guide');
+  const requested = $derived(page.url.searchParams.get('article') ?? (page.url.hash === '#database-guide' ? 'database-scaling' : ''));
+  const active = $derived(Object.hasOwn(articles, requested) ? articles[requested] : undefined);
+  const category = $derived(page.url.searchParams.get('category'));
   const kinds = $derived(Object.keys(catalog.components) as Kind[]);
+  const definition = $derived(active?.kind ? catalog.components[active.kind] : undefined);
+  const results = $derived(searchArticles(query, catalog, t, locale()));
+  const categoriesList = Object.entries(categories) as [Category, string][];
+  const byCategory = (key: Category) => Object.entries(articles).filter(([, article]) => article.category === key);
+  const href = (id: string, section?: string) => guideArticleHref(base, id, section);
+  const categoryHref = (key: Category) => `${base}&category=${key}#category-${key}`;
+
+  function chooseArticle() {
+    query = '';
+    mobileNav = false;
+  }
+
+  $effect(() => {
+    const hash = page.url.hash.slice(1);
+    // A direct link can arrive before the catalog and article markup.
+    if (hash && /^[a-z-]+$/.test(hash) && (active || !requested)) {
+      void tick().then(() => document.getElementById(hash)?.scrollIntoView());
+    }
+  });
 </script>
 
-<div class="stack">
-  {#if game && link}
-    <section class="panel pad stack">
-      <div><p class="eyebrow">{t("Onboarding")}</p><h2>{t("First deployment")}</h2></div>
-      <ol class="steps">
-        {#each onboarding as step, index}
-          <li class:current={index === game.onboarding.step}>
-            <span class="index">{#if index < game.onboarding.step}<Check size={15} />{:else}{index + 1}{/if}</span>
-            <div><strong>{t(step.title)}</strong><p class="muted">{t(step.text)}</p>
-              {#if index === game.onboarding.step && 'section' in step && step.section}<a href={link(step.section)} class="btn">{t("Open")} {step.section === 'build' ? t("topology") : t("telemetry")}</a>{/if}
-            </div>
-          </li>
-        {/each}
-      </ol>
-      {#if game.onboarding.skipped && game.onboarding.step < onboarding.length && game.settings.show_tutorial && resumeTutorial}
-        <div><button class="btn" onclick={resumeTutorial}>{t('Resume tutorial')}</button></div>
+<div class="guide">
+  <div class="guide-header">
+    <label class="row search">
+      <Search size={17} /><span class="sr-only">{t('Search the Guide')}</span>
+      <input type="search" bind:value={query} placeholder={t('Search articles')} />
+    </label>
+    <button class="btn categories-button" aria-expanded={mobileNav} aria-controls="guide-navigation"
+      onclick={() => mobileNav = !mobileNav}><List size={15} /> {t('Categories')}</button>
+  </div>
+  <div class="guide-layout">
+    <nav id="guide-navigation" class="guide-nav" class:mobile-expanded={mobileNav} aria-label={t('Guide navigation')}>
+      {#each categoriesList as [key, title] (key)}
+        <details open={active?.category === key || category === key}>
+          <summary>{t(title)}</summary>
+          <ul>
+            {#each byCategory(key) as [id, article] (id)}
+              <li><a href={href(id)} onclick={chooseArticle} aria-current={requested === id ? 'page' : undefined}>{t(article.title)}</a></li>
+            {/each}
+          </ul>
+        </details>
+      {/each}
+    </nav>
+    <div class="guide-content">
+      {#if query.trim()}
+        <section class="panel pad stack" aria-label={t('Search articles')}>
+          <h2>{t('Search articles')}</h2>
+          <ul class="result-list">
+            {#each results as { id, article } (id)}
+              <li><a href={href(id)} onclick={chooseArticle}><strong>{t(article.title)}</strong><small>{t(categories[article.category])}</small></a></li>
+            {:else}
+              <li class="muted" role="status">{t('No matching articles.')}</li>
+            {/each}
+          </ul>
+        </section>
+      {:else if active}
+        <article class="panel pad stack" id={requested === 'database-scaling' ? 'database-guide' : undefined}>
+          <nav class="breadcrumbs row wrap" aria-label={t('Guide breadcrumbs')}>
+            <a href={base}>{t('Guide')}</a><ChevronRight size={13} />
+            <a href={categoryHref(active.category)}>{t(categories[active.category])}</a><ChevronRight size={13} />
+            <span aria-current="page">{t(active.title)}</span>
+          </nav>
+          <h2>{t(active.title)}</h2>
+          <nav class="toc" aria-label={t('On this page')}>
+            <strong>{t('On this page')}</strong>
+            <ul>
+              {#each active.sections as section (section.id)}
+                <li><a href={href(requested, section.id)}>{t(section.title)}</a></li>
+              {/each}
+            </ul>
+          </nav>
+          {#each active.sections as section (section.id)}
+            {@const kind = active.kind}
+            <section id={section.id} class="article-section stack">
+              <h3>{t(section.title)}</h3>
+              {#if definition && kind}
+                {#if section.id === 'overview'}<p>{t(definition.description)}</p>{/if}
+                {#if section.id === 'connections'}
+                  <dl class="connect-list">
+                    <div><dt>{t('Input connections')}</dt><dd>
+                      {#each kinds.filter((source) => catalog.connections[source].includes(kind)) as source}
+                        <span><a href={href(source)}>{t(articles[source].title)}</a> · {t(connectionLabels[connectionKind(catalog, source, kind)])}</span>
+                      {:else}{t('None')}{/each}
+                    </dd></div>
+                    <div><dt>{t('Output connections')}</dt><dd>
+                      {#each catalog.connections[kind] as target}
+                        <span><a href={href(target)}>{t(articles[target].title)}</a> · {t(connectionLabels[connectionKind(catalog, kind, target)])}</span>
+                      {:else}{t('None')}{/each}
+                    </dd></div>
+                  </dl>
+                {:else if section.id === 'configuration'}
+                  <dl class="fields">
+                    {#each Object.entries(definition.fields) as [key, field] (key)}
+                      <div><dt>{t(field.label)}</dt><dd>{field.options?.map(tOption => t(tOption)).join(' · ') ?? `${field.min}–${field.max}`} <span class="muted">· {t('Default')} {t(String(field.default))}</span></dd></div>
+                    {:else}<div><dd>{t('No configurable settings.')}</dd></div>{/each}
+                  </dl>
+                {:else if section.id === 'simulation'}
+                  <p><strong>{preciseMoney(definition.daily)}</strong> {t('base daily cost')}</p>
+                {/if}
+              {/if}
+              {#each section.body ?? [] as paragraph}<p>{t(paragraph)}</p>{/each}
+              {#if section.diagram}<p class="path-diagram">{t(section.diagram)}</p>{/if}
+              {#if requested === 'game-basics' && section.id === 'first-deployment' && game && link}
+                <ol class="steps">
+                  {#each onboarding as step, index}
+                    <li class:current={index === game.onboarding.step}>
+                      <span class="index">{#if index < game.onboarding.step}<Check size={15} />{:else}{index + 1}{/if}</span>
+                      <div><strong>{t(step.title)}</strong><p class="muted">{t(step.text)}</p>
+                        {#if index === game.onboarding.step && 'section' in step && step.section}<a href={link(step.section)}>{t('Open')} {step.section === 'build' ? t('topology') : t('telemetry')}</a>{/if}
+                      </div>
+                    </li>
+                  {/each}
+                </ol>
+                {#if game.onboarding.skipped && game.onboarding.step < onboarding.length && game.settings.show_tutorial && resumeTutorial}
+                  <div><button class="btn" onclick={resumeTutorial}>{t('Resume tutorial')}</button></div>
+                {/if}
+              {/if}
+            </section>
+          {/each}
+          <section class="related stack">
+            <h3>{t('Related articles')}</h3>
+            <ul>
+              {#each active.related as id (id)}<li><a href={href(id)}>{t(articles[id].title)} <ArrowRight size={13} /></a></li>{/each}
+            </ul>
+          </section>
+        </article>
+      {:else}
+        <section class="panel pad stack">
+          <h2>{t('Browse articles')}</h2>
+          <div class="category-grid">
+            {#each categoriesList as [key, title] (key)}
+              <section class="category stack" id={`category-${key}`}>
+                <h3>{t(title)}</h3>
+                <ul>
+                  {#each byCategory(key) as [id, article] (id)}<li><a href={href(id)}>{t(article.title)}</a></li>{/each}
+                </ul>
+              </section>
+            {/each}
+          </div>
+        </section>
       {/if}
-    </section>
-  {/if}
-  <DatabaseGuide {catalog} />
-  <section class="panel pad stack">
-    <h2>{t("Component reference")}</h2>
-    {#each kinds as kind}
-      {@const definition = catalog.components[kind]}
-      {@const Icon = componentIcon[kind]}
-      <details>
-        <summary><Icon size={17} /> {t(definition.name)}</summary>
-        <p>{t(definition.description)}</p>
-        <p>{preciseMoney(definition.daily)} {t('base daily cost')}</p>
-        <ul>{#each componentNotes[kind] as note}<li>{t(note)}</li>{/each}</ul>
-        <p><strong>{t('Input connections')}</strong></p>
-        <ul>{#each kinds.filter((source) => catalog.connections[source].includes(kind)) as source}
-          <li>{t(catalog.components[source].name)} · {t(connectionLabels[connectionKind(catalog, source, kind)])}</li>
-        {:else}<li>{t('None')}</li>{/each}</ul>
-        <p><strong>{t('Output connections')}</strong></p>
-        <ul>{#each catalog.connections[kind] as target}
-          <li>{t(catalog.components[target].name)} · {t(connectionLabels[connectionKind(catalog, kind, target)])}</li>
-        {:else}<li>{t('None')}</li>{/each}</ul>
-      </details>
-    {/each}
-    <details>
-      <summary>{t("Background processing")}</summary>
-      <p>{t("After saving a message or upload, the API can submit a notification or media job to a queue. The request finishes after submission. The job completes when a worker processes it. Database writes and synchronous API work still use their normal capacity.")}</p>
-      <p>{t("For example, if 30 jobs per second arrive and workers can process 20, the backlog grows by about 10 jobs per second before expiration and overflow. Increase worker capacity to drain it. A larger queue can absorb a longer burst and allows more jobs to wait.")}</p>
-      <p>{t("Worker throughput per instance is the lowest of 10 jobs/s per vCPU, 3 jobs/s per concurrency slot and 10 jobs/s per GB of RAM. A worker shares that capacity across its connected queues. Jobs expire from the backlog according to retention. Overflow rejects new jobs, which can also reduce the service’s successful request rate.")}</p>
-      <p>{t("Use API → Queue → Worker for Messenger notifications or media processing. Jobs are generated after the synchronous database operation succeeds. Workers do not write back to the database. Queue capacity, worker count and retention leave the primary’s write capacity unchanged. The game has no batching control.")}</p>
-    </details>
-    <details>
-      <summary>{t("Scaling and shared dependencies")}</summary>
-      <p>{t("Scale vertically to add resources to one instance or horizontally to add instances. Shared databases still receive the requests handled by all API instances. Check reads and writes independently when evaluating a database bottleneck.")}</p>
-      <p>{t("Each API writes to one primary. Independent primaries hold separate datasets. This simulation does not shard or synchronize them. Connect each read replica to its primary and to an API or cache serving that dataset.")}</p>
-      <p>{t("Caches model independent memory and hit rates. Worker instances share available jobs from their connected queues.")}</p>
-    </details>
-    <details>
-      <summary>{t("Game time and drafts")}</summary>
-      <p>{t("One simulation step advances ten minutes of game time. Changes made in a draft take effect after deployment. Pausing stops audience changes, bills, revenue and active development.")}</p>
-    </details>
-  </section>
+    </div>
+  </div>
 </div>
 
 <style>
-  details { background: var(--rail); border: 1px solid var(--border); border-radius: 8px; padding: 9px 13px; }
-  summary { cursor: pointer; font-weight: 600; min-height: 26px; }
-  summary :global(svg) { vertical-align: middle; color: var(--primary); margin: 0 5px; }
-  details p { margin: 8px 0; }
-  .steps { display: grid; gap: 9px; padding: 0; margin: 0; list-style: none; }
-  .steps li { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; padding: 10px; }
-  .steps li.current { border-radius: 8px; background: var(--rail); }
-  .steps .btn { margin-top: 8px; }
-  .index { display: grid; place-items: center; background: var(--tint); border-radius: 6px; height: 28px; font: 600 13px var(--mono); }
+  .guide { display: grid; gap: 15px; min-width: 0; }
+  .guide-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: var(--rail); border: 1px solid var(--border); border-radius: 10px; }
+  .categories-button { display: none; }
+  .search { width: min(100%, 410px); color: var(--muted); }
+  .search input { min-width: 0; width: 100%; }
+  .guide-layout { display: grid; grid-template-columns: minmax(178px, 235px) minmax(0, 1fr); align-items: start; gap: 16px; }
+  .guide-nav { display: grid; gap: 6px; }
+  details { border: 1px solid var(--border); background: var(--rail); border-radius: 8px; }
+  summary { cursor: pointer; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+  .guide-nav ul { padding: 0 7px 7px; }
+  .guide-nav a { display: block; padding: 6px 8px; border-radius: 5px; font-size: 13px; }
+  a:hover { text-decoration: underline; }
+  .guide-nav a[aria-current] { background: var(--tint); color: var(--primary); }
+  .guide-content { min-width: 0; }
+  .guide-content :is(article, section) { scroll-margin-top: 76px; }
+  ul, dl { margin: 0; padding: 0; }
+  ul { list-style: none; }
+  h2 { margin: 0; }
+  .breadcrumbs { color: var(--muted); font-size: 12px; }
+  .breadcrumbs a, .article-section a, .toc a, .related a, .category a { color: var(--primary); }
+  .toc { border-inline-start: 2px solid var(--primary); background: var(--rail); padding: 10px 14px; }
+  .toc ul { margin-top: 5px; columns: 2 168px; }
+  .toc li { padding-block: 3px; break-inside: avoid; font-size: 13px; }
+  .article-section { border-top: 1px solid var(--border); padding-top: 14px; max-width: 83ch; }
+  .article-section p { line-height: 1.65; }
+  .fields, .connect-list { display: grid; gap: 8px; }
+  .fields > div, .connect-list > div { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(0, 1fr); gap: 8px; padding: 7px 9px; background: var(--rail); border-radius: 6px; }
+  dt { font-weight: 600; }
+  dd { margin: 0; }
+  .connect-list dd span { display: block; }
+  .related ul { display: flex; flex-wrap: wrap; gap: 8px; }
+  .related a { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; }
+  .related { border-top: 1px solid var(--border); padding-top: 14px; }
+  .path-diagram { padding: 12px; background: var(--rail); border: 1px solid var(--border); border-radius: 8px; color: var(--primary); }
+  .result-list { display: grid; gap: 8px; }
+  .result-list a { display: grid; gap: 3px; padding: 10px 12px; background: var(--rail); border: 1px solid var(--border); border-radius: 8px; }
+  .result-list small { color: var(--muted); }
+  .category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); gap: 12px; }
+  .category { background: var(--rail); border: 1px solid var(--border); border-radius: 8px; padding: 13px; }
+  .category li + li { margin-top: 5px; }
+  .steps { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+  .steps li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; padding: 8px; }
+  .steps li.current { background: var(--rail); border-radius: 7px; }
+  .index { display: grid; place-items: center; height: 26px; background: var(--tint); border-radius: 6px; }
+  @media (max-width: 780px) {
+    .guide-layout { grid-template-columns: 1fr; }
+    .guide-nav:not(.mobile-expanded) { display: none; }
+    .categories-button { display: inline-flex; }
+    .guide-nav { grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); align-items: start; }
+    .search { width: auto; flex: 1 1 155px; }
+  }
+  @media (max-width: 450px) {
+    .fields > div, .connect-list > div { grid-template-columns: 1fr; gap: 3px; }
+  }
 </style>

@@ -25,7 +25,7 @@ from src.simulation.models import Diagram, Game, Onboarding
 from src.simulation.progression import advance, drill
 from src.simulation.topology import RuleError
 
-from tests.test_simulation import add_node, fixture, link, monitor
+from tests.test_simulation import add_node, component, fixture, link, monitor
 
 
 class SaveFileTests(TestCase):
@@ -72,6 +72,12 @@ class SaveFileTests(TestCase):
         monitor(game, "db", "replica", "cache")
         advance(game, 12)
         self.assertGreater(game.replication["replica"], 0)
+        self.roundtrip(game)
+
+    def test_high_capacity_database_save(self):
+        game = fixture()
+        component(game, "db").config.update(cpu=32.0, disk="NVMe array")
+        monitor(game, "db")
         self.roundtrip(game)
 
     def test_active_campaigns_and_regional_expansion(self):

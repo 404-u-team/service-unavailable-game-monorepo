@@ -116,7 +116,12 @@ class Metrics(Model):
 class DatabaseDiagnostic(Model):
     level: Literal["write_exceeded", "write_pressure", "resource_pressure"]
     resources: list[str]
-    upgrades: list[Literal["cpu", "memory", "connections", "storage", "nvme", "legacy"]]
+    upgrades: list[
+        Literal[
+            "cpu", "memory", "connections", "storage", "nvme", "nvme_array", "legacy"
+        ]
+    ]
+    limiting: list[str] = Field(default_factory=list)
     read_options: bool = False
 
 
