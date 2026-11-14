@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { ArrowRight, Check, ChevronRight, List, Search } from '@lucide/svelte';
+  import { ArrowRight, ChevronRight, List, Search } from '@lucide/svelte';
   import { page } from '$app/state';
   import { tick } from 'svelte';
   import { locale, t } from './i18n.svelte';
   import { articles, categories, guideArticleHref, searchArticles, type Category } from './guide';
   import { connectionKind, connectionLabels } from './workbench/connections';
   import { preciseMoney } from './format';
-  import { onboarding } from './workbench/onboarding';
+  import { chapters, onboarding, type TutorialAction } from './workbench/onboarding';
+  import TutorialControls from './workbench/TutorialControls.svelte';
   import type { Catalog, Game, Kind } from './types';
 
-  let { catalog, game, link, resumeTutorial }: {
-    catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string; resumeTutorial?: () => void;
+  let { catalog, game, link, busy = false, tutorialAction }: {
+    catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string; busy?: boolean; tutorialAction?: (action: TutorialAction) => void;
   } = $props();
   let query = $state('');
   let mobileNav = $state(false);
@@ -41,6 +42,7 @@
 </script>
 
 <div class="guide">
+  {#if game && tutorialAction}<TutorialControls {game} {busy} change={tutorialAction} />{/if}
   <div class="guide-header">
     <label class="row search">
       <Search size={17} /><span class="sr-only">{t('Search the Guide')}</span>
@@ -121,20 +123,12 @@
               {/if}
               {#each section.body ?? [] as paragraph}<p>{t(paragraph)}</p>{/each}
               {#if section.diagram}<p class="path-diagram">{t(section.diagram)}</p>{/if}
-              {#if requested === 'game-basics' && section.id === 'first-deployment' && game && link}
-                <ol class="steps">
-                  {#each onboarding as step, index}
-                    <li class:current={index === game.onboarding.step}>
-                      <span class="index">{#if index < game.onboarding.step}<Check size={15} />{:else}{index + 1}{/if}</span>
-                      <div><strong>{t(step.title)}</strong><p class="muted">{t(step.text)}</p>
-                        {#if index === game.onboarding.step && 'section' in step && step.section}<a href={link(step.section)}>{t('Open')} {step.section === 'build' ? t('topology') : t('telemetry')}</a>{/if}
-                      </div>
-                    </li>
+              {#if requested === 'game-basics' && section.id === 'first-deployment'}
+                <ul class="steps">
+                  {#each chapters as chapter, index (chapter)}
+                    <li><div><strong>{t(chapter)}</strong><p class="muted">{onboarding.filter((step) => step.chapter === index).map((step) => t(step.title)).join(' · ')}</p></div></li>
                   {/each}
-                </ol>
-                {#if game.onboarding.skipped && game.onboarding.step < onboarding.length && game.settings.show_tutorial && resumeTutorial}
-                  <div><button class="btn" onclick={resumeTutorial}>{t('Resume tutorial')}</button></div>
-                {/if}
+                </ul>
               {/if}
             </section>
           {/each}
@@ -206,9 +200,7 @@
   .category { background: var(--rail); border: 1px solid var(--border); border-radius: 8px; padding: 13px; }
   .category li + li { margin-top: 5px; }
   .steps { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
-  .steps li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; padding: 8px; }
-  .steps li.current { background: var(--rail); border-radius: 7px; }
-  .index { display: grid; place-items: center; height: 26px; background: var(--tint); border-radius: 6px; }
+  .steps li { padding: 8px; }
   @media (max-width: 780px) {
     .guide-layout { grid-template-columns: 1fr; }
     .guide-nav:not(.mobile-expanded) { display: none; }

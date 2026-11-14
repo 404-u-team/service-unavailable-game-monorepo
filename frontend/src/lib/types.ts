@@ -1,3 +1,5 @@
+import type { TutorialProgress } from './workbench/onboarding';
+
 export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
 export type Speed = 0 | 1 | 3 | 5;
 export const difficulties = ['beginner', 'standard', 'expert'] as const;
@@ -82,7 +84,7 @@ export type Game = Save & {
   diagram: Diagram;
   snapshot: Snapshot; history: History[]; business_history: Pick<History, 'tick' | 'audience' | 'balance'>[]; economy: Economy; component_costs: Record<string, number>; draft_costs: Record<string, number>; features: Feature[]; campaigns: Campaign[]; markets: Market[]; languages: ProductLanguage[];
   product: ProductSettings; advertising_estimates: Partial<Record<AdIntensity, AdEstimate>>;
-  incidents: Incident[]; deployments: Deployment[]; settings: Settings; tutorial: number; onboarding: { step: number; furthest: number; skipped: boolean }; peak: Metrics | null;
+  incidents: Incident[]; deployments: Deployment[]; settings: Settings; tutorial: number; onboarding: TutorialProgress; peak: Metrics | null;
 };
 export type Field = { label: string; default: Setting; min: number | null; max: number | null; step: number | null; options: string[] | null };
 export type Definition = { name: string; category: string; monthly: number; daily: number; fields: Record<string, Field>; description: string };

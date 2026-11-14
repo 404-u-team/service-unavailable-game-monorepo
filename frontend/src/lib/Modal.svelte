@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { target } from './workbench/onboarding';
   import { t } from './i18n.svelte';
   import type { Snippet } from 'svelte';
   import { X } from '@lucide/svelte';
@@ -17,13 +18,13 @@
   });
 </script>
 
-<dialog bind:this={dialog} class:wide class:fullscreen aria-label={title} oncancel={(event) => { event.preventDefault(); close(); }}>
-  <header class="row spread">
+<dialog data-tutorial-scroll bind:this={dialog} class:wide class:fullscreen aria-label={title} oncancel={(event) => { event.preventDefault(); close(); }}>
+  <header class="row spread" data-tutorial-obstruction="top">
     <div><h2>{title}</h2>{#if subtitle}<p class="muted">{subtitle}</p>{/if}</div>
-    <button class="btn icon-btn ghost" aria-label={t("Close dialog")} onclick={close}><X size={17} /></button>
+    <button class="btn icon-btn ghost" data-tutorial={target.close} aria-label={t("Close dialog")} onclick={close}><X size={17} /></button>
   </header>
   <div class="dialog-body">{@render children()}</div>
-  {#if footer}<footer>{@render footer()}</footer>{/if}
+  {#if footer}<footer data-tutorial-obstruction="bottom">{@render footer()}</footer>{/if}
 </dialog>
 
 <style>

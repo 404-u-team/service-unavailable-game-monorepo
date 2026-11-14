@@ -22,6 +22,7 @@ from src.services.markets import (
 from src.services.save_files import MAX_SAVE_BYTES, export_file, parse_save_file
 from src.simulation.engine import evaluate
 from src.simulation.models import Diagram, Game, Onboarding
+from src.simulation.onboarding import TutorialStep
 from src.simulation.progression import advance, drill
 from src.simulation.topology import RuleError
 
@@ -129,6 +130,25 @@ class SaveFileTests(TestCase):
             }
         )
         game.onboarding = Onboarding(step=3, furthest=5)
+        self.roundtrip(game)
+
+    def test_portable_tutorial_accepts_legacy_progress_and_round_trips_stable_ids(self):
+        game = fixture()
+        game.onboarding = Onboarding(step=3, furthest=4, skipped=True)
+        _, exported = export_file(game)
+        payload = exported.model_dump(mode="json")
+        del payload["game"]["onboarding"]["step_id"]
+        del payload["game"]["onboarding"]["furthest_id"]
+        self.assertEqual(
+            parse_save_file(json.dumps(payload).encode()).game.onboarding,
+            game.onboarding,
+        )
+        game.onboarding = Onboarding(
+            step=3,
+            furthest=4,
+            step_id=TutorialStep.LINK_COVERAGE,
+            furthest_id=TutorialStep.OPEN_TELEMETRY,
+        )
         self.roundtrip(game)
 
     def test_rejects_invalid_files(self):

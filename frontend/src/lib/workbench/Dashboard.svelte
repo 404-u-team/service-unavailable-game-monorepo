@@ -3,11 +3,13 @@
   import Language from '../Language.svelte';
   import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { ArrowRight, ArrowUpRight, ChevronRight } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
   import Guide from '../Guide.svelte';
+  import TutorialControls from './TutorialControls.svelte';
+  import { nav, target, type TutorialAction } from './onboarding';
   import { guideArticleHref } from '../guide';
   import Chart from './Chart.svelte';
   import Finance from './Finance.svelte';
@@ -20,10 +22,10 @@
   import { clock, duration, money, ms, num, pct, preciseMoney, rps, when } from '../format';
   import type { Catalog, Feature, Game, Forecast, Incident } from '../types';
 
-  let { section, game, catalog, link, act, busy, error, note, resumeTutorial }: {
+  let { section, game, catalog, link, act, busy, error, tutorialAction }: {
     section: Section; game: Game; catalog: Catalog; link: (section: Section, focus?: string) => string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
-    busy: boolean; error: string; resumeTutorial: () => Promise<Game | null> | undefined; note: (interaction: 'inspect' | 'monitor') => void;
+    busy: boolean; error: string; tutorialAction: (action: TutorialAction) => void;
   } = $props();
   let dialog = $state<'campaign' | 'feature' | 'incident' | 'rollback' | 'drill'>();
   let detail = $state('');
@@ -71,8 +73,6 @@
     { label: 'Error rate', value: pct(metric.errors / (metric.rps || 1), 2), detail: t('{0} rate-limited', [rps(metric.rejected)]) },
     { label: 'Availability', value: pct(metric.availability, 2), detail: 'Requests served' }
   ]);
-
-  onMount(() => { if (section === 'monitor') note('monitor'); });
 
   $effect(() => {
     if (section === 'growth') {
@@ -269,7 +269,7 @@
       <section class="panel inset pad stack"><h2>{t("Incident timeline")}</h2>{@render timeline()}<a class="btn" href={link('events')}>{t("View events")} <ArrowRight size={14} /></a></section>
     </div>
     <section class="panel pad stack">
-      <div class="row spread wrap"><h2>{t("Monitoring coverage")}</h2><a class="btn" href={link('build')}>{t("Edit coverage in topology")}</a></div>
+      <div class="row spread wrap"><h2 data-tutorial={target.coverage}>{t("Monitoring coverage")}</h2><a class="btn" href={link('build')}>{t("Edit coverage in topology")}</a></div>
       {#each Object.entries(game.snapshot.monitors ?? {}) as [id, collector]}
         {@const name = game.production.nodes.find((node) => node.id === id)?.name}
         <div class="stack">
@@ -317,8 +317,8 @@
           {/each}
         {:else}<p class="muted">{t("Connect components to Monitoring to inspect utilization and component health.")}</p>{/if}
       </section>
-      <section class="panel pad stack" data-guide="diagnostics">
-        <h2>{t("Diagnostics")}</h2>
+      <section class="panel pad stack" aria-labelledby="telemetry-diagnostics">
+        <h2 id="telemetry-diagnostics">{t("Diagnostics")}</h2>
         {#if pressured.length}
           {#each pressured as [id, item]}
             <div class="stack">
@@ -343,7 +343,7 @@
         <Chart title={t("Registered users")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} time={tickTime} />
       </section>
       <section class="panel inset pad stack">
-        <h2>{t("Growth readiness")}</h2><p class="muted">{t("Projected load during a creator campaign")}</p>
+        <h2 data-tutorial={target.growth}>{t("Growth readiness")}</h2><p class="muted">{t("Projected load during a creator campaign")}</p>
         {#if readiness}
           <strong class="stat">{t('{0}–{1} RPS', [num(readiness.rps.low), num(readiness.rps.high)])}</strong>
           <Meter value={readiness.availability.low} label={t("Forecast minimum availability")} tone={readiness.availability.low < .95 ? 'warn' : 'good'} />
@@ -385,7 +385,7 @@
         <div><h2>{t("Feature catalog")}</h2><p class="muted">{t("Select a feature to review its status and workload.")}</p></div>
         {#each game.features as feature (feature.id)}
           {@const definition = catalog.features[feature.id]}
-          <article class="feature-row" class:active={feature.id === featureId}>
+          <article class="feature-row" data-tutorial={feature.id === 'advertising' ? target.monetization : feature.id === 'premium' ? target.premium : undefined} class:active={feature.id === featureId}>
             <button class="feature-select" aria-pressed={feature.id === featureId} onclick={() => featureId = feature.id}>
               <span class="dot {feature.enabled ? 'accent' : feature.state === 'developing' ? 'warning' : 'muted'}"></span>
               <span><h3>{t(definition.name)}</h3><small>{feature.id === 'premium' ? t('Additional synchronization for subscribers') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger workload")}</small></span>
@@ -443,12 +443,12 @@
       {#if !game.deployments.length}<p class="muted">{t("No deployments yet.")}</p>{/if}
       {#each game.deployments as item (item.id)}
         <div class="event row spread"><div><strong>{message(item.summary)}</strong><small>{gameTime(item.tick)} · {preciseMoney(item.cost)}</small></div><button class="btn" disabled={busy || Boolean(game.draft)} onclick={() => { detail = item.id; dialog = 'rollback'; }}>{t("Review rollback")}</button></div>
-        {#if item.comparison}<details class="event"><summary>{t("View before and after")}</summary><DeploymentComparison comparison={item.comparison} /></details>{/if}
+        {#if item.comparison}<details class="event"><summary data-tutorial={item.id === game.deployments[0]?.id ? target.eventComparison : undefined}>{t("View before and after")}</summary><DeploymentComparison comparison={item.comparison} /></details>{/if}
       {/each}
       {#if game.draft && game.deployments.length}<p class="muted">{t("Discard the current draft to roll back.")}</p>{/if}
     </section>
   {:else if section === 'guide'}
-    <Guide {catalog} {game} {link} {resumeTutorial} />
+    <Guide {catalog} {game} {link} {busy} {tutorialAction} />
   {:else if section === 'settings'}
     <div class="split settings-layout">
       <nav class="panel inset pad settings-tabs" aria-label={t("Settings sections")}>
@@ -466,7 +466,7 @@
             {/each}
           </div></div>
           <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><input type="checkbox" role="switch" checked={game.settings.show_tutorial} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, show_tutorial: event.currentTarget.checked } }, 'PUT')} /></label>
-          {#if game.settings.show_tutorial && game.onboarding.skipped && game.onboarding.step < 9}<button class="btn" disabled={busy} onclick={resumeTutorial}>{t('Resume tutorial')}</button>{/if}
+          <TutorialControls {game} {busy} change={tutorialAction} />
           <div class="stack"><h3>{t('Keyboard shortcuts')}</h3>
             <dl class="breakdown">
               {#each [['Ctrl/Cmd + S', 'Save game'], ['Space', 'Pause or resume'], ['1 / 2 / 3', 'Set speed to 1× / 3× / 5×'], ['Escape', 'Close a dialog or clear selection']] as [key, label]}
@@ -489,7 +489,7 @@
     <div class="stack">
       {#each more as item}
         {@const Icon = sections[item].icon}
-        <a class="event row spread" href={item === 'saves' ? '/?view=saves' : link(item)}>
+        <a class="event row spread" data-tutorial={nav(item)} href={item === 'saves' ? '/?view=saves' : link(item)}>
           <Icon size={20} class="accent" /><span class="more-label"><strong>{t(sections[item].name)}</strong><small>{t(sections[item].description)}</small></span><ChevronRight size={17} />
         </a>
       {/each}

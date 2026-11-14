@@ -4,6 +4,7 @@
     type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { onDestroy, untrack } from 'svelte';
+  import { target } from './onboarding';
   import CanvasViewport from './CanvasViewport.svelte';
   import FlowNode, { type WorkbenchNode } from './FlowNode.svelte';
   import GroupNode, { type GroupFlowNode } from './GroupNode.svelte';
@@ -15,16 +16,16 @@
   import { connectionError, connectionKind, connectionLabels } from './connections';
   import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
-  let { topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
+  let { guideApi, topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
     select, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
-    topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
+    guideApi?: string; topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
     edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
     select: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
     selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
     menu: (event: MouseEvent, id?: string) => void; clear: () => void; cluster: boolean; container: HTMLElement;
-    bindPlacement: (tools?: { place: () => Point; reveal: (point: Point) => void }) => void;
+    bindPlacement: (tools?: { place: () => Point; reveal: (point: Point) => void; revealNode: (id: string) => void }) => void;
     saveViewport: (viewport: Viewport) => void;
   } = $props();
 
@@ -72,6 +73,7 @@
   }
   const initialViewport = untrack(restoreViewport);
   let viewportReady = false;
+  let transientMove = false;
   const card = $derived({ width: compact ? 156 : 167, height: compact ? 86 : 101 });
   let graphSnapshot = $state.raw(untrack(() => game.snapshot));
   $effect(() => { if (!dragging) graphSnapshot = game.snapshot; });
@@ -183,6 +185,7 @@
           health: status ? t(statusLabel[status]) : node.kind === 'source' ? t('Traffic input') : t('Metrics unavailable'),
           change, use, editable: editable && !pending, vertical: compact, compatible,
           input: Position.Left, output: Position.Right },
+        domAttributes: node.id === guideApi && !pending ? { 'data-tutorial': target.api } : undefined,
         selected: selection.includes(node.id), draggable: !pending, deletable: false,
         selectable: !pending, connectable: editable && !pending, ariaLabel: t(node.name), zIndex: 1
       };
@@ -204,7 +207,7 @@
       if (!previous) return node;
       if (previous.dragging) return { ...previous, data: node.data } as CanvasNode;
       if (previous.position.x === node.position.x && previous.position.y === node.position.y &&
-          previous.width === node.width && previous.height === node.height && previous.selected === node.selected &&
+          previous.domAttributes?.['data-tutorial'] === node.domAttributes?.['data-tutorial'] && previous.width === node.width && previous.height === node.height && previous.selected === node.selected &&
           JSON.stringify(previous.data) === JSON.stringify(node.data)) return previous;
       return node;
     });
@@ -322,7 +325,14 @@
   function nudge(event: KeyboardEvent) {
     const delta = { ArrowLeft: [-5, 0], ArrowRight: [5, 0], ArrowUp: [0, -5], ArrowDown: [0, 5] }[event.key];
     const element = event.target;
-    if (!delta || !(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
+    if (!(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
+    if ((event.key === 'Enter' || event.key === ' ') && element.dataset.id === guideApi && guideApi) {
+      event.preventDefault();
+      event.stopPropagation();
+      select(guideApi);
+      return;
+    }
+    if (!delta) return;
     const dragged = nodes.filter((node) => node.selected && node.draggable);
     if (!dragged.some((node) => node.id === element.dataset.id)) return;
     event.preventDefault();
@@ -403,14 +413,14 @@
   onselectiondragstop={(_, dragged) => finishMove(trackDrag(dragged))}
   oninit={() => { viewportReady = true; }}
   onmoveend={(event, viewport) => {
-    if (event || viewportReady) saveViewport(viewport);
+    if (event || (viewportReady && !transientMove)) saveViewport(viewport);
   }}
   onpaneclick={() => { linkFeedback = ''; clear(); }}
   onnodecontextmenu={({ event, node }) => { if (node.type === 'groupCard') { selectGroup(node.id); menu(event); } else menu(event, node.id); }}
   onpanecontextmenu={({ event }) => menu(event)}
   onedgecontextmenu={({ event, edge }) => { selectEdge(edge.id); menu(event); }}
   panOnDrag={[0, 1]} panOnScroll zoomOnScroll={false} zoomActivationKey="Control" zoomOnPinch>
-  <CanvasViewport {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
+  <CanvasViewport nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
   <Controls position="bottom-left" showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}

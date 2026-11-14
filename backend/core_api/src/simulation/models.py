@@ -2,6 +2,7 @@ from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from src.simulation.onboarding import TUTORIAL_STEPS, TutorialStep
 
 Kind = Literal[
     "source",
@@ -316,6 +317,19 @@ class Onboarding(Model):
     step: int = Field(default=0, ge=0, le=9)
     furthest: int = Field(default=0, ge=0, le=9)
     skipped: bool = False
+    step_id: TutorialStep | None = None
+    furthest_id: TutorialStep | None = None
+
+    @model_validator(mode="after")
+    def validate_tutorial_ids(self) -> Self:
+        if (self.step_id is None) != (self.furthest_id is None) or (
+            self.step_id is not None
+            and self.furthest_id is not None
+            and TUTORIAL_STEPS.index(self.step_id)
+            > TUTORIAL_STEPS.index(self.furthest_id)
+        ):
+            raise ValueError("Invalid tutorial progress")
+        return self
 
 
 class RegionalCampaign(Model):

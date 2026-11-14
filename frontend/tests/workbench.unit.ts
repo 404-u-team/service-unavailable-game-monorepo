@@ -40,7 +40,8 @@ test('live deltas preserve topology identity, append history, and reject gaps', 
 });
 
 test('the spotlight clamps to the viewport and hides fully off-screen targets', () => {
-  expect(spotlightBounds({ left: -30, top: 18, right: 55, bottom: 120 }, 360, 100))
-    .toEqual({ left: 0, top: 14, width: 59, height: 86 });
-  expect(spotlightBounds({ left: 12, top: 101, right: 55, bottom: 120 }, 360, 100)).toBeUndefined();
+  const viewport = { left: 0, top: 0, right: 360, bottom: 100 };
+  expect(spotlightBounds({ left: -30, top: 18, right: 55, bottom: 120 }, viewport))
+    .toEqual({ left: 0, top: 13, right: 60, bottom: 100 });
+  expect(spotlightBounds({ left: 12, top: 101, right: 55, bottom: 120 }, viewport)).toBeUndefined();
 });

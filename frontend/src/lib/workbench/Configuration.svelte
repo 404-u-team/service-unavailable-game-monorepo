@@ -1,6 +1,7 @@
 <script lang="ts">
   import { apiMessage, message, t } from '../i18n.svelte';
   import Modal from '../Modal.svelte';
+  import { target } from './onboarding';
   import Forecast from './Forecast.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
   import { fieldArticle, guideArticleHref } from '../guide';
@@ -9,9 +10,9 @@
   import { preciseMoney } from '../format';
   import type { Component, Definition, Review, Setting } from '../types';
 
-  let { component, definition, busy, error, close, apply, preview, guideHref }: {
+  let { component, definition, busy, error, close, apply, preview, guideHref, onEdited }: {
     component: Component; definition: Definition; guideHref: string; busy: boolean; error: string;
-    close: () => void; preview: (name: string, settings: Record<string, Setting>) => Promise<Review>; apply: (name: string, settings: Record<string, Setting>) => void;
+    onEdited?: (changed: boolean) => void; close: () => void; preview: (name: string, settings: Record<string, Setting>) => Promise<Review>; apply: (name: string, settings: Record<string, Setting>) => void;
   } = $props();
   let name = $state('');
   let estimate = $state<Review>();
@@ -27,6 +28,10 @@
   function nextValues() {
     return { ...(includeLegacy ? legacy : {}), ...values };
   }
+
+  $effect(() => {
+    onEdited?.(Object.entries(initial.values).some(([key, value]) => values[key] !== value));
+  });
 
   function resetPreview() {
     previewVersion++;
@@ -63,7 +68,7 @@
     <label class="field"><span>{t("Component name")}</span><input bind:value={name} maxlength="60" required /></label>
     {#if component.kind === 'api'}
       <label class="field"><span>{t("Instance size")}</span>
-        <select value={presets.findIndex((preset) => preset.cpu === values.cpu && preset.memory === values.memory)} onchange={(event) => {
+        <select data-tutorial={target.instance} value={presets.findIndex((preset) => preset.cpu === values.cpu && preset.memory === values.memory)} onchange={(event) => {
           const preset = presets[Number(event.currentTarget.value)];
           if (preset) { values.cpu = preset.cpu; values.memory = preset.memory; }
         }}>
@@ -116,7 +121,7 @@
   {#snippet footer()}
     <div class="row spread">
       <button class="btn" onclick={close}>{t("Cancel")}</button>
-      <button type="submit" form="configure-component" class="btn primary" disabled={busy}>{t("Save to draft")}</button>
+      <button type="submit" form="configure-component" data-tutorial={target.save} class="btn primary" disabled={busy}>{t("Save to draft")}</button>
     </div>
   {/snippet}
 </Modal>

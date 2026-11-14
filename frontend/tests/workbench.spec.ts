@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Request } from '@playwright/test';
 import type { Game } from '../src/lib/types';
 
 const visualDir = process.env.VISUAL_OUTPUT_DIR;
@@ -107,7 +107,6 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
 
   await navigate(page, 'Topology');
   await page.locator('.svelte-flow__node[aria-label="Messenger API"]').click();
-  await expect.poll(async () => (await state(page, id)).tutorial).toBe(1);
   await page.getByRole('button', { name: 'Edit configuration' }).click();
   await page.getByLabel('Instance size').selectOption({ label: 'Performance P4 · 4 vCPU / 8 GB' });
   await page.getByRole('button', { name: 'Save to draft' }).click();
@@ -128,9 +127,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   expect(after.snapshot.components.api.utilization.CPU).toBeLessThan(before.snapshot.components.api.utilization.CPU);
   expect(after.draft).toBeNull();
   expect(after.deployments).toHaveLength(2);
-  expect(after.tutorial).toBe(3);
   await navigate(page, 'Telemetry');
-  await expect.poll(async () => (await state(page, id)).tutorial).toBe(4);
   await expect(page.getByRole('heading', { name: 'System telemetry' })).toBeVisible();
   await expect(page.getByRole('img', { name: /Request traffic/ })).toBeVisible();
   await expect(page.getByRole('img', { name: /Peak resource load for Messenger API/ })).toBeVisible();
@@ -197,7 +194,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   expect(constrained.snapshot.components.api).toBeUndefined();
 
   await page.goto(`/game/${id}?view=monitor`);
-  const diagnosis = page.locator('[data-guide="diagnostics"]');
+  const diagnosis = page.getByRole('region', { name: 'Diagnostics' });
   await expect(diagnosis.getByText('Database write capacity exceeded')).toBeVisible();
   await expect(diagnosis.getByText('Sustainable writes at current read load')).toBeVisible();
   const diskHelp = diagnosis.getByRole('link', { name: 'Help with Disk I/O' });
@@ -535,15 +532,17 @@ test('production node dragging sends one layout write and survives Draft and rel
   const initial = await state(page, id);
   const api = page.locator('.svelte-flow__node-workbench[data-id="api"]');
   const writes: string[] = [];
+  const movesApi = (request: Request) =>
+    request.url().endsWith('/diagram') && request.method() === 'PATCH' && request.postDataJSON()?.positions?.api;
   page.on('request', (request) => {
-    if (request.url().endsWith('/diagram')) writes.push(request.method());
+    if (movesApi(request)) writes.push(request.method());
   });
   const box = (await api.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 - 65, { steps: 12 });
   expect(writes).toEqual([]);
-  const response = page.waitForResponse((candidate) => candidate.url().endsWith('/diagram'));
+  const response = page.waitForResponse((candidate) => Boolean(movesApi(candidate.request())));
   await page.mouse.up();
   const saved = await response;
   expect(saved.status()).toBe(200);

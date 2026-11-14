@@ -1,7 +1,7 @@
 <script lang="ts">
   import { apiMessage, message, t } from '#lib/i18n.svelte.ts';
-  import { onMount } from 'svelte';
-  import { beforeNavigate } from '$app/navigation';
+  import { onMount, untrack } from 'svelte';
+  import { beforeNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ArrowDownRight, ArrowUpRight, Pause, X, Save as SaveIcon } from '@lucide/svelte';
   import Brand from '#lib/Brand.svelte';
@@ -11,6 +11,9 @@
   import { ApiError, gameAction, loadCatalog, loadGame } from '#lib/api.ts';
   import { desktop, mobile, sections, type Section } from '#lib/labels.ts';
   import { subscribeGame } from '#lib/live.ts';
+  import { nav, onboarding, stepId, target, tutorialView, type StepId, type Target,
+    type TutorialAction, type TutorialArchitecture, type TutorialEvent } from '#lib/workbench/onboarding.ts';
+  import { openDialog } from '#lib/workbench/spotlight.ts';
   import { syncLayout } from '#lib/workbench/layout-sync.ts';
   import { money, minuteClock, preciseMoney, when } from '#lib/format.ts';
   import type { Catalog, Diagram, Game, Speed } from '#lib/types.ts';
@@ -40,6 +43,14 @@
   let lastSpeed: Exclude<Speed, 0> = 1;
   let currentId = '';
   let mounted = $state(false);
+  let compact = $state(false);
+  let architecture = $state<{ revealTutorialApi: () => void }>();
+  let tutorialUi = $state.raw<TutorialArchitecture>();
+  let tutorialEvent = $state<{ step: StepId; name: TutorialEvent }>();
+  let completion = $state(false);
+  let pendingAction = $state('');
+  let pendingTutorial = $state(false);
+  let rejected = $state<StepId>();
   let generation = 0;
   let feedback: ReturnType<typeof setTimeout>;
   let actionRequest: { gameId: string; path: string; method: string; key: string; body: string } | undefined;
@@ -49,6 +60,19 @@
     return Object.hasOwn(sections, key) && key !== 'saves' ? key as Section : 'build';
   });
   const link = (target: Section, focus?: string) => `/game/${id}?view=${target}${focus ? `&component=${encodeURIComponent(focus)}` : ''}`;
+  const tutorialStep = $derived(game ? stepId(game.onboarding) : 'complete');
+  const tutorialEnabled = $derived(game?.scenario === 'messenger' && game.settings.show_tutorial && !game.onboarding.skipped && tutorialStep !== 'complete');
+  const tutorialVisible = $derived(tutorialEnabled && section !== 'guide' && section !== 'settings');
+  const step = $derived(onboarding.find((item) => item.id === tutorialStep));
+  const defaults = $derived(Object.fromEntries(Object.entries(catalog?.components.api.fields ?? {}).map(([key, field]) => [key, field.default])));
+  const currentView = $derived(step && game ? tutorialView(step, {
+    game, section, ui: section === 'build' ? tutorialUi : undefined, compact, event: tutorialEvent,
+    apiDefaults: defaults, monitorSlots: Number(catalog?.components.monitor.fields.slots.default)
+  }) : {});
+  const tutorialWaiting = $derived(pendingTutorial || ('mode' in (step ?? {}) && (
+    pendingAction === '/draft' || pendingAction === '/deployments'
+  )) || (section === 'build' && tutorialUi?.dialog === 'review' && tutorialUi.reviewPending));
+
   const primary: Section[] = ['build', 'monitor', 'growth', 'finance'];
   const speedOptions: { value: Speed; label: string; shortcut: string }[] = [
     { value: 0, label: 'Pause simulation', shortcut: 'Space' },
@@ -59,6 +83,10 @@
 
   onMount(() => {
     mounted = true;
+    const media = matchMedia('(max-width: 850px)');
+    const resize = () => compact = media.matches;
+    resize();
+    media.addEventListener('change', resize);
     const flush = () => { if (document.hidden) void layout?.flush(); };
     document.addEventListener('visibilitychange', flush);
     return () => {
@@ -68,9 +96,16 @@
       layout?.close();
       clearTimeout(feedback);
       document.removeEventListener('visibilitychange', flush);
+      media.removeEventListener('change', resize);
     };
   });
-  beforeNavigate(() => { void layout?.flush(); });
+  beforeNavigate(({ from, to }) => {
+    void layout?.flush();
+    if (from?.url.searchParams.get('view') !== to?.url.searchParams.get('view')) {
+      tutorialUi = undefined;
+      tutorialEvent = undefined;
+    }
+  });
 
   $effect(() => { if (mounted && id !== currentId) void open(id); });
 
@@ -93,6 +128,12 @@
     currentId = gameId;
     actionRequest = undefined;
     busy = false;
+    pendingAction = '';
+    pendingTutorial = false;
+    completion = false;
+    tutorialUi = undefined;
+    tutorialEvent = undefined;
+    rejected = undefined;
     recentEvent = undefined;
     lastSpeed = 1;
     const version = ++generation;
@@ -157,6 +198,7 @@
       actionRequest = { gameId, path, method, body: signature, key: crypto.randomUUID() };
     }
     busy = true;
+    pendingAction = path;
     error = '';
     try {
       const next = await gameAction(gameId, path, body, method, actionRequest.key);
@@ -175,58 +217,77 @@
       if (reason instanceof ApiError && reason.status < 500) actionRequest = undefined;
       if (reason instanceof ApiError && reason.status === 409) live?.reconnect();
       return null;
-    } finally { if (currentId === gameId) busy = false; }
-  }
-
-  let recorded = '';
-  function guide(interaction: string) {
-    if (!game) return;
-    return act('/onboarding', { step: game.onboarding.step, interaction });
-  }
-
-  function note(interaction: 'inspect' | 'monitor') {
-    const stage = game?.onboarding.step;
-    if (game?.settings.show_tutorial && !game.onboarding.skipped &&
-        ((interaction === 'inspect' && stage === 2) || (interaction === 'monitor' && stage === 4))) {
-      void guide(interaction);
-    } else if ((interaction === 'inspect' && game?.tutorial === 0) || (interaction === 'monitor' && game?.tutorial === 3)) {
-      void act('/tutorial', { interaction });
+    } finally {
+      if (currentId === gameId) {
+        busy = false;
+        pendingAction = '';
+      }
     }
+  }
+
+  async function guide(interaction: TutorialAction) {
+    if (!game || pendingTutorial || busy) return;
+    const currentStep = tutorialStep;
+    const gameId = game.id;
+    pendingTutorial = true;
+    rejected = undefined;
+    try {
+      const next = await act('/onboarding', { step_id: currentStep, interaction });
+      if (!mounted || currentId !== gameId) return;
+      if (!next || (interaction === 'observed' && stepId(next.onboarding) === currentStep)) {
+        rejected = currentStep;
+        return;
+      }
+      tutorialEvent = undefined;
+      if (interaction === 'resume' || interaction === 'restart') {
+        completion = false;
+        if (section === 'settings' || section === 'guide') await goto(link('build'));
+      } else if (stepId(next.onboarding) === 'complete' && currentStep !== 'complete') {
+        completion = true;
+      }
+    } finally {
+      if (currentId === gameId) pendingTutorial = false;
+    }
+  }
+
+  function recordTutorial(name: TutorialEvent) {
+    if (!tutorialEnabled) return;
+    tutorialEvent = { step: tutorialStep, name };
+    rejected = undefined;
+  }
+
+  function recoverTutorial(key?: Target) {
+    rejected = undefined;
+    if (key === target.api) architecture?.revealTutorialApi();
   }
 
   $effect(() => {
-    if (!game?.settings.show_tutorial || game.onboarding.skipped || busy) return;
-    const step = game.onboarding.step;
-    const interaction =
-      step === 3 && game.snapshot.components.api && game.snapshot.components.db ? 'coverage'
-      : step === 4 && section === 'monitor' ? 'monitor' : '';
-    const key = `${game.id}:${step}:${interaction}`;
-    if (interaction && recorded !== key) {
-      recorded = key;
-      void guide(interaction);
-    }
+    if (!tutorialVisible || !currentView.observed || pendingTutorial || busy || rejected === tutorialStep) return;
+    const modal = openDialog();
+    if (currentView.target && modal && !modal.querySelector(`[data-tutorial="${currentView.target}"]`)) return;
+    untrack(() => void guide('observed'));
   });
 </script>
 
 <svelte:window onkeydown={shortcuts} />
 
 <div class="game" data-reduced-motion={game?.settings.reduced_motion ?? false}>
-  <header class="topbar">
+  <header class="topbar" data-tutorial-obstruction="top">
     <Brand />
     {#if game}
       <nav class="primary-nav" aria-label={t("Primary navigation")}>
-        {#each primary as item}<a data-guide-nav={item} href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
+        {#each primary as item}<a data-tutorial={nav(item)} href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
       </nav>
       <div class="controls row">
         <span class="badge good online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</span>
-        <a class="balance" data-guide="balance" href={link('finance')} title={t('Cash balance and daily net profit')} aria-label={t('Finance')}>
+        <a class="balance" data-tutorial={target.balance} href={link('finance')} title={t('Cash balance and daily net profit')} aria-label={t('Finance')}>
           <strong>{money(game.economy.balance)}</strong>
           <span class:positive={game.economy.daily_net_profit > 0} class:negative={game.economy.daily_net_profit < 0}>
             {#if game.economy.daily_net_profit > 0}<ArrowUpRight size={12} />{:else if game.economy.daily_net_profit < 0}<ArrowDownRight size={12} />{/if}
             {t('{0}/day', [preciseMoney(game.economy.daily_net_profit)])}
           </span>
         </a>
-        <div class="speed-group row" data-guide="clock" role="group" aria-label={t('Game speed')}>
+        <div class="speed-group row" data-tutorial={target.clock} role="group" aria-label={t('Game speed')}>
           {#each speedOptions as option (option.value)}
             <button class="btn" disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
               title={t('{0} ({1})', [t(option.label), t(option.shortcut)])} onclick={() => speed(option.value)}>
@@ -250,7 +311,7 @@
     <nav class="rail" aria-label={t("Workbench navigation")}>
       {#each desktop as item}
         {@const Icon = sections[item].icon}
-        <a data-guide-nav={item} href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
+        <a data-tutorial={nav(item)} href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
       {/each}
       <a href="/?view=saves" class="rail-saves" aria-label={t("Saved games")}><span class="avatar">{t("SU")}</span></a>
     </nav>
@@ -261,12 +322,13 @@
       {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
-          <Architecture {game} {catalog} {act} {busy} {error} {note} {saveDiagram} {layoutFailed}
+          <Architecture bind:this={architecture} {game} {catalog} {act} {busy} {error} tutorial={tutorialEnabled} tutorialSelect={currentView.target === target.api}
+            tutorialState={(state) => tutorialUi = state} tutorialEvent={recordTutorial} {saveDiagram} {layoutFailed}
             retryDiagram={() => { if (game) void layout?.retry(game.diagram); }} savedDiagram={pendingDiagram ?? game.diagram}
             focusId={page.url.searchParams.get('component') ?? undefined}
             openConfiguration={page.url.searchParams.get('configure') === '1'} guideHref={link('guide')} />
         {:else}
-          <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} resumeTutorial={() => guide('resume')} />
+          <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} tutorialAction={guide} />
         {/if}
       {/key}
       {#if recentEvent && section !== 'events'}
@@ -275,15 +337,18 @@
           <button class="btn icon-btn" aria-label={t('Dismiss notification')} onclick={() => recentEvent = undefined}><X size={14} /></button>
         </aside>
       {/if}
-      {#if game.settings.show_tutorial}
-        <Onboarding progress={game.onboarding} {section} {link} {busy} change={(action) => void guide(action)} />
+      {#if tutorialVisible || completion}
+        <Onboarding progress={game.onboarding} view={rejected === tutorialStep
+          ? { ...currentView, retry: true, instruction: 'Progress could not be saved. Retry this step or skip it.' } : currentView}
+          {link} {busy} waiting={tutorialWaiting} change={(action) => void guide(action)} recover={recoverTutorial}
+          complete={() => completion = false} />
       {/if}
     </div>
-    <nav class="bottom" aria-label={t("Mobile navigation")}>
+    <nav class="bottom" data-tutorial-obstruction="bottom" aria-label={t("Mobile navigation")}>
       {#each mobile as item}
         {@const Icon = sections[item].icon}
         {@const active = section === item || (item === 'more' && !mobile.includes(section))}
-        <a data-guide-nav={item} href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
+        <a data-tutorial={nav(item)} href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
       {/each}
     </nav>
   {/if}
@@ -291,7 +356,7 @@
 
 <style>
   .game { display: grid; min-height: 100dvh; grid-template: 65px 1fr / 76px minmax(0, 1fr); }
-  .topbar { grid-column: 1 / -1; position: sticky; top: 0; z-index: 12; display: grid; grid-template-columns: clamp(248px, 22.3vw, 350px) 1fr auto; align-items: center; gap: 10px; min-height: 65px; padding: 0 23px; background: var(--background); border-bottom: 1px solid var(--border); }
+  .topbar { grid-column: 1 / -1; position: sticky; top: 0; z-index: var(--layer-workbench-navigation); display: grid; grid-template-columns: clamp(248px, 22.3vw, 350px) 1fr auto; align-items: center; gap: 10px; min-height: 65px; padding: 0 23px; background: var(--background); border-bottom: 1px solid var(--border); }
   .topbar :global(.brand) { font-size: 16px; }
   .primary-nav { display: flex; height: 100%; }
   .primary-nav a { min-width: 112px; padding: 0 8px; display: grid; place-items: center; color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 2px solid transparent; }
@@ -338,7 +403,7 @@
     .controls { gap: 3px; }
     .balance strong { font-size: 12px; }
     .main-area { grid-column: 1; }
-    .bottom { position: fixed; inset: auto 0 0; z-index: 12; display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border); }
+    .bottom { position: fixed; inset: auto 0 0; z-index: var(--layer-workbench-navigation); display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border); }
     .bottom a { min-height: 49px; align-content: center; gap: 4px; }
     .bottom a span { display: grid; place-items: center; height: 31px; width: 58px; border-radius: 12px; }
     .bottom a[aria-current] { color: var(--text); }

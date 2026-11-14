@@ -2,6 +2,7 @@
   import { t } from '../i18n.svelte';
   import { clock, num, pct, preciseMoney } from '../format';
   import type { Catalog, Game, OperatingCosts, RevenueSources } from '../types';
+  import { target } from './onboarding';
   import Chart from './Chart.svelte';
 
   let { game, catalog }: { game: Game; catalog: Catalog } = $props();
@@ -47,7 +48,7 @@
 
 <div class="finance-split">
   <section class="panel pad stack">
-    <h2>{t('Revenue breakdown')}</h2>
+    <h2 data-tutorial={target.finance}>{t('Revenue breakdown')}</h2>
     <div class="ledger">
       <table>
         <thead><tr><th scope="col">{t('Source')}</th><th scope="col">{t('Per game day')}</th><th scope="col">{t('To date')}</th></tr></thead>
@@ -76,7 +77,7 @@
   </section>
 
   <section class="panel pad stack">
-    <h2>{t('Expense breakdown')}</h2>
+    <h2 data-tutorial={target.expenses}>{t('Expense breakdown')}</h2>
     <div class="ledger">
       <table>
         <thead><tr><th scope="col">{t('Expense')}</th><th scope="col">{t('Per game day')}</th><th scope="col">{t('To date')}</th></tr></thead>

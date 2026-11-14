@@ -51,7 +51,7 @@ test('desktop inspector resizes without moving draft nodes and restores the loca
   await expect(page.getByRole('button', { name: 'Review deployment' })).toBeVisible();
   const inspector = page.getByRole('complementary', { name: 'Component inspector' });
   const handle = page.getByRole('separator', { name: 'Resize component inspector' });
-  const canvas = page.locator('[data-guide="canvas"]');
+  const canvas = page.locator('[data-tutorial="topology.canvas"]');
   const width = () => inspector.evaluate((node) => node.getBoundingClientRect().width);
   const canvasWidth = () => canvas.evaluate((node) => node.getBoundingClientRect().width);
   const node = page.locator('.svelte-flow__node[data-id="api"]');

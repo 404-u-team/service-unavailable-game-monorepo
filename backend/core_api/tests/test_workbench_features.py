@@ -2,12 +2,15 @@ from datetime import UTC, datetime, timedelta
 from unittest import TestCase
 from uuid import uuid4
 
-from src.api.game_schemas import OnboardingAction, PatchDiagram
+from src.api.game_schemas import OnboardingAction, PatchDiagram, TutorialProgressAction
 from src.services.games import (
     RevisionConflict,
     advance_clock,
     change_onboarding,
+    deploy,
+    edit_draft,
     onboarding_progress,
+    open_draft,
     patch_diagram,
     view,
 )
@@ -22,11 +25,12 @@ from src.services.markets import (
 from src.simulation.catalog import REGIONS
 from src.simulation.demand import local_time, workload
 from src.simulation.engine import evaluate
-from src.simulation.models import DiagramGroup, Position
+from src.simulation.models import DiagramGroup, Onboarding, Position
+from src.simulation.onboarding import TutorialStep
 from src.simulation.progression import advance
 from src.simulation.topology import RuleError
 
-from tests.test_simulation import add_node, fixture, link, monitor
+from tests.test_simulation import add_node, component, fixture, link, monitor
 
 
 class WorkbenchFeatures(TestCase):
@@ -157,3 +161,79 @@ class WorkbenchFeatures(TestCase):
         event("resume")
         event("monitor")
         self.assertEqual(game.onboarding.step, 5)
+
+    def test_tutorial_requires_the_api_edit_and_records_the_deployment_in_the_same_mutation(
+        self,
+    ):
+        game = fixture()
+        game.onboarding = Onboarding(
+            step=6,
+            furthest=6,
+            step_id=TutorialStep.CREATE_DRAFT,
+            furthest_id=TutorialStep.CREATE_DRAFT,
+        )
+
+        def event(step, interaction="observed"):
+            change_onboarding(
+                game,
+                TutorialProgressAction(
+                    request_id=uuid4(), step_id=step, interaction=interaction
+                ),
+            )
+            return onboarding_progress(game).step_id
+
+        self.assertEqual(event(TutorialStep.CREATE_DRAFT), TutorialStep.CREATE_DRAFT)
+        open_draft(game, game.revision)
+        self.assertEqual(event(TutorialStep.CREATE_DRAFT), TutorialStep.EDIT_API)
+        self.assertEqual(event(TutorialStep.CREATE_DRAFT), TutorialStep.EDIT_API)
+        self.assertEqual(event(TutorialStep.EDIT_API), TutorialStep.SAVE_CAPACITY)
+        self.assertEqual(event(TutorialStep.SAVE_CAPACITY), TutorialStep.SAVE_CAPACITY)
+        topology = game.draft.model_copy(deep=True)
+        next(node for node in topology.nodes if node.id == "api").config["cpu"] = 4
+        edit_draft(game, game.revision, topology)
+        self.assertEqual(
+            event(TutorialStep.SAVE_CAPACITY), TutorialStep.CAPACITY_REVIEW
+        )
+        self.assertEqual(
+            event(TutorialStep.CAPACITY_REVIEW), TutorialStep.CAPACITY_FORECAST
+        )
+        self.assertEqual(
+            event(TutorialStep.CAPACITY_FORECAST, "next"), TutorialStep.CAPACITY_COSTS
+        )
+        self.assertEqual(
+            event(TutorialStep.CAPACITY_COSTS, "next"), TutorialStep.CAPACITY_DEPLOY
+        )
+        self.assertEqual(
+            event(TutorialStep.CAPACITY_DEPLOY), TutorialStep.CAPACITY_DEPLOY
+        )
+        self.assertEqual(component(game, "api").config, {})
+        deploy(game, game.revision, uuid4())
+        self.assertEqual(onboarding_progress(game).step_id, TutorialStep.COMPARE)
+        self.assertEqual(component(game, "api").config["cpu"], 4)
+        self.assertEqual(
+            event(TutorialStep.COMPARE, "back"), TutorialStep.CAPACITY_DEPLOY
+        )
+        self.assertEqual(
+            event(TutorialStep.CAPACITY_DEPLOY, "next"), TutorialStep.COMPARE
+        )
+
+    def test_migrating_and_restarting_tutorial_preserves_gameplay(self):
+        game = fixture()
+        game.onboarding = Onboarding(step=3, furthest=5, skipped=True)
+        progress = onboarding_progress(game)
+        self.assertEqual(progress.step_id, TutorialStep.MONITORING)
+        self.assertEqual(progress.furthest_id, TutorialStep.TELEMETRY)
+        self.assertTrue(progress.skipped)
+        original = game.production.model_copy(deep=True)
+        change_onboarding(
+            game,
+            TutorialProgressAction(
+                request_id=uuid4(),
+                step_id=TutorialStep.MONITORING,
+                interaction="restart",
+            ),
+        )
+        self.assertEqual(onboarding_progress(game).step_id, TutorialStep.CLOCK)
+        self.assertEqual(onboarding_progress(game).furthest_id, TutorialStep.CLOCK)
+        self.assertFalse(game.onboarding.skipped)
+        self.assertEqual(game.production, original)

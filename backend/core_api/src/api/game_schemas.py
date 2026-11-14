@@ -30,6 +30,7 @@ from src.simulation.models import (
     Topology,
     Waypoints,
 )
+from src.simulation.onboarding import TutorialStep
 
 ScenarioId = Literal["messenger", "social", "multiplayer", "education"]
 FeatureId = Literal[
@@ -115,6 +116,13 @@ class OnboardingAction(Action):
         "inspect",
         "monitor",
         "coverage",
+    ]
+
+
+class TutorialProgressAction(Action):
+    step_id: TutorialStep
+    interaction: Literal[
+        "back", "next", "skip-step", "skip", "resume", "restart", "observed"
     ]
 
 

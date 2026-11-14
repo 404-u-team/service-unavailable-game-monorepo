@@ -18,7 +18,7 @@ from src.simulation.catalog import (
     SCENARIOS,
 )
 from src.simulation.demand import MINUTES_PER_DAY, game_minute
-from src.simulation.models import FinanceSample, Game, Model
+from src.simulation.models import FinanceSample, Game, Model, Onboarding
 from src.simulation.topology import RuleError, deployment_warnings, inspect_graph
 
 FORMAT = "service-unavailable-save"
@@ -86,9 +86,11 @@ def validate_scalars(value: object, depth: int = 0) -> None:
 
 def require_complete(value: object) -> None:
     if isinstance(value, Model):
-        allowed_omissions = (
-            {"regional_ads"} if isinstance(value, FinanceSample) else set()
-        )
+        allowed_omissions = set()
+        if isinstance(value, FinanceSample):
+            allowed_omissions = {"regional_ads"}
+        elif isinstance(value, Onboarding):
+            allowed_omissions = {"step_id", "furthest_id"}
         if type(value).model_fields.keys() - value.model_fields_set - allowed_omissions:
             raise ValueError("Missing state fields")
         for _, item in value:

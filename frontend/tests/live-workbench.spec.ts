@@ -1,10 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { Game } from '../src/lib/types';
 
-async function start(page: Page, tutorial = false) {
+async function start(page: Page) {
   await page.goto('/');
   const response = await page.request.post('/api/games', {
-    data: { id: crypto.randomUUID(), name: 'Live workbench', seed: 7, settings: { show_tutorial: tutorial } }
+    data: { id: crypto.randomUUID(), name: 'Live workbench', seed: 7, settings: { show_tutorial: false } }
   });
   expect(response.ok()).toBeTruthy();
   const game: Game = await response.json();
@@ -97,30 +97,6 @@ test('wheel and middle drag navigate the canvas, and newly added nodes stay in v
   await page.reload();
   await expect(node).toBeVisible();
   await expect.poll(async () => (await transform()).zoom).toBeCloseTo(data.diagram.viewports!.wide!.zoom);
-});
-
-test('spotlight progress resumes after reload and advances from a real inspector selection', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await start(page, true);
-  const guide = page.getByRole('complementary', { name: 'Guided onboarding' });
-  await expect(guide).toContainText('Step 1 of 9');
-  await expect(page.locator('.spotlight')).toBeVisible();
-  await guide.getByRole('button', { name: 'Next' }).click();
-  await expect(guide).toContainText('Step 2 of 9');
-  await page.reload();
-  await expect(guide).toContainText('Step 2 of 9');
-  await guide.getByRole('button', { name: 'Next' }).click();
-  await expect(guide).toContainText('Step 3 of 9');
-  await page.locator('.svelte-flow__node[data-id="api"]').click();
-  await expect(guide).toContainText('Step 4 of 9');
-  await guide.getByRole('button', { name: 'Skip tutorial' }).click();
-  await expect(guide).toHaveCount(0);
-  await page.reload();
-  await expect(guide).toHaveCount(0);
-  await page.goto(page.url() + '?view=settings');
-  await page.getByRole('button', { name: 'Resume tutorial' }).click();
-  await expect(guide).toContainText('Step 4 of 9');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
 test('raw utilization values render equal meter fills in English and Russian', async ({ page }) => {

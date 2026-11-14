@@ -28,6 +28,7 @@ from src.api.game_schemas import (
     Range,
     RequirementView,
     SaveSummary,
+    TutorialProgressAction,
 )
 from src.repositories.games import GameRepository
 from src.services.markets import languages, markets
@@ -66,6 +67,11 @@ from src.simulation.models import (
     RevenueSources,
     Snapshot,
     Topology,
+)
+from src.simulation.onboarding import (
+    LEGACY_TUTORIAL_STEPS,
+    TUTORIAL_STEPS,
+    TutorialStep,
 )
 from src.simulation.progression import (
     add_event,
@@ -592,6 +598,19 @@ def deploy(
         advance_onboarding(game, 7)
         if {"api", "db"}.issubset(after.components):
             advance_onboarding(game, 3)
+        progress = onboarding_progress(game)
+        if progress.step_id in {
+            TutorialStep.MONITOR_DEPLOY,
+            TutorialStep.CAPACITY_DEPLOY,
+        }:
+            change_tutorial_progress(
+                game,
+                TutorialProgressAction(
+                    request_id=request_id,
+                    step_id=progress.step_id,
+                    interaction="observed",
+                ),
+            )
 
 
 def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureView:
@@ -911,24 +930,46 @@ def acknowledge_incident(game: Game, event_id: str) -> None:
     event.acknowledged = True
 
 
-def onboarding_progress(game: Game) -> Onboarding:
+def legacy_onboarding(game: Game) -> Onboarding:
     if game.onboarding is not None:
         return game.onboarding
     stage = {0: 0, 1: 3, 2: 7, 3: 4}.get(game.tutorial, 9)
     return Onboarding(step=stage, furthest=stage)
 
 
+def onboarding_progress(game: Game) -> Onboarding:
+    progress = legacy_onboarding(game)
+    if progress.step_id is not None:
+        return progress
+    return progress.model_copy(
+        update={
+            "step_id": LEGACY_TUTORIAL_STEPS[progress.step],
+            "furthest_id": LEGACY_TUTORIAL_STEPS[progress.furthest],
+        }
+    )
+
+
 def advance_onboarding(game: Game, step: int) -> None:
-    progress = onboarding_progress(game)
-    if game.settings.show_tutorial and not progress.skipped and progress.step == step:
+    progress = legacy_onboarding(game)
+    if (
+        progress.step_id is None
+        and game.settings.show_tutorial
+        and not progress.skipped
+        and progress.step == step
+    ):
         progress.step += 1
         progress.furthest = max(progress.furthest, progress.step)
         game.onboarding = progress
 
 
-def change_onboarding(game: Game, body: OnboardingAction) -> None:
-    progress = onboarding_progress(game)
-    if body.step != progress.step:
+def change_onboarding(
+    game: Game, body: OnboardingAction | TutorialProgressAction
+) -> None:
+    if isinstance(body, TutorialProgressAction):
+        change_tutorial_progress(game, body)
+        return
+    progress = legacy_onboarding(game)
+    if progress.step_id is not None or body.step != progress.step:
         return
     interaction = body.interaction
     step = progress.step
@@ -950,6 +991,142 @@ def change_onboarding(game: Game, body: OnboardingAction) -> None:
         if advance_step:
             progress.step = min(9, step + 1)
             progress.furthest = max(progress.step, progress.furthest)
+    game.onboarding = progress
+
+
+TUTORIAL_INFORMATION = {
+    TutorialStep.CLOCK,
+    TutorialStep.BALANCE,
+    TutorialStep.TOPOLOGY,
+    TutorialStep.COMPONENTS,
+    TutorialStep.CAPACITY,
+    TutorialStep.METRICS_COVERAGE,
+    TutorialStep.MONITORING,
+    TutorialStep.MONITOR_COSTS,
+    TutorialStep.TELEMETRY,
+    TutorialStep.API_UTILIZATION,
+    TutorialStep.API_THROUGHPUT,
+    TutorialStep.INFRASTRUCTURE,
+    TutorialStep.CAPACITY_FORECAST,
+    TutorialStep.CAPACITY_COSTS,
+    TutorialStep.COMPARE,
+    TutorialStep.ECONOMY,
+    TutorialStep.FINANCE,
+    TutorialStep.EXPENSES,
+    TutorialStep.PRODUCT,
+    TutorialStep.PREMIUM,
+    TutorialStep.GROWTH,
+}
+
+
+def tutorial_api(topology: Topology) -> Node | None:
+    return next(
+        (node for node in topology.nodes if node.id == "api" and node.kind == "api"),
+        None,
+    ) or next((node for node in topology.nodes if node.kind == "api"), None)
+
+
+def tutorial_coverage_nodes(topology: Topology) -> set[str]:
+    api = tutorial_api(topology)
+    database = next(
+        (
+            node
+            for node in topology.nodes
+            if api
+            and node.kind == "database"
+            and any(
+                edge.source == api.id and edge.target == node.id
+                for edge in topology.edges
+            )
+        ),
+        None,
+    )
+    return {node.id for node in (api, database) if node}
+
+
+def tutorial_config_changed(before: Topology, after: Topology) -> bool:
+    api = tutorial_api(before)
+    updated = next((node for node in after.nodes if api and node.id == api.id), None)
+    return bool(
+        api and updated and updated.kind == "api" and config(api) != config(updated)
+    )
+
+
+def tutorial_milestone(game: Game, step: TutorialStep) -> bool:
+    if step == TutorialStep.CREATE_DRAFT:
+        return game.draft is not None
+    if step == TutorialStep.SAVE_CAPACITY:
+        return game.draft is not None and tutorial_config_changed(
+            game.production, game.draft
+        )
+    if step == TutorialStep.CAPACITY_DEPLOY:
+        return bool(
+            game.draft is None
+            and game.deployments
+            and game.deployments[-1].comparison
+            and tutorial_config_changed(game.deployments[-1].topology, game.production)
+        )
+    if step in {
+        TutorialStep.ADD_COLLECTOR,
+        TutorialStep.LINK_COVERAGE,
+        TutorialStep.MONITOR_REVIEW,
+        TutorialStep.MONITOR_DEPLOY,
+    }:
+        required = tutorial_coverage_nodes(game.production)
+        if required and required.issubset(evaluate(game).snapshot.components):
+            return True
+        draft = game.draft
+        if step == TutorialStep.ADD_COLLECTOR:
+            return any(
+                node.kind == "monitor" for node in (draft or game.production).nodes
+            )
+        if step == TutorialStep.LINK_COVERAGE and draft and required:
+            return required.issubset(evaluate(game, topology=draft).snapshot.components)
+        return step == TutorialStep.MONITOR_REVIEW
+    return step not in TUTORIAL_INFORMATION and step != TutorialStep.COMPLETE
+
+
+def change_tutorial_progress(game: Game, body: TutorialProgressAction) -> None:
+    progress = onboarding_progress(game).model_copy()
+    if body.step_id != progress.step_id:
+        return
+    step = TUTORIAL_STEPS.index(body.step_id)
+    furthest = TUTORIAL_STEPS.index(progress.furthest_id or body.step_id)
+    interaction = body.interaction
+    if interaction == "restart":
+        step = furthest = 0
+        progress.skipped = False
+        game.settings.show_tutorial = True
+    elif interaction == "skip":
+        progress.skipped = True
+    elif interaction == "resume":
+        progress.skipped = False
+        game.settings.show_tutorial = True
+    elif not progress.skipped and game.settings.show_tutorial:
+        if interaction == "back":
+            step = max(0, step - 1)
+        elif step < len(TUTORIAL_STEPS) - 1 and (
+            interaction == "skip-step"
+            or (
+                interaction == "next"
+                and (body.step_id in TUTORIAL_INFORMATION or step < furthest)
+            )
+            or (
+                interaction == "observed"
+                and step == furthest
+                and tutorial_milestone(game, body.step_id)
+            )
+        ):
+            step += 1
+            furthest = max(step, furthest)
+    progress.step_id = TUTORIAL_STEPS[step]
+    progress.furthest_id = TUTORIAL_STEPS[furthest]
+    progress.step = (
+        sum(TUTORIAL_STEPS.index(key) <= step for key in LEGACY_TUTORIAL_STEPS) - 1
+    )
+    progress.furthest = (
+        sum(TUTORIAL_STEPS.index(key) <= furthest for key in LEGACY_TUTORIAL_STEPS) - 1
+    )
     game.onboarding = progress
 
 

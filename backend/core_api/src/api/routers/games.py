@@ -41,6 +41,7 @@ from src.api.game_schemas import (
     SaveSummary,
     SettingsAction,
     TutorialAction,
+    TutorialProgressAction,
     UpdateDiagram,
     UpdateDraft,
     VersionedAction,
@@ -673,7 +674,10 @@ async def tutorial(
 
 @router.post("/{game_id}/onboarding", response_model=GameView)
 async def onboarding(
-    game_id: UUID, body: OnboardingAction, owner_id: Owner, service: Service
+    game_id: UUID,
+    body: OnboardingAction | TutorialProgressAction,
+    owner_id: Owner,
+    service: Service,
 ):
     return await mutate(
         service,
