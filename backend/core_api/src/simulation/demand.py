@@ -11,6 +11,8 @@ from src.simulation.catalog import (
     FEATURES,
     MINUTES_PER_TICK,
     OPERATIONS,
+    REGION_LANGUAGE_WEIGHTS,
+    REGION_LOCALIZATION_BONUS,
     REGIONS,
     SCENARIOS,
     SYNC_FREQUENCY,
@@ -46,6 +48,13 @@ def campaign_weight(progress: float) -> float:
     return 4 * progress * (1 - progress) if 0 < progress < 1 else 0
 
 
+def arrival_weight(elapsed: int, duration: int) -> float:
+    if not 0 < elapsed <= duration:
+        return 0.0
+    phase = (elapsed - 0.5) / duration
+    return 6 * phase * (1 - phase) / (duration + 0.5 / duration)
+
+
 def game_minute(game: Game) -> int:
     return game.start_minute + game.tick * MINUTES_PER_TICK
 
@@ -65,11 +74,10 @@ def language_ready(game: Game, language: str) -> bool:
 
 
 def adoption(game: Game, region: str) -> float:
-    return (
-        1.18
-        if language_ready(game, REGIONS[region]["language"])
-        and REGIONS[region]["language"] != "English"
-        else 1.0
+    return 1 + REGION_LOCALIZATION_BONUS * sum(
+        weight
+        for language, weight in REGION_LANGUAGE_WEIGHTS[region].items()
+        if language != "English" and language_ready(game, language)
     )
 
 
@@ -258,10 +266,19 @@ def workload(
         targeted = sum(
             plan.spike * campaign_weight((game.tick - plan.start) / plan.duration)
             for plan in game.regional_campaigns.values()
-            if plan.region == region_id
+            if not plan.allocations and plan.region == region_id
+        )
+        # Newly acquired users make an additional burst of requests when they arrive.
+        arrival_load = sum(
+            allocation.audience
+            * arrival_weight(game.tick - plan.start, plan.duration)
+            * plan.spike
+            * CAMPAIGNS[key]["duration"]
+            for key, plan in game.regional_campaigns.items()
+            if (allocation := plan.allocations.get(region_id))
         )
         regional_lift = 1 + targeted + legacy_campaign + event + boost
-        audience_activity = population * profile * regional_lift
+        audience_activity = profile * (population * regional_lift + arrival_load)
         active_users = daily_active_users(game, population, region)
         population_activity += audience_activity
         active += active_users
@@ -280,7 +297,8 @@ def workload(
             ad_value += requested_ads * price
         baseline = profile * (base_rps * population + region_ads)
         baseline_requests += baseline
-        campaign_requests += baseline * targeted
+        arrival_requests = arrival_load * profile * base_rps
+        campaign_requests += baseline * targeted + arrival_requests
         if overview:
             _, local_minute, offset = local_time(region["timezone"], utc_minute)
             regional_details.append(
@@ -291,7 +309,7 @@ def workload(
                     local_minute=local_minute,
                     audience=round(population),
                     daily_active_users=active_users,
-                    requests=baseline * noise * regional_lift,
+                    requests=(baseline * regional_lift + arrival_requests) * noise,
                     daily_ad_revenue=daily_ad_revenue,
                 )
             )

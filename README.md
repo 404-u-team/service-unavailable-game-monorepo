@@ -126,7 +126,7 @@ Select a connection and choose **Add waypoint**. Drag the point to route around 
 
 Monitoring links collect diagnostic metrics from their origin. Each linked component uses one collector slot. Service history reserves two slots and needs at least one linked component. Collectors at capacity recognize links in component-ID order. Add slots or distribute coverage across collectors when links exceed capacity.
 
-The resource history chart records peak utilization for components covered by a collector in Service history mode. Gaps show ticks without a recorded reading. Deployment comparisons report monitored resource pressure at the time of the deployment.
+Resource history records individual utilization measurements and peak load for components covered by a collector in Service history mode. Gaps show ticks without a recorded reading. Deployment comparisons report monitored resource pressure at the time of the deployment.
 
 A database starts at 155 read and 62 write compute units per simulated second on two vCPUs and 8 GB RAM. Disk I/O has a shared budget. NVMe gives it 45% more headroom at an additional 35% of base daily cost. CPU, RAM, connection pools, storage space and legacy throttles can constrain throughput separately. A replica shares eligible reads and replays committed writes using its own hardware. Each available follower adds 8% of base disk work to primary writes. The in-game **Database Guide** explains the metrics, cache and replica routing, and recommended links.
 

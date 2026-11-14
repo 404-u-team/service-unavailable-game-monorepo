@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { target } from '../src/lib/workbench/onboarding';
 import type { Game } from '../src/lib/types';
+import { choose } from './forms';
 
 const tutorial = (page: Page) => page.getByRole('complementary', { name: /Guided onboarding|Обучение/ });
 const control = (page: Page, key: string) => {
@@ -121,9 +122,9 @@ for (const layout of ['desktop', 'compact']) {
     for (const source of ['api', 'db']) {
       await clickTarget(page, target.connect);
       await expect(highlight(page, target.source)).toBeVisible();
-      await control(page, target.source).selectOption(source);
+      await choose(control(page, target.source), source);
       await expect(highlight(page, target.destination)).toBeVisible();
-      await control(page, target.destination).selectOption({ label: 'Monitoring' });
+      await choose(control(page, target.destination), { label: 'Monitoring' });
       await clickTarget(page, target.saveLink);
       await expect(page.getByRole('dialog')).toHaveCount(0);
     }
@@ -174,7 +175,7 @@ for (const layout of ['desktop', 'compact']) {
     await clickTarget(page, target.edit);
     await step(page, 'Change capacity in the draft');
     await expect(highlight(page, target.instance)).toBeVisible();
-    await control(page, target.instance).selectOption('2');
+    await choose(control(page, target.instance), '2');
     await clickTarget(page, target.save);
     await step(page, 'Open Deployment review');
     if (compact) await clickTarget(page, target.close);

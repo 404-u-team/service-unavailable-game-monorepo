@@ -1,3 +1,4 @@
+import { parseNumber } from '../src/lib/controls/numeric';
 import { expect, test } from 'bun:test';
 import { applyFrame } from '../src/lib/live';
 import type { Diagram, Game } from '../src/lib/types';
@@ -44,4 +45,14 @@ test('the spotlight clamps to the viewport and hides fully off-screen targets', 
   expect(spotlightBounds({ left: -30, top: 18, right: 55, bottom: 120 }, viewport))
     .toEqual({ left: 0, top: 13, right: 60, bottom: 100 });
   expect(spotlightBounds({ left: 12, top: 101, right: 55, bottom: 120 }, viewport)).toBeUndefined();
+});
+
+test('localized numeric input parses valid separators and rejects malformed values', () => {
+  expect(parseNumber('1,234.50', 'en')).toBe(1234.5);
+  expect(parseNumber('1\u202f234,50', 'ru')).toBe(1234.5);
+  expect(parseNumber('−3,25', 'ru')).toBe(-3.25);
+  expect(parseNumber('5.50', 'ru')).toBe(5.5);
+  expect(parseNumber('1,2,3', 'en')).toBeUndefined();
+  expect(parseNumber('12 34,50', 'ru')).toBeUndefined();
+  expect(parseNumber('-', 'en')).toBeUndefined();
 });

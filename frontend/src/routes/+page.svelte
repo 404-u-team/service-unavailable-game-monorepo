@@ -1,4 +1,7 @@
 <script lang="ts">
+  import NumberInput from '#lib/controls/NumberInput.svelte';
+  import TextInput from '#lib/controls/TextInput.svelte';
+  import Toggle from '#lib/controls/Toggle.svelte';
   import { apiMessage, locale, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
@@ -143,7 +146,7 @@
           {/each}
         </fieldset>
         <div class="setup-grid">
-          <label class="field"><span>{t("Service name")}</span><input bind:value={name} maxlength="60" required /></label>
+          <label class="field"><span>{t("Service name")}</span><TextInput bind:value={name} maxlength={60} required /></label>
           <fieldset class="difficulty">
             <legend class="eyebrow">{t("Difficulty")}</legend>
             {#each Object.entries(catalog?.difficulties ?? {}) as [id, option]}
@@ -157,8 +160,8 @@
           </section>
         {/if}
         <div class="row wrap seed">
-          <label class="row"><input type="checkbox" bind:checked={showSeed} /> {t("Specify a simulation seed")}</label>
-          {#if showSeed}<label class="field seed-field"><span>{t("Simulation seed")}</span><input type="number" min="0" max="4294967295" step="1" bind:value={seed} /></label>{/if}
+          <label class="row"><Toggle bind:checked={showSeed} /> {t("Specify a simulation seed")}</label>
+          {#if showSeed}<div class="field seed-field"><span>{t("Simulation seed")}</span><NumberInput label={t("Simulation seed")} min={0} max={4294967295} bind:value={seed} /></div>{/if}
         </div>
         <div class="row setup-actions"><a href="/" class="btn large">{t("Cancel")}</a><button class="btn primary large" disabled={busy || loading || !starting}>{busy ? t("Creating game…") : t("Create game")} <ArrowRight size={15} /></button></div>
       </form>
@@ -228,8 +231,8 @@
     {:else if current === 'settings'}
       <div class="intro"><h1>{t("Settings")}</h1><p class="muted">{t("Defaults for new games on this browser.")}</p></div>
       <div class="panel pad stack form">
-        <label class="row spread">{t("Show onboarding prompts")} <input type="checkbox" bind:checked={preferences.show_tutorial} onchange={remember} /></label>
-        <label class="row spread">{t("Reduce motion")} <input type="checkbox" bind:checked={preferences.reduced_motion} onchange={remember} /></label>
+        <label class="row spread">{t("Show onboarding prompts")} <Toggle bind:checked={preferences.show_tutorial} onchange={remember} /></label>
+        <label class="row spread">{t("Reduce motion")} <Toggle bind:checked={preferences.reduced_motion} onchange={remember} /></label>
         <Language />
       </div>
     {:else}

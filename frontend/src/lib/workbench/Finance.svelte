@@ -1,13 +1,15 @@
 <script lang="ts">
   import { t } from '../i18n.svelte';
-  import { clock, num, pct, preciseMoney } from '../format';
+  import { clock, num, pct, preciseMoney, when } from '../format';
   import type { Catalog, Game, OperatingCosts, RevenueSources } from '../types';
   import { target } from './onboarding';
+  import Select from '../controls/Select.svelte';
   import Chart from './Chart.svelte';
 
   let { game, catalog }: { game: Game; catalog: Catalog } = $props();
   const economy = $derived(game.economy);
   const time = (tick: number) => clock(tick, game.start_minute, catalog.minutes_per_tick);
+  const sampleTime = (tick: number) => when(tick, game.start_minute, catalog.minutes_per_tick);
   const revenues: [keyof RevenueSources, string][] = [
     ['advertising', 'Advertising'],
     ['subscriptions', 'Premium subscriptions'],
@@ -23,8 +25,8 @@
   const emptyText = $derived(t('Run the simulation to record financial activity.'));
   const currency = (value: number) => preciseMoney(value);
   const display = (value: number | null, format: (value: number) => string) => value === null ? '—' : format(value);
-  const totalRevenue = $derived(economy.history.map(({ revenue }) => revenue.advertising + revenue.subscriptions));
-  const totalCosts = $derived(economy.history.map(({ expenses }) => expenses.infrastructure + expenses.traffic + expenses.payments));
+  const totalRevenue = $derived(economy.history.map(({ revenue }) => revenue.advertising + revenue.subscriptions + revenue.legacy));
+  const totalCosts = $derived(economy.history.map(({ expenses }) => expenses.infrastructure + expenses.traffic + expenses.payments + expenses.legacy));
   const ticks = $derived(economy.history.map(({ tick }) => tick));
   let source = $state<keyof RevenueSources | 'total'>('total');
 </script>
@@ -33,8 +35,8 @@
   {#each [
     { label: 'Balance', value: currency(economy.balance), detail: t('{0} net to date', [currency(economy.profit)]), loss: economy.balance < 0 },
     { label: 'Revenue / day', value: currency(economy.daily_revenue), detail: t('{0} recognized to date', [currency(economy.revenue)]) },
-    { label: 'Expenses / day', value: currency(economy.daily_total_expenses), detail: t('{0} operating costs', [currency(economy.daily_operating)]) },
-    { label: 'Net profit / day', value: currency(economy.daily_net_profit), detail: t('Operating margin {0}', [display(economy.operating_margin, (value) => pct(value, 1))]), loss: economy.daily_net_profit < 0 },
+    { label: 'Operating costs / day', value: currency(economy.daily_operating), detail: t('{0} operating costs to date', [currency(economy.operating)]) },
+    { label: 'Operating profit / day', value: currency(economy.daily_profit), detail: t('Operating margin {0}', [display(economy.operating_margin, (value) => pct(value, 1))]), loss: economy.daily_profit < 0 },
     { label: 'Daily active users (DAU)', value: num(Math.round(economy.daily_active_users)), detail: t('{0} registered users', [num(game.audience)]) },
     { label: 'Revenue per DAU', value: display(economy.arpdau, (value) => preciseMoney(value, 4)), detail: t('ARPDAU') },
     { label: 'Operating cost per DAU', value: display(economy.cost_per_dau, (value) => preciseMoney(value, 4)), detail: t('Per game day') },
@@ -67,13 +69,11 @@
       <p class="muted">{t('Average value per 1,000 served impressions {0}', [currency(economy.daily_sources.advertising * 1000 / economy.daily_ad_impressions)])}</p>
     {/if}
     <p class="muted">{t('Ads earn revenue when served. Subscriptions are paid up front and recognized over the paid term.')}</p>
-    <label class="field"><span>{t('Revenue history')}</span>
-      <select bind:value={source}>
-        <option value="total">{t('Recognized revenue')}</option>
-        {#each revenues.slice(0, 2) as [key, label]}<option value={key}>{t(label)}</option>{/each}
-      </select>
-    </label>
-    <Chart title={t('Revenue per simulation step')} values={source === 'total' ? totalRevenue : economy.history.map((point) => point.revenue[source as keyof RevenueSources])} {ticks} {time} {emptyText} format={(value) => preciseMoney(value, 4)} />
+    <div class="field"><span>{t('Revenue history')}</span>
+      <Select label={t('Revenue history')} value={source} onchange={(value) => source = value as typeof source}
+        options={[{ value: 'total', label: t('Recognized revenue') }, ...revenues.slice(0, 2).map(([value, label]) => ({ value, label: t(label) }))]} />
+    </div>
+    <Chart title={t('Revenue per simulation step')} values={source === 'total' ? totalRevenue : economy.history.map((point) => point.revenue[source as keyof RevenueSources])} {ticks} {time} {sampleTime} {emptyText} format={(value) => preciseMoney(value, 4)} />
   </section>
 
   <section class="panel pad stack">
@@ -88,14 +88,10 @@
             {/if}
           {/each}
           <tr class="subtotal"><th scope="row">{t('Operating costs')}</th><td>{currency(economy.daily_operating)}</td><td>{currency(economy.operating)}</td></tr>
-          <tr><th scope="row">{t('Development')}</th><td>{currency(economy.recent_purchases.development)}</td><td>{currency(economy.development)}</td></tr>
-          <tr><th scope="row">{t('Marketing')}</th><td>{currency(economy.recent_purchases.marketing)}</td><td>{currency(economy.marketing)}</td></tr>
-          <tr><th scope="row">{t('Deployments')}</th><td>{currency(economy.recent_purchases.deployment)}</td><td>{currency(economy.deployment)}</td></tr>
         </tbody>
-        <tfoot><tr><th scope="row">{t('Total expenses')}</th><td>{currency(economy.daily_total_expenses)}</td><td>{currency(economy.operating + economy.development + economy.marketing + economy.deployment)}</td></tr></tfoot>
       </table>
     </div>
-    <Chart title={t('Operating costs per simulation step')} values={totalCosts} {ticks} {time} {emptyText} format={(value) => preciseMoney(value, 4)} />
+    <Chart title={t('Operating costs per simulation step')} values={totalCosts} {ticks} {time} {sampleTime} {emptyText} format={(value) => preciseMoney(value, 4)} />
   </section>
 
   <section class="panel pad stack">
@@ -103,12 +99,31 @@
     <dl>
       <div><dt>{t('Starting capital')}</dt><dd>{currency(economy.starting_capital)}</dd></div>
       <div><dt>{t('Cash received to date')}</dt><dd>{currency(economy.cash_received)}</dd></div>
+      <div><dt>{t('Subscription cash receipts')}</dt><dd>{currency(economy.subscription_cash)}</dd></div>
+      <div><dt>{t('Operating costs paid')}</dt><dd>−{currency(economy.operating)}</dd></div>
+      {#each [['Development', economy.development], ['Marketing', economy.marketing], ['Deployments', economy.deployment]] as [label, amount] (label)}
+        <div><dt>{t(String(label))}</dt><dd>−{currency(Number(amount))}</dd></div>
+      {/each}
       <div><dt>{t('Prepaid subscription revenue remaining')}</dt><dd>{currency(economy.deferred_subscription_revenue)}</dd></div>
     </dl>
-    <Chart title={t('Game balance')} values={game.business_history.map((point) => point.balance)} ticks={game.business_history.map((point) => point.tick)} {time} />
+    {#if economy.purchases?.length}
+      <details>
+        <summary>{t('Recent purchases')}</summary>
+        <dl>
+          {#each economy.purchases as [tick, costs] (tick)}
+            {#each [['Development', costs.development], ['Marketing', costs.marketing], ['Deployments', costs.deployment]] as [label, amount] (label)}
+              {#if Number(amount) > 0}<div><dt>{sampleTime(tick)} · {t(String(label))}</dt><dd>−{currency(Number(amount))}</dd></div>{/if}
+            {/each}
+          {/each}
+        </dl>
+      </details>
+    {/if}
+    <Chart title={t('Game balance')} values={game.business_history.map((point) => point.balance)} ticks={game.business_history.map((point) => point.tick)} {time} {sampleTime} format={currency} />
   </section>
 
   <section class="panel pad stack">
+    <h2>{t('Operating profit')}</h2>
+    <Chart title={t('Operating profit per simulation step')} values={totalRevenue.map((revenue, index) => revenue - totalCosts[index])} {ticks} {time} {sampleTime} {emptyText} format={(value) => preciseMoney(value, 4)} />
     <h2>{t('Production infrastructure')}</h2>
     <p class="muted">{t('Recurring prices use a {0}-day game month. Deployed components cost money even when idle.', [catalog.days_per_month])}</p>
     <div class="ledger">

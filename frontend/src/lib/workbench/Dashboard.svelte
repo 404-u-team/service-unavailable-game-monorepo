@@ -6,6 +6,11 @@
   import { onDestroy } from 'svelte';
   import { ArrowRight, ArrowUpRight, ChevronRight } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
+  import { page } from '$app/state';
+  import Toggle from '../controls/Toggle.svelte';
+  import Choice from '../controls/Choice.svelte';
+  import Select from '../controls/Select.svelte';
+  import NumberInput from '../controls/NumberInput.svelte';
   import Meter from '../Meter.svelte';
   import Guide from '../Guide.svelte';
   import TutorialControls from './TutorialControls.svelte';
@@ -36,13 +41,20 @@
   let settingsTab = $state<'general' | 'accessibility' | 'storage'>('general');
   let estimate = $state<Forecast>();
   let readiness = $state<Forecast>();
-  let targetMarket = $state('europe');
+  let targetMarkets = $state(['europe']);
+  const marketName = (id: string) => t(game.markets.find((market) => market.id === id)?.name ?? id);
+  const marketOptions = $derived(game.markets.map((market) => ({
+    value: market.id, label: t(market.name), disabled: market.stage !== 'active',
+    reason: market.stage !== 'active' ? t('Launch the market to target it.') : undefined
+  })));
   let budget = $state<number>();
   let campaignHours = $state<number>();
   let forecastError = $state('');
   let pending = $state(false);
   let range = $state('24');
   let historyComponent = $state('');
+  let historyResource = $state('');
+  let serviceChart = $state('traffic');
   let forecastToken = 0;
   let lastReadiness = '';
   const metric = $derived(game.snapshot.metrics);
@@ -56,16 +68,23 @@
     history.some((point) => point.peak_utilization?.[node.id] !== undefined) ||
     Object.values(game.snapshot.monitors).some((monitor) => monitor.history && monitor.covered.includes(node.id))));
   const inspectedHistory = $derived(historyComponents.find((node) => node.id === historyComponent) ?? historyComponents[0]);
+  const resourceKeys = $derived(inspectedHistory ? [...new Set(
+    history.flatMap((point) => Object.keys(point.resource_utilization?.[inspectedHistory.id] ?? {}))
+  )].sort() : []);
+  const resource = $derived(resourceKeys.includes(historyResource) ? historyResource : '');
   const currentCampaign = $derived(catalog.campaigns[detail]);
   const currentFeature = $derived(game.features.find((item) => item.id === detail));
   const selectedFeature = $derived(game.features.find((item) => item.id === featureId));
+  const activeCampaigns = $derived(game.campaigns.filter((item) => item.remaining > 0));
+  const activeMarkets = $derived(game.markets.filter((item) => item.stage === 'developing'));
+  const activeLanguages = $derived(game.languages.filter((item) => item.remaining > 0));
   const inDevelopment = $derived(game.features.filter((item) => item.state === 'developing' || item.state === 'ready'));
   const gameTime = (tick: number) => when(tick, game.start_minute, catalog.minutes_per_tick);
   const tickTime = (tick: number) => clock(tick, game.start_minute, catalog.minutes_per_tick);
   const incident = $derived(game.incidents.find((item) => item.id === detail));
   const events = $derived(game.incidents.filter((item) => eventFilter === 'all' || (eventFilter === 'active' ? item.active : !item.active)));
   const activeEvents = $derived(game.incidents.filter((item) => item.active));
-  const selectedIncident = $derived(events.find((item) => item.id === eventId) ?? events[0]);
+  const selectedIncident = $derived(events.find((item) => item.id === (eventId || page.url.searchParams.get('event'))) ?? events[0]);
   const deployment = $derived(game.deployments.find((item) => item.id === detail));
   const serviceStats = $derived([
     { label: 'Requests / sec', value: num(metric.rps), detail: t('{0} served', [rps(metric.throughput)]) },
@@ -89,7 +108,7 @@
   async function plan(id: string) {
     dialog = 'campaign';
     detail = id;
-    targetMarket = 'europe';
+    targetMarkets = ['europe'];
     budget = catalog.campaigns[id].cost;
     campaignHours = catalog.campaigns[id].duration * catalog.minutes_per_tick / 60;
     await requestForecast(id);
@@ -102,8 +121,10 @@
     estimate = undefined;
     forecastError = '';
     try {
+      if (!targetMarkets.length) return;
       if (budget == null || budget < 10 || budget > 100_000 || ticks < 1 || ticks > 288) return;
-      const query = new URLSearchParams({ region: targetMarket, budget: String(budget), duration: String(ticks) });
+      const query = new URLSearchParams({ budget: String(budget), duration: String(ticks) });
+      for (const region of targetMarkets) query.append('regions', region);
       const result = await api<Forecast>(`/${game.id}/campaigns/${id}/forecast?${query}`);
       if (token === forecastToken) estimate = result;
     } catch (reason) {
@@ -202,11 +223,13 @@
     </div>
     <p>{message(item.symptom)}</p>
     <dl class="breakdown">
+      {#if item.category}<div><dt>{t('Event category')}</dt><dd>{t(item.category)}</dd></div>{/if}
+      {#if item.cause || item.category === 'Player action'}<div><dt>{t('Event ID')}</dt><dd>{item.id}</dd></div>{/if}
       <div><dt>{t("Started")}</dt><dd>{gameTime(item.start)}</dd></div>
-      <div><dt>{item.active ? t("Expected end") : t("Ended")}</dt><dd>{gameTime(item.end)}</dd></div>
+      <div><dt>{item.active ? t("Expected end") : t("Ended")}</dt><dd>{item.active && item.cause === "Resource saturation" ? t("Awaiting recovery") : gameTime(item.end)}</dd></div>
       <div><dt>{t("Duration")}</dt><dd>{duration(item.end - item.start)}</dd></div>
       <div><dt>{t("Failed requests during incident")}</dt><dd>{num(item.failed_requests)}</dd></div>
-      {#if item.cause}<div><dt>{t("Diagnosed cause")}</dt><dd>{item.cause === 'failure' ? t("Instance failure") : item.cause === 'degradation' ? t("Reduced capacity") : t("Storage pressure")}</dd></div>{/if}
+      {#if item.cause}<div><dt>{t("Diagnosed cause")}</dt><dd>{t(({ failure: 'Instance failure', degradation: 'Reduced capacity', storage: 'Storage pressure' } as Record<string, string>)[item.cause] ?? item.cause)}</dd></div>{/if}
       {#if item.target}<div><dt>{t("Affected component")}</dt><dd>{t(game.production.nodes.find((node) => node.id === item.target)?.name ?? item.target)}</dd></div>{/if}
       {#if item.resolution}<div><dt>{t("Resolution")}</dt><dd>{message(item.resolution)}</dd></div>{/if}
     </dl>
@@ -238,7 +261,8 @@
       <div class="row wrap">
       {#if helpArticles[section]}<a class="btn" href={guideArticleHref(link('guide'), helpArticles[section]!)}>{t('Guide')}</a>{/if}
       {#if section === 'monitor'}
-        <label class="time-range"><span class="sr-only">{t("History range")}</span><select bind:value={range}><option value="24">{t("{0}h", [24])}</option><option value="6">{t("{0}h", [6])}</option><option value="1">{t("{0}h", [1])}</option></select></label>
+        <div class="time-range"><Select label={t("History range")} bind:value={range}
+          options={[24, 6, 1].map((hours) => ({ value: String(hours), label: t("{0}h", [hours]) }))} /></div>
       {:else if section === 'growth' || section === 'product'}<span class="badge dim">{t("Budget ·")} {money(game.balance)}</span>
       {:else if section === 'events'}<span class="badge {activeEvents.length ? 'warn' : 'dim'}">{activeEvents.length} {t("active")}</span>{/if}
       </div>
@@ -259,11 +283,20 @@
     <section class="panel pad stack"><h2>{t("Recent events")}</h2>{@render timeline()}</section>
   {:else if section === 'monitor'}
     {@render statCards()}
-    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} />{/if}
+    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} markets={game.markets} />{/if}
     <div class="split">
       <section class="panel pad stack">
         <div><h2>{t("Traffic / throughput")}</h2><p class="muted">{t("Incoming and successful requests per second")}</p></div>
-        <Chart title={t("Request traffic")} values={history.map((point) => point.metrics.rps)} secondary={history.map((point) => point.metrics.throughput)} ticks={history.map((point) => point.tick)} time={tickTime} />
+        <Select label={t('Service history metric')} bind:value={serviceChart} options={[
+          { value: 'traffic', label: t('Request traffic') }, { value: 'latency', label: t('Average latency') },
+          { value: 'error', label: t('Error rate') }
+        ]} />
+        <Chart title={t(serviceChart === 'latency' ? 'Average latency' : serviceChart === 'error' ? 'Error rate' : 'Request traffic')} primaryTitle={serviceChart === 'traffic' ? t('Incoming requests') : undefined}
+          secondaryTitle={t('Successful requests')} format={serviceChart === 'latency' ? ms : serviceChart === 'error' ? (value) => pct(value, 2) : rps}
+          values={history.map(({ metrics }) => serviceChart === 'latency' ? (metrics.throughput ? metrics.latency : null)
+            : serviceChart === 'error' ? metrics.errors / (metrics.rps || 1) : metrics.rps)}
+          secondary={serviceChart === 'traffic' ? history.map((point) => point.metrics.throughput) : []}
+          ticks={history.map((point) => point.tick)} time={tickTime} sampleTime={gameTime} />
         {#if history.length}<small><span class="accent">{t("━ Incoming")}</span> &nbsp; <span class="throughput">{t("┄ Successful")}</span></small>{/if}
       </section>
       <section class="panel inset pad stack"><h2>{t("Incident timeline")}</h2>{@render timeline()}<a class="btn" href={link('events')}>{t("View events")} <ArrowRight size={14} /></a></section>
@@ -292,16 +325,19 @@
       <section class="panel pad stack">
         <div class="row spread wrap">
           <h2>{t('Resource load over time')}</h2>
-          <label class="field">
+          <div class="field">
             <span>{t('Component')}</span>
-            <select value={inspectedHistory.id} onchange={(event) => historyComponent = event.currentTarget.value}>
-              {#each historyComponents as node (node.id)}<option value={node.id}>{t(node.name)}</option>{/each}
-            </select>
-          </label>
+            <Select label={t('Component')} value={inspectedHistory.id} onchange={(value) => historyComponent = value}
+              options={historyComponents.map((item) => ({ value: item.id, label: t(item.name) }))} />
+          </div>
+          <div class="field"><span>{t('Resource')}</span><Select label={t('Resource')} value={resource} onchange={(value) => historyResource = value}
+            options={[{ value: '', label: t('Peak resource load') }, ...resourceKeys.map((value) => ({ value, label: t(value) }))]} /></div>
         </div>
-        <Chart title={t('Peak resource load for {0}', [t(inspectedHistory.name)])}
-          values={history.map((point) => point.peak_utilization?.[inspectedHistory.id] ?? null)}
-          ticks={history.map((point) => point.tick)} time={tickTime} format={pct}
+        <Chart title={resource ? t('{0} load for {1}', [t(resource), t(inspectedHistory.name)]) : t('Peak resource load for {0}', [t(inspectedHistory.name)])}
+          values={history.map((point) => (resource
+            ? point.resource_utilization?.[inspectedHistory.id]?.[resource]
+            : point.peak_utilization?.[inspectedHistory.id]) ?? null)}
+          ticks={history.map((point) => point.tick)} time={tickTime} sampleTime={(tick) => when(tick, game.start_minute, catalog.minutes_per_tick)} format={pct}
           emptyText={t('Resume the simulation to record resource load for this component.')} />
       </section>
     {/if}
@@ -337,10 +373,10 @@
       </section>
     </div>
   {:else if section === 'growth'}
-    <div class="split">
+    <div class="split growth-summary">
       <section class="panel pad stack">
         <div><p class="eyebrow">{t("Registered users")}</p><strong class="big-stat">{num(game.audience)}</strong><p class="muted">{t("Satisfaction ·")} {pct(game.satisfaction, 1)}</p></div>
-        <Chart title={t("Registered users")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} time={tickTime} />
+        <Chart title={t("Registered users")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} time={tickTime} sampleTime={(tick) => when(tick, game.start_minute, catalog.minutes_per_tick)} />
       </section>
       <section class="panel inset pad stack">
         <h2 data-tutorial={target.growth}>{t("Growth readiness")}</h2><p class="muted">{t("Projected load during a creator campaign")}</p>
@@ -351,8 +387,9 @@
         {:else}<p class="muted">{t("Open a campaign to request a forecast.")}</p>{/if}
       </section>
     </div>
-    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} />{/if}
+    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} markets={game.markets} />{/if}
     <MarketProjects {game} {busy} {act} />
+    <MarketProjects {game} {busy} {act} localization />
     <div><h2>{t("Campaign catalog")}</h2><p class="muted">{t("Compare cost, reach and projected demand.")}</p></div>
     <div class="cards campaigns">
       {#each Object.entries(catalog.campaigns) as [id, campaign]}
@@ -363,12 +400,26 @@
           <div class="row spread"><strong class="stat">{money(campaign.cost)}</strong><span class="mono muted">{duration(campaign.duration)}</span></div>
           <p class="muted">≈ {num(campaign.audience)} {t("new users")}</p>
           {#if running}
-            {#if running.region}<p>{t(game.markets.find((market) => market.id === running.region)?.name ?? '')} · {money(running.budget ?? 0)}</p>{/if}
+            {#if running.region}<p>{(running.regions?.length ? running.regions : [running.region]).map(marketName).join(', ')} · {money(running.budget ?? 0)}</p>{/if}
             <Meter value={running.progress} label={t("{0} remaining", [duration(running.remaining)])} />
           {:else}<button class="btn {id === 'creator' ? 'primary' : ''}" onclick={() => plan(id)}>{t("Plan campaign")} <ArrowRight size={14} /></button>{/if}
         </article>
       {/each}
     </div>
+    {#if activeCampaigns.length || activeMarkets.length || activeLanguages.length}
+      <section class="panel pad stack">
+        <h2>{t('Active projects and campaigns')}</h2>
+        {#each activeCampaigns as item (item.id)}
+          <div class="row spread wrap"><strong>{t(catalog.campaigns[item.id].name)}</strong><span>{duration(item.remaining)}</span></div>
+        {/each}
+        {#each activeMarkets as item (item.id)}
+          <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
+        {/each}
+        {#each activeLanguages as item (item.name)}
+          <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
+        {/each}
+      </section>
+    {/if}
   {:else if section === 'product'}
     <div class="cards stats">
       {#each [
@@ -411,7 +462,6 @@
         </aside>
       {/if}
     </div>
-    <MarketProjects {game} {busy} {act} localization />
     <ProductSettings {game} {catalog} {busy} {error} save={(product) => act('/product', { product }, 'PUT')} />
   {:else if section === 'finance'}
     <Finance {game} {catalog} />
@@ -465,7 +515,7 @@
               <button class="btn" aria-pressed={game.speed === option.speed} disabled={busy} onclick={() => act('/clock', { speed: option.speed }, 'PUT')}>{t(option.label)}</button>
             {/each}
           </div></div>
-          <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><input type="checkbox" role="switch" checked={game.settings.show_tutorial} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, show_tutorial: event.currentTarget.checked } }, 'PUT')} /></label>
+          <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><Toggle switchStyle checked={game.settings.show_tutorial} disabled={busy} onchange={(value) => act('/settings', { settings: { ...game.settings, show_tutorial: value } }, 'PUT')} /></label>
           <TutorialControls {game} {busy} change={tutorialAction} />
           <div class="stack"><h3>{t('Keyboard shortcuts')}</h3>
             <dl class="breakdown">
@@ -477,7 +527,7 @@
           <div class="row wrap"><button class="btn" disabled={busy} onclick={() => act('/settings', { settings: { show_tutorial: true, reduced_motion: false } }, 'PUT')}>{t("Restore defaults")}</button><button class="btn primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</button></div>
         {:else if settingsTab === 'accessibility'}
           <h2>{t("Accessibility")}</h2>
-          <label class="row spread setting"><span><strong>{t("Reduce motion")}</strong><small>{t("Reduce animation and transitions.")}</small></span><input type="checkbox" role="switch" checked={game.settings.reduced_motion} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, reduced_motion: event.currentTarget.checked } }, 'PUT')} /></label>
+          <label class="row spread setting"><span><strong>{t("Reduce motion")}</strong><small>{t("Reduce animation and transitions.")}</small></span><Toggle switchStyle checked={game.settings.reduced_motion} disabled={busy} onchange={(value) => act('/settings', { settings: { ...game.settings, reduced_motion: value } }, 'PUT')} /></label>
 
         {:else}
           <div><h2>{t("Save management")}</h2><p class="muted">{t("The server saves progress as you play.")}</p></div>
@@ -498,34 +548,58 @@
 </main>
 
 {#if dialog === 'campaign' && currentCampaign}
-  <Modal title={t("Campaign planning")} subtitle={t(currentCampaign.name)} close={() => dialog = undefined}>
+  <Modal title={t("Campaign planning")} subtitle={t(currentCampaign.name)} close={() => dialog = undefined} wide>
     <div class="stack">
-      <p>{t(currentCampaign.description)}</p>
-      <div class="split equal">
-        <label class="field"><span>{t('Target market')}</span><select bind:value={targetMarket} onchange={updatePlan}>
-          {#each game.markets.filter((market) => market.stage === 'active') as market (market.id)}
-            <option value={market.id}>{t(market.name)}</option>
-          {/each}
-        </select></label>
-        <label class="field"><span>{t('Campaign budget')}</span><input type="number" min="10" max="100000" bind:value={budget} oninput={updatePlan} /></label>
-        <label class="field"><span>{t('Duration (game hours)')}</span><input type="number" min={catalog.minutes_per_tick / 60} max="48" step="any" bind:value={campaignHours} oninput={updatePlan} /></label>
+      <p>{t('Shorter campaigns acquire the same expected number of users faster and can create a sharper traffic peak.')}</p>
+      <div class="stack">
+        <div class="field"><span>{t('Target markets')}</span>
+          <Choice label={t('Target markets')} options={marketOptions} selected={targetMarkets} multiple searchable
+            choose={(regions) => { targetMarkets = regions; updatePlan(); }} />
+        </div>
+        <div class="split equal">
+          <div class="field"><span>{t('Campaign budget')}</span><NumberInput label={t('Campaign budget')} bind:value={budget} min={10} max={100000} step={50} precision={2} unit="USD" onchange={updatePlan} /></div>
+          <div class="field"><span>{t('Duration (game hours)')}</span><NumberInput label={t('Duration (game hours)')} bind:value={campaignHours} min={.16} max={48} precision={2} onchange={updatePlan} /></div>
+        </div>
       </div>
       {#if estimate?.plan}
-        <dl class="breakdown">
-          <div><dt>{t("Duration")}</dt><dd>{duration(estimate.plan.duration)}</dd></div>
-          <div><dt>{t("Expected acquisition")}</dt><dd>≈ {num(estimate.plan.acquired)} {t("users")}</dd></div>
-          <div><dt>{t("Cost per acquired user")}</dt><dd>{estimate.plan.cost_per_user == null ? '—' : preciseMoney(estimate.plan.cost_per_user)}</dd></div>
-        </dl>
+        {@const preview = estimate.plan}
+        <div class="split equal">
+          <section class="stack">
+            <h3>{t('Regional allocation')}</h3>
+            <p class="muted">{t('The total budget is split evenly across selected markets.')}</p>
+            <dl class="breakdown">
+              <div><dt>{t('Total budget')}</dt><dd>{preciseMoney(preview.budget)}</dd></div>
+              {#each Object.entries(preview.allocations) as [id, allocation] (id)}
+                <div><dt>{marketName(id)}</dt><dd>{preciseMoney(allocation.budget)} · {t('{0} users', [num(Math.round(allocation.audience))])}</dd></div>
+              {/each}
+              <div><dt>{t("Expected acquisition")}</dt><dd>≈ {t('{0} users', [num(Math.round(preview.acquired))])}</dd></div>
+              <div><dt>{t("Average acquisition rate")}</dt><dd>{t('{0} users/hour', [num(preview.acquired / (preview.duration * catalog.minutes_per_tick / 60))])}</dd></div>
+              <div><dt>{t("Duration")}</dt><dd>{duration(preview.duration)}</dd></div>
+            </dl>
+          </section>
+          <section class="stack">
+            <h3>{t('Expected user arrivals')}</h3>
+            <Chart title={t('Users per simulation step')} values={[0, ...preview.arrivals]}
+              ticks={Array.from({ length: preview.arrivals.length + 1 }, (_, i) => i)}
+              time={(tick) => duration(tick)} sampleTime={(tick) => t('{0} after launch', [duration(tick)])} />
+            {#if preview.peak_rps != null}
+              <p>{t('Expected peak traffic: {0}', [rps(preview.peak_rps)])}
+                {#if preview.baseline_peak_rps != null}<small>{t('Baseline peak: {0}', [rps(preview.baseline_peak_rps)])}</small>{/if}
+              </p>
+            {/if}
+            <ForecastCard forecast={estimate} />
+          </section>
+        </div>
+        {#if estimate.availability.low < .95}<p class="notice warn">{t('Capacity may be exceeded')}</p>{/if}
       {:else if !pending && !forecastError}
-        <p class="notice warn">{t('Enter a valid budget and duration to see the forecast.')}</p>
+        <p class="notice warn">{t(targetMarkets.length ? 'Enter a valid budget and duration to see the forecast.' : 'Select at least one active market.')}</p>
       {/if}
       {#if pending}<p aria-live="polite">{t("Calculating forecast…")}</p>{/if}
-      {#if estimate}<ForecastCard forecast={estimate} />{/if}
       {#if forecastError || error}<p class="notice error" role="alert">{message(forecastError || error)}</p>{/if}
-      {#if game.balance < (budget ?? Infinity)}<p class="notice warn">{t("Insufficient funds.")}</p>{/if}
+      {#if budget != null && game.balance < budget}<p class="notice warn">{t("Insufficient funds.")}</p>{/if}
     </div>
     {#snippet footer()}
-      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn primary" disabled={busy || pending || !estimate?.plan?.acquired || game.balance < (budget ?? Infinity) || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`, { region: targetMarket, budget, duration: estimate?.plan?.duration })}>{t("Start campaign")}</button></div>
+      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn primary" disabled={busy || pending || !estimate?.plan?.acquired || game.balance < (estimate?.plan?.budget ?? Infinity) || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`, { regions: targetMarkets, budget: estimate?.plan?.budget, duration: estimate?.plan?.duration })}>{t("Start campaign")}</button></div>
     {/snippet}
   </Modal>
 {:else if dialog === 'feature' && currentFeature}
@@ -596,6 +670,8 @@
   .stat { display: block; font-size: clamp(22px, 2.4vw, 34px); line-height: 1.15; margin: 8px 0 4px; }
   .big-stat { display: block; font-size: clamp(34px, 4vw, 52px); line-height: 1.1; margin: 10px 0 4px; }
   .split { grid-template-columns: 2.05fr 1fr; }
+  .growth-summary { align-items: start; }
+  .growth-summary :global(.chart) { max-width: 740px; }
   .split.equal { grid-template-columns: 1fr 1fr; }
   .split > .stack { align-content: start; }
   .campaigns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -639,7 +715,6 @@
   .breakdown dd { font: 400 12px var(--mono); text-align: right; }
   .overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
   .overview strong { font-size: 21px; }
-  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
   @media (max-width: 1050px) {
     .dashboard { padding: 24px 20px; }
     .cards, .split { gap: 12px; }

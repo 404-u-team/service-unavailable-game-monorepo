@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from src.simulation.catalog import topic_accepts
 from src.simulation.models import Game, Kind, Node
 from src.simulation.topology import Graph, config
 
@@ -47,7 +48,9 @@ REQUIREMENTS = {
 }
 
 
-def requirement_met(rule: Requirement, graph: Graph, game: Game) -> bool:
+def requirement_met(
+    rule: Requirement, graph: Graph, game: Game, operation: str | None = None
+) -> bool:
     apis = [
         node
         for node in graph.nodes.values()
@@ -65,6 +68,11 @@ def requirement_met(rule: Requirement, graph: Graph, game: Game) -> bool:
                     else graph.targets[source]
                 )
                 if graph.nodes[target].kind == kind
+                and (
+                    kind != "queue"
+                    or operation is None
+                    or topic_accepts(config(graph.nodes[target])["topic"], operation)
+                )
             }
         if (
             sum(

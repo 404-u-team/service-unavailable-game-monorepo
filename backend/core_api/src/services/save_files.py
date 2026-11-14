@@ -3,7 +3,7 @@
 import json
 import re
 from datetime import UTC, datetime
-from math import isfinite
+from math import isclose, isfinite
 from unicodedata import normalize
 
 from pydantic import AwareDatetime, ValidationError
@@ -18,7 +18,17 @@ from src.simulation.catalog import (
     SCENARIOS,
 )
 from src.simulation.demand import MINUTES_PER_DAY, game_minute
-from src.simulation.models import FinanceSample, Game, Model, Onboarding
+from src.simulation.models import (
+    DeploymentComparison,
+    FinanceSample,
+    Game,
+    HistoryPoint,
+    Incident,
+    Metrics,
+    Model,
+    Onboarding,
+    RegionalCampaign,
+)
 from src.simulation.topology import RuleError, deployment_warnings, inspect_graph
 
 FORMAT = "service-unavailable-save"
@@ -91,6 +101,16 @@ def require_complete(value: object) -> None:
             allowed_omissions = {"regional_ads"}
         elif isinstance(value, Onboarding):
             allowed_omissions = {"step_id", "furthest_id"}
+        elif isinstance(value, HistoryPoint):
+            allowed_omissions = {"resource_utilization"}
+        elif isinstance(value, Incident):
+            allowed_omissions = {"cause"}
+        elif isinstance(value, Metrics):
+            allowed_omissions = {"p95_latency"}
+        elif isinstance(value, DeploymentComparison):
+            allowed_omissions = {"capacity_before", "capacity_after"}
+        elif isinstance(value, RegionalCampaign):
+            allowed_omissions = {"allocations"}
         if type(value).model_fields.keys() - value.model_fields_set - allowed_omissions:
             raise ValueError("Missing state fields")
         for _, item in value:
@@ -181,6 +201,20 @@ def validate_game(game: Game) -> None:
         raise ValueError("Invalid subscription")
     if any(
         plan.region not in REGIONS
+        or not set(plan.allocations) <= REGIONS.keys()
+        or (
+            plan.allocations
+            and (
+                plan.region not in plan.allocations
+                or not isclose(
+                    plan.budget, sum(part.budget for part in plan.allocations.values())
+                )
+                or not isclose(
+                    plan.audience,
+                    sum(part.audience for part in plan.allocations.values()),
+                )
+            )
+        )
         or not 1 <= plan.duration <= 288
         or not 0 <= plan.start <= game.tick
         or min(plan.budget, plan.audience, plan.spike) < 0

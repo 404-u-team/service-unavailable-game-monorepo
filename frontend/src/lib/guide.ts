@@ -117,20 +117,21 @@ export const articles: Record<string, Article> = {
     sections: [
       { id: "types", title: "Connection types", body: ["Solid request edges carry operations from the source through limiters and balancers to APIs. Data edges carry queries. Enqueue and worker edges carry background jobs. Replication subscribes a replica to a primary. Telemetry carries measurements."] },
       { id: "data", title: "Data routing", body: ["The API splits eligible reads evenly between its linked primary and linked replicas that follow that primary. Failed replicas are skipped. If caches are attached, they receive ordinary reads first. Cache misses use the cache’s eligible data links, or the originating API’s links when the cache has none eligible. A saturated target keeps its share of the load."] },
+      { id: "dataset", title: "Datasets and primaries", body: ["Messenger deployment requires the same primary for every API that serves traffic. Connect both APIs behind a load balancer to one primary, and add replicas that follow that primary for eligible reads.", "Separate services can own separate datasets when routing assigns requests to the correct service. Sharding requires explicit partitioning and routing. Messenger has a single application dataset."] },
       { id: "cache-misses", title: "Cache hits and misses", body: ["The hit estimate improves with memory relative to the audience, longer TTL and LFU. TTL represents how long a cached value can be reused. There is no per-message invalidation or write-through. The simulator estimates hit rate without tracking cached values or stale responses."] }
     ],
     related: ["cache", "replication", "async-processing"]
   },
   "scaling": { category: "architecture", title: "Scaling",
     sections: [
-      { id: "instances", title: "Resources and instances", body: ["Scale vertically to add resources to one instance or horizontally to add instances. Shared databases still receive the requests handled by all API instances. Check reads and writes independently when evaluating a database bottleneck."] },
+      { id: "instances", title: "Resources and instances", body: ["Scale vertically to add resources to one instance or horizontally to add instances. Shared databases still receive the requests handled by all API instances. Check reads and writes independently when evaluating a database bottleneck.", "Instances within a node share size, settings and connections. Separate nodes can use different presets and links, and have separate metrics, costs and incident targets.", "Managed replacement costs 30% of the API base price per instance and roughly halves the duration of random hardware failures. It leaves the chance of failure unchanged. Extra instances and balancer health checks help the service keep serving traffic during an outage."] },
       { id: "preview", title: "Compare upgrades", body: ["Find the pressured resource in the inspector. Preview a configuration change and compare the estimated range and daily cost before applying it to the draft."] }
     ],
     related: ["api", "database-scaling", "bottlenecks"]
   },
   "database-io": { category: "architecture", title: "Database disk I/O",
     sections: [
-      { id: "io", title: "Disk I/O utilization", body: ["Disk I/O is a shared budget. Add read demand divided by the read budget and write demand divided by the write budget, including index and replication overhead. SSD budgets are 420 reads/s or 115 writes/s in weighted units. NVMe gives 609 or 166.75. NVMe array gives 1,890 or 517.5.", "Combined disk load above 100% throttles requests. NVMe adds 35% of base daily cost. NVMe array adds 240%. Every available follower adds 8% of base disk work per primary write."] },
+      { id: "io", title: "Disk I/O utilization", body: ["Disk I/O is a shared budget. Add read demand divided by the read budget and write demand divided by the write budget, including index and replication overhead. SSD budgets are 420 reads/s or 115 writes/s in weighted units. NVMe gives 609 or 166.75. NVMe array gives 1,890 or 517.5.", "Combined disk load above 100% throttles requests. NVMe adds 35% of base daily cost. NVMe array adds 240%. Every available follower adds 8% of base disk work per primary write.", "Modeled IOPS use a read unit as the reference. A write uses the ratio of read to write budgets, multiplied by the index and replica overhead for its workload. Dividing the combined work by effective disk capacity gives the Disk I/O meter."] },
       { id: "space", title: "Storage types and space", body: ["SSD and NVMe set the I/O budget. Storage (GB) sets the volume available for persistent data. Messenger images, voice messages and files consume more space than texts. Media quality affects bytes stored.", "When a data volume fills up, writes are limited and reads can continue. Add GB or reduce media quality to conserve space. NVMe alone leaves free space unchanged. Extra space and NVMe raise costs, and lower media quality can reduce user satisfaction."] }
     ],
     related: ["read-write-throughput", "database-scaling", "replication"]
@@ -165,6 +166,7 @@ export const articles: Record<string, Article> = {
   "async-processing": { category: "architecture", title: "Asynchronous processing",
     sections: [
       { id: "flow", title: "Request and job flow", body: ["Use API → Queue → Worker for Messenger notifications or media processing. Jobs are generated after the synchronous database operation succeeds. Workers do not write back to the database. Queue capacity, worker count and retention leave the primary’s write capacity unchanged. The game has no batching control."], diagram: "API server → Queue → Worker" },
+      { id: "topics", title: "Job topics and delivery", body: ["Set separate queues to Notifications, Media processing or Search jobs. A connected Distribute queue shares matching jobs with other Distribute queues. A Broadcast queue receives a copy of each matching job for an independent consumer group. Workers attached to one queue share its jobs.", "For example, connect a distributed Notifications queue to delivery workers and a broadcast Notifications queue to audit workers. Copies add their own workload and backlog, and a full destination can reject submissions."] },
       { id: "backlog", title: "Backlog and errors", body: ["When jobs arrive faster than workers drain them, waiting time grows. Expiration removes old work. Overflow rejects new submissions and can count as a failed request."] }
     ],
     related: ["queue", "worker"]
@@ -220,15 +222,15 @@ export const articles: Record<string, Article> = {
   },
   "campaigns": { category: "business", title: "Marketing campaigns",
     sections: [
-      { id: "planning", title: "Plan a campaign", body: ["Choose a campaign, eligible region, budget and duration. Review estimated acquisition, cost and capacity before starting. The campaign adds users over time and temporarily increases activity."] },
+      { id: "planning", title: "Plan a campaign", body: ["Choose active markets, a total budget and duration. The budget is allocated in cents across the selected markets. Local acquisition cost and supported languages affect how many users each share can reach.", "At the same budget, a shorter campaign brings in the same expected total faster. It concentrates first-session traffic and can raise peak demand. Compare the arrival curve, forecast and baseline peak before committing."] },
       { id: "example", title: "Messenger example", body: ["Preview a community campaign before launch. If projected availability drops, address the saturated component or reduce campaign demand."] }
     ],
     related: ["regions", "bottlenecks", "finances"]
   },
   "finances": { category: "business", title: "Revenue and operating costs",
     sections: [
-      { id: "revenue", title: "Revenue sources", body: ["Finance shows advertising and subscriptions separately. Ad revenue depends on delivered impressions. Subscription revenue reflects subscriber payments and fees. Compare revenue with running costs to track cash flow."] },
-      { id: "costs", title: "Recurring and one-time costs", body: ["Infrastructure and traffic accrue operating costs as time advances. Deployments, projects and campaigns can charge one-time costs. Disconnected components still cost money while deployed."] }
+      { id: "revenue", title: "Revenue sources", body: ["Operating profit uses recognized revenue and recurring expenses. Prepaid subscription cash arrives at purchase and is recognized over the subscription term. Development, campaigns and installations appear as cash outflows."] },
+      { id: "costs", title: "Recurring and one-time costs", body: ["Infrastructure and traffic accrue operating costs as time advances. Deployments, projects and campaigns can charge one-time costs. Disconnected components still cost money while deployed.", "Removing components and reducing settings can lower the daily bill. A change with a zero installation cost can be deployed while the balance is negative. Review capacity and routing warnings before deployment."] }
     ],
     related: ["advertising", "premium", "deployment"]
   },

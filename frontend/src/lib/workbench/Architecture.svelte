@@ -12,6 +12,9 @@
   import DatabaseForecast from './DatabaseForecast.svelte';
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
+  import Select from '../controls/Select.svelte';
+  import TextInput from '../controls/TextInput.svelte';
+  import Toggle from '../controls/Toggle.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { api } from '../api';
   import { inspectorPreference } from './layout-sync';
@@ -542,7 +545,7 @@
 <svelte:window onkeydown={shortcuts} />
 
 {#snippet catalogList()}
-  <label class="search"><Search size={14} /><input data-tutorial={guideTarget.catalogSearch} type="search" aria-label={t("Search components")} placeholder={t("Search nodes…")} bind:value={search} /></label>
+  <label class="search"><Search size={14} /><TextInput data-tutorial={guideTarget.catalogSearch} type="search" aria-label={t("Search components")} placeholder={t("Search nodes…")} bind:value={search} /></label>
   {#each categories as category}
     {@const matches = kinds.filter((kind) => catalog.components[kind].category === category && t(catalog.components[kind].name).toLowerCase().includes(search.trim().toLowerCase()))}
     {#if matches.length}
@@ -577,6 +580,18 @@
         <button data-tutorial={active.id === guideApi ? guideTarget.configuration : undefined} aria-pressed={inspectorTab === 'configuration'} onclick={() => selectTab('configuration')}>{t("Configuration")}</button>
         <button data-tutorial={active.id === guideApi ? guideTarget.metrics : undefined} aria-pressed={inspectorTab === 'metrics'} onclick={() => selectTab('metrics')}>{t("Metrics")}</button>
       </div>
+      {#if metric?.status === 'failed'}
+        {@const incident = game.incidents.find((item) => item.active && item.target === active?.id)}
+        <a class="btn danger" href={guideHref.replace('view=guide', 'view=events') + (incident ? `&event=${encodeURIComponent(incident.id)}` : '')}>{t('View incident history')}</a>
+      {/if}
+      {#if active.kind === 'api'}
+        {@const primaries = topology.nodes.filter((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
+        <p class="muted">{primaries.length ? t('Primary database: {0}', [primaries.map((node) => t(node.name)).join(', ')]) : t('Connect this API to the shared primary database.')}</p>
+        {#if metric?.active_instances != null && metric.active_instances < Number(activeConfig?.instances ?? 1)}
+          <p class="notice warn">{t('{0} of {1} instances are serving.', [metric.active_instances, activeConfig?.instances ?? 1])}
+            <a href={guideHref.replace('view=guide', 'view=events')}>{t('View incident history')}</a></p>
+        {/if}
+      {/if}
       {#if active.kind === 'replica'}
         {@const primary = topology.nodes.find((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
         <div class="notice stack">
@@ -589,6 +604,8 @@
         {#if active.kind === 'api' && activeConfig}
           <div class="stack" data-tutorial={active.id === guideApi ? guideTarget.capacity : undefined}>
             <div><p class="eyebrow">{t("Instance size")}</p><button class="btn block instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></button></div>
+            <p class="muted">{t('Instances share the node settings and connections. Separate nodes have their own routing and dependencies.')}</p>
+            <p class="mono">{t('Aggregate resources: {0} vCPU · {1} GB', [num(Number(activeConfig.cpu) * Number(activeConfig.instances)), num(Number(activeConfig.memory) * Number(activeConfig.instances))])}</p>
             <div class="row spread"><span class="eyebrow">{t("Replicas")}</span>
               <div class="row counter">
                 <button class="btn icon-btn" aria-label={t("Remove replica")} disabled={busy || Number(activeConfig.instances) <= 1} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) - 1 })}><Minus size={14} /></button>
@@ -728,15 +745,10 @@
           <span class="badge good"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</span>
         </div>
         <div class="row wrap">
-          <label class="request-type">
-            <span class="sr-only">{t('Trace request type')}</span>
-            <select bind:value={requestType}>
-              <option value="">{t('All traffic')}</option>
-              {#each Object.keys(game.snapshot.demand) as operation}
-                <option value={operation}>{t(catalog.operations[operation])}</option>
-              {/each}
-            </select>
-          </label>
+          <div class="request-type">
+            <Select label={t('Trace request type')} bind:value={requestType}
+              options={[{ value: '', label: t('All traffic') }, ...Object.keys(game.snapshot.demand).map((operation) => ({ value: operation, label: t(catalog.operations[operation]) }))]} />
+          </div>
           {#if layoutFailed}<button class="btn danger" onclick={retryDiagram}>{t("Retry saving layout")}</button>{/if}
           <button class="btn" aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</button>
           {#if selection.length > 1}<button class="btn" onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</button>{/if}
@@ -846,9 +858,10 @@
 {:else if dialog === 'reference'}
   <Modal title={t("Connection reference")} close={() => dialog = undefined}>
     <div class="stack">
-      <label class="field"><span>{t("Component type")}</span><select bind:value={helpKind}>
-        {#each Object.entries(catalog.components) as [kind, definition]}<option value={kind}>{t(definition.name)}</option>{/each}
-      </select></label>
+      <div class="field"><span>{t("Component type")}</span>
+        <Select label={t("Component type")} value={helpKind} onchange={(value) => helpKind = value as Kind}
+          options={Object.entries(catalog.components).map(([value, definition]) => ({ value, label: t(definition.name) }))} />
+      </div>
       <p>{t(catalog.components[helpKind].description)}</p>
       <p>{preciseMoney(catalog.components[helpKind].daily)} {t("base daily cost")}</p>
       <ul>{#each componentNotes[helpKind] as note}<li>{t(note)}</li>{/each}</ul>
@@ -865,18 +878,14 @@
 {:else if dialog === 'group'}
   <Modal title={group ? t("Edit group") : t("Create group")} close={() => dialog = undefined}>
     <form id="diagram-group" class="stack" onsubmit={(event) => { event.preventDefault(); saveGroup(); }}>
-      <label class="field"><span>{t("Group name")}</span><input bind:value={groupName} maxlength="60" required /></label>
+      <label class="field"><span>{t("Group name")}</span><TextInput bind:value={groupName} maxlength={60} required /></label>
       {#if diagram.groups.length > (group ? 1 : 0)}
-        <label class="field"><span>{t('Parent group')}</span><select bind:value={groupParent}>
-          <option value="">{t('None')}</option>
-          {#each diagram.groups.filter((item) => item.id !== group?.id && !(group && nestedGroups(group, diagram.groups).has(item.id))) as item (item.id)}
-            <option value={item.id}>{item.name}</option>
-          {/each}
-        </select></label>
+        <div class="field"><span>{t('Parent group')}</span><Select label={t('Parent group')} bind:value={groupParent}
+          options={[{ value: '', label: t('None') }, ...diagram.groups.filter((item) => item.id !== group?.id && !(group && nestedGroups(group, diagram.groups).has(item.id))).map((item) => ({ value: item.id, label: item.name }))]} /></div>
       {/if}
       <fieldset class="stack"><legend>{t("Components")}</legend>
         {#each topology.nodes as node (node.id)}
-          <label class="row"><input type="checkbox" value={node.id} bind:group={groupMembers} />{t(node.name)}</label>
+          <label class="row"><Toggle checked={groupMembers.includes(node.id)} onchange={(checked) => groupMembers = checked ? [...groupMembers, node.id] : groupMembers.filter((id) => id !== node.id)} />{t(node.name)}</label>
         {/each}
       </fieldset>
     </form>
@@ -892,7 +901,7 @@
     <div class="stack modal-inspector">{@render inspect(true)}</div>
   </Modal>
 {:else if dialog === 'configuration' && active}
-  <Configuration component={active} {guideHref} definition={catalog.components[active.kind]} {busy} error={error || editError}
+  <Configuration component={active} daily={(viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0} storage={catalog.database_storage} {guideHref} definition={catalog.components[active.kind]} {busy} error={error || editError}
     close={() => dialog = compact ? 'inspector' : undefined} apply={updateConfig} onEdited={(changed) => changedConfig = changed}
     preview={(name, config) => api<Review>(`/${game.id}/draft/review`, 'POST', { revision: game.revision, topology:
       { ...topology, nodes: topology.nodes.map((node) => node.id === selected ? { ...node, name, config } : node) } })} />
@@ -900,12 +909,11 @@
   <Modal title={replacedEdge ? t("Reconnect components") : t("Connect components")} close={() => { dialog = undefined; editError = ''; }}>
     <form id="connect-components" class="stack" onsubmit={(event) => { event.preventDefault(); if (target) void connect({ source, target }, replacedEdge); }}>
       {#if error || editError}<p class="notice error" role="alert">{message(error || editError)}</p>{/if}
-      <label class="field"><span>{t("Source component")}</span><select data-tutorial={guideTarget.source} bind:value={source} onchange={() => target = ''}>
-        {#each topology.nodes.filter((node) => catalog.connections[node.kind].length) as node}<option value={node.id}>{t(node.name)}</option>{/each}
-      </select></label>
-      <label class="field"><span>{t("Target component")}</span><select data-tutorial={guideTarget.destination} bind:value={target} required>
-        <option value="">{t("Select a compatible target")}</option>{#each targets as node}<option value={node.id}>{t(node.name)}</option>{/each}
-      </select></label>
+      <div class="field"><span>{t("Source component")}</span><Select data-tutorial={guideTarget.source} label={t("Source component")}
+        bind:value={source} onchange={() => target = ''} searchable
+        options={topology.nodes.filter((node) => catalog.connections[node.kind].length).map((node) => ({ value: node.id, label: t(node.name) }))} /></div>
+      <div class="field"><span>{t("Target component")}</span><Select data-tutorial={guideTarget.destination} label={t("Target component")}
+        bind:value={target} searchable options={targets.map((node) => ({ value: node.id, label: t(node.name) }))} /></div>
       {#if target}
         {@const kind = connectionKind(catalog, origin?.kind, targets.find((node) => node.id === target)?.kind)}
         <p class="muted">{t(connectionLabels[kind])}</p>
@@ -996,7 +1004,7 @@
   .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: var(--background); }
   .canvas-bar { z-index: 1; padding: 11px 15px; min-height: 55px; border-bottom: 1px solid var(--border); }
   .request-type { min-width: 0; }
-  .request-type select { min-height: 34px; max-width: 185px; }
+  .request-type { max-width: 185px; }
   .canvas-bar.editing { background: #223323; }
   .draft-summary { border-top: 1px solid var(--border); padding-top: 12px; gap: 8px; }
   .draft-summary h2 { margin-top: 4px; }
@@ -1055,7 +1063,7 @@
     .canvas-bar, .edit-bar { padding: 8px 0; border: 0; }
     .canvas-bar { min-height: 58px; }
     .request-type { min-width: 0; }
-  .request-type select { min-height: 34px; max-width: 185px; }
+  .request-type { max-width: 185px; }
   .canvas-bar.editing { background: transparent; }
     .edit-bar { padding-bottom: 0; }
     .inspector { padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); gap: 7px; }

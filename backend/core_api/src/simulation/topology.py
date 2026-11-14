@@ -136,6 +136,18 @@ def inspect_graph(topology: Topology) -> Graph:
     return Graph(nodes, targets, order, reachable, relationships)
 
 
+def messenger_datasets(graph: Graph) -> dict[str, tuple[str, ...]]:
+    return {
+        node_id: tuple(sorted(graph.primaries(node_id)))
+        for node_id in graph.reachable
+        if graph.nodes[node_id].kind == "api"
+    }
+
+
+def has_split_dataset(datasets: dict[str, tuple[str, ...]]) -> bool:
+    return len({primary for links in datasets.values() for primary in links}) > 1
+
+
 def deployment_warnings(graph: Graph) -> list[str]:
     writes = set()
     for node_id in reversed(graph.order):
@@ -212,12 +224,15 @@ def daily_cost(node: Node) -> float:
             "window",
             "burst",
             "retention",
-            "connections",
         }
+        and (key != "connections" or node.kind == "balancer")
     )
     disk = DATABASE_DISKS[cfg["disk"]][1] if "disk" in cfg else 0
     history = 0.20 if cfg.get("detail") == "Service history" else 0
-    return round(base * cfg.get("instances", 1) * (1 + extras + disk + history), 2)
+    recovery = 0.30 if cfg.get("recovery") == "Managed replacement" else 0
+    return round(
+        base * cfg.get("instances", 1) * (1 + extras + disk + history + recovery), 2
+    )
 
 
 def topology_cost(topology: Topology) -> float:

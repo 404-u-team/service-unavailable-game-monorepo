@@ -14,6 +14,7 @@
     showHealthy?: boolean;
   } = $props();
   const data = $derived(metric.database);
+  const hasDisk = $derived(data?.disk_read_iops != null && data.disk_write_iops != null && data.disk_capacity_iops != null);
   const diagnostic = $derived(data?.diagnostic);
   const limiting = $derived(diagnostic?.limiting ?? []);
   const near = $derived(diagnostic?.resources.filter((resource) => !limiting.includes(resource)) ?? []);
@@ -40,6 +41,11 @@
       <div><dt>{t('Read demand')}</dt><dd>{t('{0} units/s', [num(data.read_demand)])}</dd></div>
       <div><dt class="row">{t('Disk I/O')} <Help label={t('Help with {0}', [t('Disk I/O')])}
         text={t('Open the relevant guide article.')} href={guideArticleHref(guide, 'database-io', 'io')} /></dt><dd>{pct(metric.utilization['Disk I/O'])}</dd></div>
+      {#if hasDisk}
+        <div><dt>{t('Modeled read IOPS')}</dt><dd>{num(data.disk_read_iops ?? 0)}</dd></div>
+        <div><dt>{t('Modeled write IOPS')}</dt><dd>{num(data.disk_write_iops ?? 0)}</dd></div>
+        <div><dt>{t('Modeled IOPS demand / capacity')}</dt><dd>{num((data.disk_read_iops ?? 0) + (data.disk_write_iops ?? 0))} / {num(data.disk_capacity_iops ?? 0)}</dd></div>
+      {/if}
       {#if data.write_capacity !== null}
         <div><dt>{t('Write demand')}</dt><dd>{t('{0} units/s', [num(data.write_demand)])}</dd></div>
         <div><dt>{t('Sustainable writes at current read load')}</dt><dd>{t('{0} units/s', [num(data.write_capacity)])}</dd></div>
@@ -52,6 +58,7 @@
         {/if}
       {/if}
     </dl>
+    {#if hasDisk}<p class="muted">{t('Modeled IOPS use one read unit as the reference. Writes add weighted disk work for the workload, index and replica links.')}</p>{/if}
     {#if diagnostic}
       {#if limiting.length}
         <div><strong>{t('Capacity limits')}</strong>

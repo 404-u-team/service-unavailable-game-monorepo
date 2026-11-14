@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Request } from '@playwright/test';
 import type { Game } from '../src/lib/types';
+import { choose } from './forms';
 
 const visualDir = process.env.VISUAL_OUTPUT_DIR;
 const serviceName = 'Workbench Messenger';
@@ -48,8 +49,8 @@ async function navigate(page: Page, name: string, mobile = false) {
 async function connect(page: Page, from: string, to: string) {
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect components' });
-  await dialog.getByLabel('Source component').selectOption({ label: from });
-  await dialog.getByLabel('Target component').selectOption({ label: to });
+  await choose(dialog.getByRole('combobox', { name: 'Source component', exact: true }), { label: from });
+  await choose(dialog.getByRole('combobox', { name: 'Target component', exact: true }), { label: to });
   await dialog.getByRole('button', { name: 'Connect components' }).click();
   await expect(dialog).toBeHidden();
 }
@@ -92,7 +93,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await connect(page, 'Primary database', 'Monitoring');
   await page.locator('.svelte-flow__node[aria-label="Monitoring"]').click();
   await page.getByRole('button', { name: 'Edit configuration' }).click();
-  await page.getByLabel('Collection scope', { exact: true }).selectOption('Service history');
+  await choose(page.getByRole('combobox', { name: 'Collection scope', exact: true }), 'Service history');
   await page.getByRole('button', { name: 'Save to draft' }).click();
   await deploy(page);
 
@@ -108,7 +109,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await navigate(page, 'Topology');
   await page.locator('.svelte-flow__node[aria-label="Messenger API"]').click();
   await page.getByRole('button', { name: 'Edit configuration' }).click();
-  await page.getByLabel('Instance size').selectOption({ label: 'Performance P4 · 4 vCPU / 8 GB' });
+  await choose(page.getByRole('combobox', { name: 'Instance size', exact: true }), { label: 'Performance P4 · 4 vCPU / 8 GB' });
   await page.getByRole('button', { name: 'Save to draft' }).click();
   await expect(page.getByRole('button', { name: 'Undo draft edit' })).toBeEnabled();
   await page.getByRole('button', { name: 'Undo draft edit' }).click();
@@ -131,7 +132,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await expect(page.getByRole('heading', { name: 'System telemetry' })).toBeVisible();
   await expect(page.getByRole('img', { name: /Request traffic/ })).toBeVisible();
   await expect(page.getByRole('img', { name: /Peak resource load for Messenger API/ })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Component', exact: true }).selectOption('db');
+  await choose(page.getByRole('combobox', { name: 'Component', exact: true }), 'db');
   await expect(page.getByRole('img', { name: /Peak resource load for Primary database/ })).toBeVisible();
   if (visualDir) await page.screenshot({ path: `${visualDir}/telemetry-1440.png` });
 });
@@ -245,7 +246,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   config = await editDatabase();
   await config.getByLabel('Database vCPU', { exact: true }).fill('8');
   await config.getByLabel('RAM (GB)', { exact: true }).fill('32');
-  await config.getByLabel('Storage type', { exact: true }).selectOption('NVMe');
+  await choose(config.getByRole('combobox', { name: 'Storage type', exact: true }), 'NVMe');
   await config.getByRole('button', { name: 'Save to draft' }).click();
   await expect(config).toBeHidden();
   await deploy(page);
@@ -289,7 +290,7 @@ test('E · failed instance reduces availability and redundancy restores service'
 });
 
 test.describe('Mobile workbench', () => {
-  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: process.env.TEST_BROWSER !== 'firefox' });
 
   test('F · navigation, component list, mobile inspector and deployment', async ({ page, browserName }) => {
     const id = await create(page, true);
@@ -379,8 +380,8 @@ test.describe('Mobile workbench', () => {
     await library.getByRole('button', { name: 'Monitoring', exact: true }).tap();
     await page.getByRole('button', { name: 'Connect', exact: true }).tap();
     const connection = page.getByRole('dialog', { name: 'Connect components' });
-    await connection.getByLabel('Source component').selectOption({ label: 'Primary database' });
-    await connection.getByLabel('Target component').selectOption({ label: 'Monitoring' });
+    await choose(connection.getByRole('combobox', { name: 'Source component', exact: true }), { label: 'Primary database' });
+    await choose(connection.getByRole('combobox', { name: 'Target component', exact: true }), { label: 'Monitoring' });
     await expect(connection.getByText('Metrics collection')).toBeVisible();
     await connection.getByRole('button', { name: 'Connect components' }).tap();
     await expect(connection).toBeHidden();
@@ -508,6 +509,15 @@ test('layout edits persist without Draft and preserve production', async ({ page
   await group.getByLabel('Group name').fill('Data path');
   await group.getByRole('button', { name: 'Save group' }).click();
   await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(1);
+  const expanded = page.locator('.svelte-flow__node-groupCard');
+  await expanded.locator('.group-header strong').click();
+  await expect(expanded).toHaveClass(/selected/);
+  await api.click();
+  await expect(api).toHaveClass(/selected/);
+  await expect(expanded).not.toHaveClass(/selected/);
+  await db.click({ modifiers: ['Control'] });
+  await expect(api).toHaveClass(/selected/);
+  await expect(db).toHaveClass(/selected/);
   if (visualDir) await page.screenshot({ path: `${visualDir}/expanded-group.png` });
   await page.locator('.svelte-flow__node-groupCard').getByRole('button', { name: 'Collapse group' }).click();
   await expect(api).toHaveCount(0);
@@ -591,7 +601,7 @@ test('Russian Monitoring and feature requirements render on desktop and mobile',
   await expect.poll(async () => (await state(page, id)).history.length).toBeGreaterThan(2);
   await mutate('/clock', 'PUT', { speed: 0 });
   await page.goto('/?view=settings');
-  await page.getByLabel('Interface language').selectOption('ru');
+  await choose(page.getByRole('combobox', { name: 'Interface language', exact: true }), 'ru');
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.goto(`/game/${id}?view=monitor`);
@@ -613,7 +623,7 @@ test('Russian Monitoring and feature requirements render on desktop and mobile',
 
 test('Russian is persisted across menus, editor, settings, and game screens', async ({ page }) => {
   await page.goto('/?view=settings');
-  await page.getByLabel('Interface language').selectOption('ru');
+  await choose(page.getByRole('combobox', { name: 'Interface language', exact: true }), 'ru');
   await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
   await page.goto('/?view=new');
   await page.getByLabel('Имя сервиса').fill('Мессенджер');
@@ -917,8 +927,8 @@ test('monetization controls, revenue history and server time render in both lang
     .getByRole('button', { name: 'Launch market' }).click({ timeout: 20_000 });
   await pause(page);
   await navigate(page, 'Product');
-  await page.getByLabel('Ad intensity').selectOption('high');
-  await page.getByLabel('Price per game month (USD)').fill('5.50');
+  await choose(page.getByRole('combobox', { name: 'Ad intensity', exact: true }), 'high');
+  await page.getByLabel('Price per game month (USD)', { exact: true }).fill('5.50');
   await page.getByLabel('Offer faster synchronization').uncheck();
   await page.getByRole('button', { name: 'Save product settings' }).click();
   await expect.poll(async () => (await state(page, id)).product).toMatchObject({
@@ -941,7 +951,7 @@ test('monetization controls, revenue history and server time render in both lang
 
   await navigate(page, 'Finance');
   await expect(page.getByRole('heading', { name: 'Revenue breakdown' })).toBeVisible();
-  await page.getByLabel('Revenue history').selectOption('advertising');
+  await choose(page.getByRole('combobox', { name: 'Revenue history', exact: true }), 'advertising');
   await expect(page.getByRole('img', { name: /Revenue per simulation step/ })).toBeVisible();
   const final = await state(page, id);
   expect(final.economy.revenue_sources.advertising).toBeCloseTo(final.economy.revenue);
@@ -953,10 +963,10 @@ test('monetization controls, revenue history and server time render in both lang
   const time = [Math.floor(clock.utc_minute / 60), clock.utc_minute % 60].map((value) => String(value).padStart(2, '0')).join(':');
   await expect(page.getByTestId('game-utc-time')).toHaveText(`Day ${clock.day} / ${time} UTC`);
   expect(final.day).toBe(clock.day);
-  await expect(page.getByRole('heading', { name: 'North America' })).toBeVisible();
+  await expect(page.locator('.regions summary').filter({ hasText: 'North America' })).toBeVisible();
 
   await page.goto('/?view=settings');
-  await page.getByLabel('Interface language').selectOption('ru');
+  await choose(page.getByRole('combobox', { name: 'Interface language', exact: true }), 'ru');
   await page.setViewportSize({ width: 390, height: 844 });
   for (const [section, heading] of [['finance', 'Структура выручки'], ['product', 'Настройки продукта'], ['monitor', 'Трафик по регионам']]) {
     await page.goto(`/game/${id}?view=${section}`);

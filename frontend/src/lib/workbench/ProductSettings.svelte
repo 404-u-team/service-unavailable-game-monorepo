@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Select from '../controls/Select.svelte';
+  import NumberInput from '../controls/NumberInput.svelte';
+  import Toggle from '../controls/Toggle.svelte';
   import { message, t } from '../i18n.svelte';
   import { num, pct, preciseMoney } from '../format';
   import type { Catalog, Game, ProductSettings } from '../types';
@@ -25,13 +28,10 @@
     {#if ads?.state === 'released'}
       <fieldset class="stack">
         <legend>{t('Advertising')}</legend>
-        <label class="field"><span>{t('Ad intensity')}</span>
-          <select value={product.ad_intensity} onchange={(event) => edits.ad_intensity = event.currentTarget.value as ProductSettings['ad_intensity']}>
-            <option value="low">{t('Low')}</option>
-            <option value="moderate">{t('Moderate')}</option>
-            <option value="high">{t('High')}</option>
-          </select>
-        </label>
+        <div class="field"><span>{t('Ad intensity')}</span>
+          <Select label={t('Ad intensity')} value={product.ad_intensity} onchange={(value) => edits.ad_intensity = value as ProductSettings['ad_intensity']}
+            options={[{ value: 'low', label: t('Low') }, { value: 'moderate', label: t('Moderate') }, { value: 'high', label: t('High') }]} />
+        </div>
         {#if estimate}
           <p class="muted">{t('Estimated at current audience and availability with ads enabled.')}</p>
           <dl class="estimate">
@@ -46,12 +46,12 @@
     {#if premium?.state === 'released'}
       <fieldset class="stack">
         <legend>{t('Premium subscriptions')}</legend>
-        <label class="field"><span>{t('Price per game month (USD)')}</span>
-          <input type="number" required min={catalog.premium_price_min} max={catalog.premium_price_max} step="0.01"
-            value={product.premium_price} oninput={(event) => edits.premium_price = event.currentTarget.valueAsNumber} />
-        </label>
+        <div class="field"><span>{t('Price per game month (USD)')}</span>
+          <NumberInput label={t('Price per game month (USD)')} required min={catalog.premium_price_min} max={catalog.premium_price_max} step={.01} precision={2}
+            value={product.premium_price} onchange={(value) => edits.premium_price = value ?? NaN} unit="USD" />
+        </div>
         <p class="muted">{t('Higher prices reduce adoption. Price changes apply to new subscriptions and renewals.')}</p>
-        <label class="row"><input type="checkbox" role="switch" checked={product.premium_fast_sync} onchange={(event) => edits.premium_fast_sync = event.currentTarget.checked} /> {t('Offer faster synchronization')}</label>
+        <label class="row"><Toggle switchStyle checked={product.premium_fast_sync} onchange={(value) => edits.premium_fast_sync = value} /> {t('Offer faster synchronization')}</label>
         <p class="muted">{t('Premium is ad-free. Faster synchronization adds load and makes the plan more attractive. Existing terms retain their benefits.')}</p>
         <p class="muted">{t('Reliability and latency affect renewals.')}</p>
         <dl class="estimate">
@@ -62,28 +62,22 @@
     {/if}
     <fieldset class="stack">
       <legend>{t('Service behavior')}</legend>
-      <label class="field"><span>{t('Synchronization frequency')}</span>
-        <select value={product.sync_frequency} onchange={(event) => edits.sync_frequency = event.currentTarget.value as ProductSettings['sync_frequency']}>
-          <option value="relaxed">{t('Relaxed')}</option>
-          <option value="standard">{t('Standard')}</option>
-          <option value="frequent">{t('Frequent')}</option>
-        </select>
-      </label>
+      <div class="field"><span>{t('Synchronization frequency')}</span>
+          <Select label={t('Synchronization frequency')} value={product.sync_frequency} onchange={(value) => edits.sync_frequency = value as ProductSettings['sync_frequency']}
+            options={[{ value: 'relaxed', label: t('Relaxed') }, { value: 'standard', label: t('Standard') }, { value: 'frequent', label: t('Frequent') }]} />
+        </div>
       <p class="muted">{t('Frequent sync improves responsiveness and generates more requests.')}</p>
-      <label class="field"><span>{t('Media quality')}</span>
-        <select value={product.media_quality} onchange={(event) => edits.media_quality = event.currentTarget.value as ProductSettings['media_quality']}>
-          <option value="compressed">{t('Compressed')}</option>
-          <option value="standard">{t('Standard')}</option>
-          <option value="high">{t('High')}</option>
-        </select>
-      </label>
+      <div class="field"><span>{t('Media quality')}</span>
+          <Select label={t('Media quality')} value={product.media_quality} onchange={(value) => edits.media_quality = value as ProductSettings['media_quality']}
+            options={[{ value: 'compressed', label: t('Compressed') }, { value: 'standard', label: t('Standard') }, { value: 'high', label: t('High') }]} />
+        </div>
       <p class="muted">{t('Compression reduces network and storage use for future uploads and requires more CPU. Higher quality improves satisfaction.')}</p>
     </fieldset>
     {#if game.product.north_america}
     <fieldset class="stack">
       <legend>{t('Markets')}</legend>
       <p>{t('Europe is the starting market.')}</p>
-      <label class="row"><input type="checkbox" role="switch" checked={product.north_america} onchange={(event) => edits.north_america = event.currentTarget.checked} /> {t('Acquire users in North America')}</label>
+      <label class="row"><Toggle switchStyle checked={product.north_america} onchange={(value) => edits.north_america = value} /> {t('Acquire users in North America')}</label>
       <p class="muted">{t('Campaigns and organic growth can reach this market. Existing users keep access if you stop acquisition.')}</p>
     </fieldset>
     {/if}

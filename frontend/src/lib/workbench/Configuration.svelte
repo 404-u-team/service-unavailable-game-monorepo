@@ -1,17 +1,22 @@
 <script lang="ts">
   import { apiMessage, message, t } from '../i18n.svelte';
   import Modal from '../Modal.svelte';
+  import NumberInput from '../controls/NumberInput.svelte';
+  import Select from '../controls/Select.svelte';
+  import Slider from '../controls/Slider.svelte';
+  import TextInput from '../controls/TextInput.svelte';
+  import Toggle from '../controls/Toggle.svelte';
   import { target } from './onboarding';
   import Forecast from './Forecast.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
   import { fieldArticle, guideArticleHref } from '../guide';
   import Help from './Help.svelte';
   import { fieldNotes } from './details';
-  import { preciseMoney } from '../format';
-  import type { Component, Definition, Review, Setting } from '../types';
+  import { num, pct, preciseMoney } from '../format';
+  import type { Catalog, Component, Definition, Review, Setting } from '../types';
 
-  let { component, definition, busy, error, close, apply, preview, guideHref, onEdited }: {
-    component: Component; definition: Definition; guideHref: string; busy: boolean; error: string;
+  let { component, definition, busy, error, close, apply, preview, guideHref, onEdited, daily, storage }: {
+    component: Component; definition: Definition; daily: number; storage: Catalog["database_storage"]; guideHref: string; busy: boolean; error: string;
     onEdited?: (changed: boolean) => void; close: () => void; preview: (name: string, settings: Record<string, Setting>) => Promise<Review>; apply: (name: string, settings: Record<string, Setting>) => void;
   } = $props();
   let name = $state('');
@@ -53,50 +58,65 @@
       if (version === previewVersion) estimating = false;
     }
   }
-  const presets = [
-    { name: 'Small S1 · 1 vCPU / 2 GB', cpu: 1, memory: 2 },
-    { name: 'Standard S2 · 2 vCPU / 4 GB', cpu: 2, memory: 4 },
-    { name: 'Performance P4 · 4 vCPU / 8 GB', cpu: 4, memory: 8 },
-    { name: 'Performance P8 · 8 vCPU / 16 GB', cpu: 8, memory: 16 }
-  ];
+  const presets = $derived(Object.entries(definition.presets ?? {}));
+  const activePreset = $derived(presets.findIndex(([, entries]) => Object.entries(entries).every(([key, value]) => values[key] === value)));
+  const sliderFields = new Set(['cpu', 'memory', 'connections', 'network', 'concurrency', 'slots', 'capacity', 'limit']);
+  const storageTier = $derived(storage?.[String(values.disk)]);
+  const valid = $derived(!!name.trim() && Object.values(values).every((value) => typeof value !== 'number' || Number.isFinite(value)));
+
+  function setValue(key: string, next: Setting) {
+    values[key] = next;
+    resetPreview();
+  }
 </script>
 
-<Modal title={t("Component configuration")} subtitle={t(component.name)} {close}>
-  <form id="configure-component" class="stack" oninput={resetPreview} onchange={resetPreview}
-    onsubmit={(event) => { event.preventDefault(); apply(name, nextValues()); }}>
+<Modal title={t("Component configuration")} subtitle={t(component.name)} {close} wide>
+  <div class="configuration-grid">
+  <form id="configure-component" class="stack" oninput={resetPreview}
+    onsubmit={(event) => { event.preventDefault(); if (valid) apply(name, nextValues()); }}>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-    <label class="field"><span>{t("Component name")}</span><input bind:value={name} maxlength="60" required /></label>
-    {#if component.kind === 'api'}
-      <label class="field"><span>{t("Instance size")}</span>
-        <select data-tutorial={target.instance} value={presets.findIndex((preset) => preset.cpu === values.cpu && preset.memory === values.memory)} onchange={(event) => {
-          const preset = presets[Number(event.currentTarget.value)];
-          if (preset) { values.cpu = preset.cpu; values.memory = preset.memory; }
-        }}>
-          <option value={-1}>{t("Custom")}</option>
-          {#each presets as preset, index}<option value={index}>{t(preset.name)}</option>{/each}
-        </select>
-      </label>
+    <label class="field"><span>{t("Component name")}</span><TextInput bind:value={name} maxlength={60} required /></label>
+    {#if presets.length}
+      {@const label = t(component.kind === 'api' ? 'Instance size' : 'Preset')}
+      <div class="field"><span>{label}</span>
+        <Select data-tutorial={component.kind === 'api' ? target.instance : undefined} {label} value={String(activePreset)}
+          options={[{ value: '-1', label: t('Custom') }, ...presets.map(([preset], index) => ({ value: String(index), label: t(preset) }))]}
+          onchange={(value) => {
+            const preset = presets[Number(value)];
+            if (preset) { values = { ...values, ...preset[1] }; resetPreview(); }
+          }} />
+      </div>
     {/if}
     <div class="form-grid">
-      {#each Object.entries(definition.fields) as [key, field]}
+      {#each Object.entries(definition.fields) as [key, field] (key)}
         <div class="field">
-          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label><Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab /></div>
+          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label>{#if fieldNotes[key]}<Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}</div>
           {#if field.options}
-            <select id={`config-${key}`} bind:value={values[key]}>
-              {#each field.options as option}<option value={option}>{t(option)}</option>{/each}
-            </select>
-          {:else}
-            <input id={`config-${key}`} type="number" min={field.min ?? undefined} max={field.max ?? undefined} step={['instances', 'slots'].includes(key) ? 1 : 'any'}
-              value={values[key]} oninput={(event) => { values[key] = event.currentTarget.valueAsNumber; }} required />
+            <Select id={`config-${key}`} label={t(field.label)} value={String(values[key])}
+              options={field.options.map((option) => ({ value: option, label: t(option) }))} onchange={(value) => setValue(key, value)} />
+          {:else if field.min != null && field.max != null}
+            <NumberInput id={`config-${key}`} label={t(field.label)} min={field.min} max={field.max} step={field.step ?? 1}
+              precision={['instances', 'slots'].includes(key) ? 0 : 4} value={Number(values[key])}
+              onchange={(value) => setValue(key, value ?? NaN)} required />
+            {#if sliderFields.has(key)}
+              <Slider label={t('Adjust {0}', [t(field.label)])} min={field.min} max={field.max} step={field.step ?? 1}
+                value={Number.isFinite(values[key]) ? Number(values[key]) : Number(field.default)} onchange={(value) => setValue(key, value)} />
+            {/if}
           {/if}
-          <small class="muted">{field.options ? '' : `${field.min}–${field.max} · `}{t("Default")} {t(String(field.default))}{#if values[key] !== initial.values[key]} {t("· Current")} {initial.values[key]}{/if}</small>
+          {#if key === 'disk' && storageTier}
+            <small>{t('{0} modeled IOPS · +{1} base cost', [num(storageTier.read_capacity), pct(storageTier.base_cost_surcharge)])}</small>
+          {/if}
+          <small class="muted">{field.options ? '' : `${num(field.min ?? 0)}–${num(field.max ?? 0)} · `}{t("Default")} {t(String(field.default))}{#if values[key] !== initial.values[key]} {t("· Current")} {t(String(initial.values[key]))}{/if}</small>
         </div>
       {/each}
     </div>
-    {#if Object.keys(legacy).length}<label class="row"><input type="checkbox" bind:checked={includeLegacy} /> {t("Keep throughput throttles from this save")}</label>{/if}
-    <p class="muted">{t(definition.description)}</p>
+    {#if Object.keys(legacy).length}<label class="row"><Toggle bind:checked={includeLegacy} onchange={resetPreview} /> {t("Keep throughput throttles from this save")}</label>{/if}
+  </form>
+  <aside class="preview stack">
+    <h3>{t('Cost and capacity')}</h3>
     <p class="muted">{t("Settings take effect after deployment.")}</p>
-    <button type="button" class="btn" disabled={estimating || busy || !name.trim() || Object.values(values).some((value) => typeof value === 'number' && !Number.isFinite(value))} onclick={getPreview}>
+    <p>{t('Configured daily cost: {0}', [preciseMoney(daily)])}</p>
+    <button type="button" class="btn" disabled={estimating || busy || !valid} onclick={getPreview}>
       {estimating ? t("Estimating…") : t("Preview cost and capacity")}
     </button>
     {#if previewError}<p class="notice error" role="alert">{message(previewError)}</p>{/if}
@@ -117,16 +137,20 @@
         {/if}
       {/if}
     {/if}
-  </form>
+  </aside>
+  </div>
   {#snippet footer()}
     <div class="row spread">
       <button class="btn" onclick={close}>{t("Cancel")}</button>
-      <button type="submit" form="configure-component" data-tutorial={target.save} class="btn primary" disabled={busy}>{t("Save to draft")}</button>
+      <button type="submit" form="configure-component" data-tutorial={target.save} class="btn primary" disabled={busy || !valid}>{t("Save to draft")}</button>
     </div>
   {/snippet}
 </Modal>
 
 <style>
+  .configuration-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+  .preview { min-width: 0; background: var(--raised); border-radius: 8px; border: 1px solid var(--border); padding: 14px; }
   .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 670px) { .configuration-grid { grid-template-columns: 1fr; } }
   @media (max-width: 420px) { .form-grid { grid-template-columns: 1fr; } }
 </style>

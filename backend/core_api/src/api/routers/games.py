@@ -84,8 +84,10 @@ from src.simulation.catalog import (
     ALLOWED,
     BUSINESS,
     CAMPAIGNS,
+    COMPONENT_PRESETS,
     COMPONENTS,
     CONNECTIONS,
+    DATABASE_DISKS,
     DAYS_PER_MONTH,
     DIFFICULTIES,
     FEATURES,
@@ -93,6 +95,7 @@ from src.simulation.catalog import (
     OPERATIONS,
     SCENARIOS,
 )
+from src.simulation.database import disk_limits
 from src.simulation.engine import evaluate
 from src.simulation.models import Game, Snapshot, Topology
 from src.simulation.progression import drill
@@ -180,8 +183,20 @@ def game_errors(error: Exception) -> HTTPException:
 def catalog():
     return {
         "components": {
-            kind: {**definition, "daily": definition["monthly"] / DAYS_PER_MONTH}
+            kind: {
+                **definition,
+                "daily": definition["monthly"] / DAYS_PER_MONTH,
+                "presets": COMPONENT_PRESETS.get(kind, {}),
+            }
             for kind, definition in COMPONENTS.items()
+        },
+        "database_storage": {
+            name: {
+                "read_capacity": disk_limits({"disk": name})[0],
+                "write_capacity": disk_limits({"disk": name})[1],
+                "base_cost_surcharge": surcharge,
+            }
+            for name, (_, surcharge) in DATABASE_DISKS.items()
         },
         "difficulties": DIFFICULTIES,
         "features": FEATURES,
@@ -556,6 +571,7 @@ async def campaign_forecast(
     owner_id: Owner,
     service: Service,
     region: str | None = None,
+    regions: Annotated[list[str] | None, Query(min_length=1, max_length=8)] = None,
     budget: Annotated[float | None, Query(ge=10, le=100_000)] = None,
     duration: Annotated[int | None, Query(ge=1, le=288)] = None,
 ):
@@ -567,8 +583,8 @@ async def campaign_forecast(
                 game,
                 game.production,
                 campaign_id,
-                campaign_plan(game, campaign_id, region, budget, duration)
-                if region
+                campaign_plan(game, campaign_id, regions or region, budget, duration)
+                if regions or region
                 else None,
             ),
         )
@@ -585,11 +601,15 @@ async def campaign(
     service: Service,
 ):
     def start(game: Game) -> None:
-        if body.region is None:
+        if body.region is None and body.regions is None:
             start_campaign(game, campaign_id)
         else:
             plan = campaign_plan(
-                game, campaign_id, body.region, body.budget, body.duration
+                game,
+                campaign_id,
+                body.regions or body.region,
+                body.budget,
+                body.duration,
             )
             targeted_campaign(game, campaign_id, plan)
 

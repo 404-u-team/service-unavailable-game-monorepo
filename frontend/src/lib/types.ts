@@ -12,10 +12,10 @@ export type Topology = { nodes: Component[]; edges: Connection[] };
 export type DiagramGroup = { id: string; name: string; members: string[]; collapsed: boolean };
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };
-export type Metrics = { rps: number; throughput: number; availability: number; latency: number; errors: number; rejected: number };
+export type Metrics = { rps: number; throughput: number; availability: number; latency: number; p95_latency?: number | null; errors: number; rejected: number };
 export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'nvme' | 'nvme_array' | 'legacy';
 export type DatabaseTelemetry = {
-  read_demand: number; write_demand: number; write_capacity: number | null;
+  read_demand: number; disk_read_iops?: number | null; disk_write_iops?: number | null; disk_capacity_iops?: number | null; write_demand: number; write_capacity: number | null;
   replication_demand: number; replication_throughput: number; replication_backlog: number;
   diagnostic: {
     level: 'write_exceeded' | 'write_pressure' | 'resource_pressure';
@@ -38,9 +38,9 @@ export type Snapshot = {
   demand_overview: DemandOverview | null; metrics: Metrics; components: Record<string, ComponentMetrics>;
   traffic: (Connection & { rps: number; operations: Record<string, number> })[]; demand: Record<string, number>; monitored: boolean; monitors: Record<string, MonitorCoverage>;
 };
-export type History = { tick: number; audience: number; balance: number; metrics: Metrics; peak_utilization?: Record<string, number> };
+export type History = { tick: number; audience: number; balance: number; metrics: Metrics; peak_utilization?: Record<string, number>; resource_utilization?: Record<string, Record<string, number>> };
 export type Incident = {
-  id: string; title: string; symptom: string; severity: string; start: number; end: number; active: boolean;
+  id: string; category?: string; title: string; symptom: string; severity: string; start: number; end: number; active: boolean;
   cause: string | null; target: string | null; resolution: string | null; failed_requests: number; acknowledged: boolean;
 };
 export type Settings = { reduced_motion: boolean; show_tutorial: boolean; show_objectives?: boolean };
@@ -59,8 +59,9 @@ export type AdEstimate = { impressions: number; revenue: number; satisfaction_im
 export type Economy = { balance: number; revenue: number; operating: number; development: number; marketing: number; deployment: number; profit: number; daily_infrastructure: number; daily_revenue: number; daily_operating: number; daily_profit: number;
   daily_total_expenses: number; daily_net_profit: number;
   recent_purchases: { development: number; marketing: number; deployment: number };
+  purchases: [number, Economy['recent_purchases']][];
   revenue_sources: RevenueSources; daily_sources: RevenueSources; operating_costs: OperatingCosts; daily_costs: OperatingCosts;
-  starting_capital: number; cash_received: number; deferred_subscription_revenue: number; daily_active_users: number;
+  starting_capital: number; cash_received: number; subscription_cash: number; deferred_subscription_revenue: number; daily_active_users: number;
   operating_margin: number | null; arpdau: number | null; cost_per_dau: number | null; subscribers: number;
   conversion: number; premium_satisfaction: number; daily_ad_impressions: number; recorded_ticks: number; history: FinancePoint[];
 };
@@ -70,13 +71,18 @@ export type Feature = {
   remaining: number; requirements: string[]; demand_change: number; can_release: boolean;
   infrastructure: { id: string; description: string; met: boolean }[];
 };
-export type Campaign = { id: string; remaining: number; progress: number; region: string | null; budget: number | null; acquired: number | null };
-export type Market = { id: string; name: string; population: number; potential: number; language: string; cost: number; duration: number; remaining: number; stage: 'planned' | 'developing' | 'ready' | 'active' };
+export type Campaign = { id: string; regions?: string[]; remaining: number; progress: number; region: string | null; budget: number | null; acquired: number | null };
+export type Market = { id: string; name: string; population: number; potential: number; language: string; language_weights: Record<string, number>; language_benefits: Record<string, number>; cost: number; duration: number; remaining: number; stage: 'planned' | 'developing' | 'ready' | 'active' };
 export type ProductLanguage = { name: string; cost: number; duration: number; ready: boolean; remaining: number };
-export type CampaignPlan = { region: string; budget: number; duration: number; acquired: number; cost_per_user: number | null };
+export type CampaignPlan = {
+  region: string; budget: number; duration: number; acquired: number; cost_per_user: number | null;
+  allocations: Record<string, { budget: number; audience: number }>; arrivals: number[];
+  peak_tick: number | null; peak_rps: number | null; baseline_peak_rps: number | null;
+};
 export type ResourcePressure = { component: string; resource: string; utilization: number };
 export type Deployment = { id: string; tick: number; summary: string; cost: number; comparison: {
   before: Metrics; after: Metrics; daily_before: number; daily_after: number;
+  capacity_before?: number | null; capacity_after?: number | null;
   pressure_before?: ResourcePressure | null; pressure_after?: ResourcePressure | null;
 } | null };
 export type Game = Save & {
@@ -87,12 +93,13 @@ export type Game = Save & {
   incidents: Incident[]; deployments: Deployment[]; settings: Settings; tutorial: number; onboarding: TutorialProgress; peak: Metrics | null;
 };
 export type Field = { label: string; default: Setting; min: number | null; max: number | null; step: number | null; options: string[] | null };
-export type Definition = { name: string; category: string; monthly: number; daily: number; fields: Record<string, Field>; description: string };
+export type Definition = { name: string; category: string; monthly: number; daily: number; fields: Record<string, Field>; presets?: Record<string, Record<string, Setting>>; description: string };
 export type Scenario = { name: string; available: boolean; description: string };
 export type FeatureDefinition = { name: string; cost: number; duration: number; appeal: number; operation: string | null; prereq: string[]; requires: Kind[]; infrastructure: string[] };
 export type CampaignDefinition = { name: string; cost: number; duration: number; audience: number; spike: number; description: string };
 export type Catalog = {
   diagram_layout: true;
+  database_storage: Record<string, { read_capacity: number; write_capacity: number; base_cost_surcharge: number }>;
   components: Record<Kind, Definition>; scenarios: Record<string, Scenario>;
   features: Record<string, FeatureDefinition>; campaigns: Record<string, CampaignDefinition>;
   difficulties: Record<Difficulty, { name: string; balance: number; audience: number; incident_chance: number }>;

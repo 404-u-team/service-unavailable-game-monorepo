@@ -6,6 +6,7 @@ from pydantic import Field
 
 from src.simulation.models import (
     AdIntensity,
+    CampaignAllocation,
     DeploymentComparison,
     Diagram,
     DiagramGroup,
@@ -25,6 +26,7 @@ from src.simulation.models import (
     ProductSettings,
     RevenueSources,
     RouteId,
+    Setting,
     Snapshot,
     Speed,
     Topology,
@@ -137,6 +139,7 @@ class MarketAction(Action):
 
 class CampaignAction(Action):
     region: str | None = None
+    regions: list[str] | None = Field(default=None, min_length=1, max_length=8)
     budget: float | None = Field(default=None, ge=10, le=100_000)
     duration: int | None = Field(default=None, ge=1, le=288)
 
@@ -147,6 +150,8 @@ class MarketView(Model):
     population: int
     potential: int
     language: str
+    language_weights: dict[str, float]
+    language_benefits: dict[str, float]
     cost: float
     duration: int
     remaining: int
@@ -163,6 +168,11 @@ class LanguageView(Model):
 
 class CampaignPlan(Model):
     region: str
+    allocations: dict[str, CampaignAllocation]
+    arrivals: list[float]
+    peak_tick: int | None = None
+    peak_rps: float | None = None
+    baseline_peak_rps: float | None = None
     budget: float
     duration: int
     acquired: float
@@ -264,6 +274,7 @@ class Economy(Model):
     daily_profit: float
     daily_total_expenses: float
     daily_net_profit: float
+    purchases: list[tuple[int, OneTimeCosts]] = Field(default_factory=list)
     recent_purchases: OneTimeCosts
     revenue_sources: RevenueSources
     daily_sources: RevenueSources
@@ -271,6 +282,7 @@ class Economy(Model):
     daily_costs: OperatingCosts
     starting_capital: float
     cash_received: float
+    subscription_cash: float
     deferred_subscription_revenue: float
     daily_active_users: float
     operating_margin: float | None
@@ -306,6 +318,7 @@ class FeatureView(Model):
 
 class CampaignView(Model):
     id: str
+    regions: list[str] = Field(default_factory=list)
     remaining: int = 0
     progress: float = 0
     region: str | None = None
@@ -315,6 +328,7 @@ class CampaignView(Model):
 
 class IncidentView(Model):
     id: str
+    category: str
     title: str
     symptom: str
     severity: str
@@ -380,6 +394,7 @@ class ComponentDefinition(Model):
     monthly: float
     daily: float
     fields: dict[str, CatalogField]
+    presets: dict[str, dict[str, Setting]] = Field(default_factory=dict)
     description: str
 
 
@@ -416,9 +431,16 @@ class DifficultyDefinition(Model):
     incident_chance: float
 
 
+class StorageTier(Model):
+    read_capacity: float
+    write_capacity: float
+    base_cost_surcharge: float
+
+
 class Catalog(Model):
     diagram_layout: Literal[True] = True
     components: dict[str, ComponentDefinition]
+    database_storage: dict[str, StorageTier]
     scenarios: dict[str, ScenarioDefinition]
     difficulties: dict[Difficulty, DifficultyDefinition]
     features: dict[str, FeatureDefinition]

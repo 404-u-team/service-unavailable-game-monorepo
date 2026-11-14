@@ -21,6 +21,7 @@ from src.simulation.demand import (
     acquire,
     active_markets,
     adoption,
+    arrival_weight,
     free_share,
     product_settings,
     regional_audience,
@@ -86,6 +87,11 @@ def history_point(
         metrics=snapshot.metrics,
         finance=finance,
         audience_churn=churn,
+        resource_utilization={
+            node_id: metric.utilization
+            for node_id, metric in snapshot.components.items()
+            if node_id in recorded and metric.utilization
+        },
         peak_utilization={
             node_id: max(metric.utilization.values())
             for node_id, metric in snapshot.components.items()
@@ -97,7 +103,9 @@ def history_point(
 def spend(
     game: Game, amount: float, ledger: Literal["development", "marketing", "deployment"]
 ) -> None:
-    if game.balance < amount:
+    if amount < 0:
+        raise ValueError("Purchase amounts must be nonnegative")
+    if amount > 0 and game.balance < amount:
         raise RuleError(
             f"This action costs ${amount:,.2f}. Available balance is ${game.balance:,.2f}."
         )
@@ -118,12 +126,16 @@ def add_event(
     duration: int,
     target: str | None = None,
     factor: float = 1,
+    *,
+    cause: str | None = None,
 ) -> None:
     game.event_sequence += 1
+    prefix = "incident" if target else kind
     game.incidents.append(
         Incident(
-            id=f"{kind}-{game.tick}-{game.event_sequence}",
+            id=f"{prefix}-{game.tick}-{game.event_sequence}",
             kind=kind,
+            cause=cause,
             title=title,
             symptom=symptom,
             severity=severity,
@@ -139,7 +151,7 @@ def add_event(
 
 def drill(game: Game) -> None:
     if any(
-        event.id.startswith("failure-") and event.title == "Instance failure drill"
+        event.kind == "failure" and event.title == "Instance failure drill"
         for event in game.incidents
     ):
         raise RuleError(
@@ -158,6 +170,7 @@ def drill(game: Game) -> None:
         "warning",
         12,
         target,
+        cause="Planned failure drill",
     )
 
 
@@ -166,7 +179,11 @@ def advance(game: Game, steps: int) -> None:
     for _ in range(steps):
         game.tick += 1
         for event in game.incidents:
-            if event.resolution is None and game.tick >= event.end:
+            if (
+                event.kind != "capacity"
+                and event.resolution is None
+                and game.tick >= event.end
+            ):
                 event.resolution = (
                     "Capacity restored"
                     if event.target
@@ -206,14 +223,20 @@ def advance(game: Game, steps: int) -> None:
             if game.tick < start + CAMPAIGNS[key]["duration"]
         }
 
-        for key, plan in list(game.regional_campaigns.items()):
+        finished = []
+        for key, plan in game.regional_campaigns.items():
             elapsed = game.tick - plan.start
-            if 0 < elapsed <= plan.duration:
-                phase = (elapsed - 0.5) / plan.duration
-                weight = 6 * phase * (1 - phase) / (plan.duration + 0.5 / plan.duration)
-                acquire(game, plan.region, plan.audience * weight)
+            weight = arrival_weight(elapsed, plan.duration)
+            if weight:
+                for region in plan.regions:
+                    audience = (
+                        plan.allocations[region].audience
+                        if plan.allocations
+                        else plan.audience
+                    )
+                    acquire(game, region, audience * weight)
             if elapsed >= plan.duration:
-                del game.regional_campaigns[key]
+                finished.append(key)
                 add_event(
                     game,
                     "campaign-complete",
@@ -225,10 +248,13 @@ def advance(game: Game, steps: int) -> None:
 
         roll_event(game)
         result = evaluate(game)
+        for key in finished:
+            del game.regional_campaigns[key]
         game.queues = result.queues
         game.storage = result.storage
         game.replication = result.replication
         metrics = result.snapshot.metrics
+        record_capacity_event(game, result.snapshot)
         for event in game.incidents:
             if event.resolution is None:
                 event.failed_requests += metrics.errors * SECONDS_PER_STEP
@@ -325,14 +351,55 @@ def advance(game: Game, steps: int) -> None:
                     "warning",
                     0,
                     node.id,
+                    cause="Storage pressure",
                 )
+
+
+def record_capacity_event(game: Game, snapshot: Snapshot) -> None:
+    overloaded = {
+        key: max(metric.utilization.values(), default=0)
+        for key, metric in snapshot.components.items()
+        if metric.status == "overloaded" and snapshot.metrics.errors > 1e-6
+    }
+    previous = next(
+        (
+            event
+            for event in reversed(game.incidents)
+            if event.kind == "capacity" and event.resolution is None
+        ),
+        None,
+    )
+    if previous and previous.target in overloaded:
+        previous.end = game.tick + 1
+        return
+    if previous:
+        previous.end = game.tick
+        previous.resolution = (
+            "Monitored capacity recovered"
+            if previous.target in snapshot.components
+            else "Monitoring coverage lost"
+        )
+    if overloaded:
+        add_event(
+            game,
+            "capacity",
+            "Capacity pressure",
+            "Requests are being rejected or failing during high load.",
+            "warning",
+            1,
+            max(overloaded, key=overloaded.get),
+            cause="Resource saturation",
+        )
 
 
 def roll_event(game: Game) -> None:
     if (
         game.tick < 30
         or game.tick % 8
-        or any(event.resolution is None for event in game.incidents)
+        or any(
+            event.resolution is None and event.kind != "capacity"
+            for event in game.incidents
+        )
     ):
         return
     rng = Random(game.seed ^ (game.tick * 49157))
@@ -349,6 +416,7 @@ def roll_event(game: Game) -> None:
             "info",
             duration,
             factor=1.27,
+            cause="Traffic spike",
         )
         return
     component = {"failure": "api", "degradation": "database", "network": "balancer"}[
@@ -358,13 +426,29 @@ def roll_event(game: Game) -> None:
         node.id for node in game.production.nodes if node.kind == component
     )
     if targets:
+        target = rng.choice(targets)
+        if (
+            kind == "failure"
+            and config(
+                next(node for node in game.production.nodes if node.id == target)
+            ).get("recovery")
+            == "Managed replacement"
+        ):
+            duration = max(1, (duration + 1) // 2)
         add_event(
             game,
             "failure" if kind == "failure" else "degradation",
-            "Service degradation",
-            "Requests are slower or failing more often.",
+            "Instance unavailable" if kind == "failure" else "Service degradation",
+            "An instance stopped serving requests."
+            if kind == "failure"
+            else "Requests are slower or failing more often.",
             "warning",
             duration,
-            rng.choice(targets),
+            target,
             0.52,
+            cause={
+                "failure": "Simulated hardware failure",
+                "degradation": "Database slowdown",
+                "network": "Network degradation",
+            }[kind],
         )

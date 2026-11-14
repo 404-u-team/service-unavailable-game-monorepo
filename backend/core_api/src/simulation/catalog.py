@@ -61,6 +61,9 @@ COMPONENTS: dict[Kind, dict] = {
             "connections": number("Connections per instance", 1100, 100, 25000, 100),
             "network": number("Network per instance (MB/s)", 30, 5, 1000, 5),
             "concurrency": number("Concurrency per instance", 40, 5, 800, 5),
+            "recovery": choice(
+                "Hardware recovery", "Standard", "Standard", "Managed replacement"
+            ),
         },
         "description": "Executes application work and routes requests to data services. Instances share the same downstream dependencies.",
     },
@@ -127,6 +130,17 @@ COMPONENTS: dict[Kind, dict] = {
         "fields": {
             "capacity": number("Capacity (jobs)", 30000, 100, 2_000_000, 100),
             "retention": number("Retention (minutes)", 60, 10, 1440, 10),
+            "topic": choice(
+                "Job topic",
+                "All jobs",
+                "All jobs",
+                "Notifications",
+                "Media processing",
+                "Search jobs",
+            ),
+            "delivery": choice(
+                "Delivery mode", "Distribute", "Distribute", "Broadcast"
+            ),
         },
         "description": "Buffers background jobs such as notifications and media processing. Workers drain the backlog. When capacity is exhausted, new submissions fail.",
     },
@@ -158,6 +172,88 @@ COMPONENTS: dict[Kind, dict] = {
         "description": "Collects metrics from linked components. Each link uses one slot. Service history reserves two more slots.",
     },
 }
+
+COMPONENT_PRESETS = {
+    "api": {
+        "Small S1 · 1 vCPU / 2 GB": {"cpu": 1, "memory": 2},
+        "Standard S2 · 2 vCPU / 4 GB": {"cpu": 2, "memory": 4},
+        "Performance P4 · 4 vCPU / 8 GB": {"cpu": 4, "memory": 8},
+        "Performance P8 · 8 vCPU / 16 GB": {"cpu": 8, "memory": 16},
+    },
+    "database": {
+        "General purpose": {
+            "cpu": 2,
+            "memory": 8,
+            "disk": "SSD",
+            "storage": 32,
+            "connections": 350,
+        },
+        "Compute optimized": {
+            "cpu": 8,
+            "memory": 16,
+            "disk": "SSD",
+            "storage": 64,
+            "connections": 700,
+        },
+        "I/O optimized": {
+            "cpu": 8,
+            "memory": 16,
+            "disk": "NVMe",
+            "storage": 128,
+            "connections": 700,
+        },
+    },
+    "replica": {
+        "General purpose": {"cpu": 2, "memory": 8, "disk": "SSD", "connections": 350},
+        "High read capacity": {
+            "cpu": 8,
+            "memory": 32,
+            "disk": "NVMe",
+            "connections": 750,
+        },
+    },
+    "cache": {
+        "Small memory": {"memory": 2, "ttl": 120},
+        "Large memory": {"memory": 16, "ttl": 300},
+    },
+    "queue": {
+        "Standard": {"capacity": 30000, "retention": 60},
+        "Large backlog": {"capacity": 150000, "retention": 120},
+    },
+    "worker": {
+        "Standard": {"cpu": 2, "memory": 4, "concurrency": 10},
+        "Compute optimized": {"cpu": 8, "memory": 8, "concurrency": 32},
+    },
+    "balancer": {
+        "Standard": {"network": 80, "connections": 4000},
+        "High traffic": {"network": 240, "connections": 12000},
+    },
+    "monitor": {
+        "Basic": {"slots": 8, "detail": "Linked components"},
+        "Service history": {"slots": 12, "detail": "Service history"},
+        "High-volume telemetry": {"slots": 32, "detail": "Service history"},
+    },
+    "limiter": {
+        "General admission": {
+            "scope": "All requests",
+            "limit": 130,
+            "window": 1,
+            "burst": 15,
+        },
+        "Protect writes": {"scope": "Writes", "limit": 62, "window": 1, "burst": 5},
+    },
+}
+
+JOB_TOPICS = {
+    "Notifications": {"send", "groups"},
+    "Media processing": {"upload", "voice", "files"},
+    "Search jobs": {"search"},
+}
+
+
+def topic_accepts(topic: str, operation: str) -> bool:
+    return topic == "All jobs" or operation in JOB_TOPICS[topic]
+
 
 SCENARIOS = {
     "messenger": {
@@ -554,7 +650,31 @@ REGIONS = {
     },
 }
 
+REGION_LOCALIZATION_BONUS = 0.18
+
+# Simplified gameplay segments. Weights sum to one within each market.
+REGION_LANGUAGE_WEIGHTS = {
+    "europe": {"English": 0.35, "French": 0.25, "German": 0.22, "Spanish": 0.18},
+    "north_america": {"English": 0.75, "Spanish": 0.18, "French": 0.07},
+    "south_america": {"Spanish": 0.55, "Portuguese": 0.40, "English": 0.05},
+    "east_asia": {"Japanese": 0.42, "Chinese": 0.39, "Korean": 0.15, "English": 0.04},
+    "south_southeast_asia": {
+        "Hindi": 0.50,
+        "Indonesian": 0.24,
+        "English": 0.18,
+        "Chinese": 0.08,
+    },
+    "mena": {"Arabic": 0.78, "French": 0.12, "English": 0.10},
+    "sub_saharan_africa": {"French": 0.48, "English": 0.37, "Portuguese": 0.15},
+    "oceania": {"English": 0.87, "Chinese": 0.08, "Indonesian": 0.05},
+}
+
 LANGUAGES = {
+    "German": (110, 18),
+    "Portuguese": (110, 18),
+    "Chinese": (170, 28),
+    "Korean": (145, 23),
+    "Indonesian": (125, 20),
     "French": (90, 14),
     "Spanish": (110, 18),
     "Japanese": (155, 25),

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TextInput from './controls/TextInput.svelte';
   import { ArrowRight, ChevronRight, List, Search } from '@lucide/svelte';
   import { page } from '$app/state';
   import { tick } from 'svelte';
@@ -46,7 +47,7 @@
   <div class="guide-header">
     <label class="row search">
       <Search size={17} /><span class="sr-only">{t('Search the Guide')}</span>
-      <input type="search" bind:value={query} placeholder={t('Search articles')} />
+      <TextInput type="search" bind:value={query} placeholder={t('Search articles')} />
     </label>
     <button class="btn categories-button" aria-expanded={mobileNav} aria-controls="guide-navigation"
       onclick={() => mobileNav = !mobileNav}><List size={15} /> {t('Categories')}</button>
@@ -163,7 +164,7 @@
   .guide-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: var(--rail); border: 1px solid var(--border); border-radius: 10px; }
   .categories-button { display: none; }
   .search { width: min(100%, 410px); color: var(--muted); }
-  .search input { min-width: 0; width: 100%; }
+  .search :global(input) { min-width: 0; width: 100%; }
   .guide-layout { display: grid; grid-template-columns: minmax(178px, 235px) minmax(0, 1fr); align-items: start; gap: 16px; }
   .guide-nav { display: grid; gap: 6px; }
   details { border: 1px solid var(--border); background: var(--rail); border-radius: 8px; }

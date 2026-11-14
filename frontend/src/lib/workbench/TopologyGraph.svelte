@@ -385,7 +385,7 @@
 <div class="flow-shell" role="presentation" onkeydowncapture={nudge}>
 <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView={!initialViewport} {initialViewport} fitViewOptions={{ padding: .12, maxZoom: compact ? 1 : 1.13 }}
   minZoom={0.15} maxZoom={2.5} colorMode="dark" attributionPosition="bottom-right"
-  ariaLabelConfig={localizedLabels}
+  ariaLabelConfig={localizedLabels} elevateNodesOnSelect={false}
   autoPanOnConnect={false} nodesConnectable={editable} deleteKey={null} multiSelectionKey={['Control', 'Meta', 'Shift']}
   isValidConnection={valid}
   onbeforeconnect={(connection: FlowConnection) => { if (valid(connection)) connect({ source: connection.source, target: connection.target }); return false; }}

@@ -110,6 +110,7 @@ class Metrics(Model):
     throughput: float = 0
     availability: float = 1
     latency: float = 0
+    p95_latency: float | None = None
     errors: float = 0
     rejected: float = 0
 
@@ -128,6 +129,9 @@ class DatabaseDiagnostic(Model):
 
 class DatabaseTelemetry(Model):
     read_demand: float
+    disk_read_iops: float | None = None
+    disk_write_iops: float | None = None
+    disk_capacity_iops: float | None = None
     write_demand: float
     write_capacity: float | None
     replication_demand: float = 0
@@ -249,11 +253,13 @@ class HistoryPoint(Model):
     finance: FinanceSample | None = None
     audience_churn: float = 0
     peak_utilization: dict[NodeId, float] = Field(default_factory=dict)
+    resource_utilization: dict[NodeId, dict[str, float]] = Field(default_factory=dict)
 
 
 class Incident(Model):
     id: str
     kind: str
+    cause: str | None = None
     title: str
     symptom: str
     severity: Literal["info", "warning", "critical"]
@@ -277,6 +283,8 @@ class DeploymentComparison(Model):
     after: Metrics
     daily_before: float
     daily_after: float
+    capacity_before: float | None = None
+    capacity_after: float | None = None
     pressure_before: ResourcePressure | None = None
     pressure_after: ResourcePressure | None = None
 
@@ -332,6 +340,11 @@ class Onboarding(Model):
         return self
 
 
+class CampaignAllocation(Model):
+    budget: float = Field(gt=0, le=100_000)
+    audience: float = Field(ge=0)
+
+
 class RegionalCampaign(Model):
     region: str
     start: int
@@ -339,6 +352,11 @@ class RegionalCampaign(Model):
     budget: float
     audience: float
     spike: float
+    allocations: dict[str, CampaignAllocation] = Field(default_factory=dict)
+
+    @property
+    def regions(self) -> list[str]:
+        return list(self.allocations) or [self.region]
 
 
 class Game(Model):

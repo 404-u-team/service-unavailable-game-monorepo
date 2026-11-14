@@ -1,13 +1,23 @@
+from decimal import Decimal
+from math import isfinite
+
 from src.api.game_schemas import CampaignPlan, LanguageView, MarketView
-from src.simulation.catalog import CAMPAIGNS, LANGUAGES, REGIONS
+from src.simulation.catalog import (
+    CAMPAIGNS,
+    LANGUAGES,
+    REGION_LANGUAGE_WEIGHTS,
+    REGION_LOCALIZATION_BONUS,
+    REGIONS,
+)
 from src.simulation.demand import (
     active_markets,
     adoption,
+    arrival_weight,
     language_ready,
     regional_audience,
 )
-from src.simulation.models import Game, RegionalCampaign
-from src.simulation.progression import spend
+from src.simulation.models import CampaignAllocation, Game, RegionalCampaign
+from src.simulation.progression import add_event, spend
 from src.simulation.topology import RuleError
 
 
@@ -20,6 +30,12 @@ def markets(game: Game) -> list[MarketView]:
             population=profile["population"],
             potential=profile["potential"],
             language=profile["language"],
+            language_weights=REGION_LANGUAGE_WEIGHTS[key],
+            language_benefits={
+                name: weight * REGION_LOCALIZATION_BONUS
+                for name, weight in REGION_LANGUAGE_WEIGHTS[key].items()
+                if name != "English"
+            },
             cost=profile["cost"],
             duration=profile["duration"],
             remaining=max(0, game.market_projects.get(key, 0) - game.tick),
@@ -76,45 +92,79 @@ def develop_language(game: Game, name: str) -> None:
 
 
 def campaign_plan(
-    game: Game, key: str, region: str, budget: float | None, duration: int | None
+    game: Game,
+    key: str,
+    region: str | list[str],
+    budget: float | None,
+    duration: int | None,
 ) -> CampaignPlan:
-    if region not in active_markets(game):
+    regions = [region] if isinstance(region, str) else region
+    if not regions or len(set(regions)) != len(regions):
+        raise RuleError("Select distinct target markets.")
+    if not set(regions) <= active_markets(game):
         raise RuleError("Launch the target market before starting a campaign.")
     template = CAMPAIGNS[key]
-    profile = REGIONS[region]
     budget = template["cost"] if budget is None else budget
     duration = template["duration"] if duration is None else duration
-    population = dict(regional_audience(game, game.audience)).get(region, 0)
-    capacity = max(0.0, profile["potential"] - population)
-    acquired = min(
-        capacity,
-        budget
-        * template["audience"]
-        / template["cost"]
-        * REGIONS["europe"]["acquisition_cost"]
-        / profile["acquisition_cost"]
-        * adoption(game, region),
-    )
+    if not isfinite(budget) or not 10 <= budget <= 100_000 or not 1 <= duration <= 288:
+        raise RuleError("Enter a valid budget and duration to see the forecast.")
+    cents = round(Decimal(str(budget)) * 100)
+    share, remainder = divmod(cents, len(regions))
+    populations = dict(regional_audience(game, game.audience))
+    allocations = {}
+    for index, target in enumerate(sorted(regions)):
+        allocation = (share + int(index < remainder)) / 100
+        profile = REGIONS[target]
+        capacity = max(0.0, profile["potential"] - populations.get(target, 0))
+        acquired = min(
+            capacity,
+            allocation
+            * template["audience"]
+            / template["cost"]
+            * REGIONS["europe"]["acquisition_cost"]
+            / profile["acquisition_cost"]
+            * adoption(game, target),
+        )
+        if not acquired:
+            raise RuleError("A selected market has reached its audience potential.")
+        allocations[target] = CampaignAllocation(budget=allocation, audience=acquired)
+    acquired = sum(part.audience for part in allocations.values())
+    budget = cents / 100
     return CampaignPlan(
-        region=region,
+        region=regions[0],
+        allocations=allocations,
+        arrivals=[
+            acquired * arrival_weight(step, duration) for step in range(1, duration + 1)
+        ],
         budget=budget,
         duration=duration,
         acquired=acquired,
-        cost_per_user=budget / acquired if acquired else None,
+        cost_per_user=budget / acquired,
+    )
+
+
+def campaign_state(game: Game, key: str, plan: CampaignPlan) -> RegionalCampaign:
+    return RegionalCampaign(
+        region=plan.region,
+        allocations=plan.allocations,
+        start=game.tick,
+        duration=plan.duration,
+        budget=plan.budget,
+        audience=plan.acquired,
+        spike=CAMPAIGNS[key]["spike"],
     )
 
 
 def targeted_campaign(game: Game, key: str, plan: CampaignPlan) -> None:
     if key in game.campaigns or key in game.regional_campaigns:
         raise RuleError("That campaign is already running.")
-    if not plan.acquired:
-        raise RuleError("This market has reached its audience potential.")
     spend(game, plan.budget, "marketing")
-    game.regional_campaigns[key] = RegionalCampaign(
-        region=plan.region,
-        start=game.tick,
-        duration=plan.duration,
-        budget=plan.budget,
-        audience=plan.acquired,
-        spike=CAMPAIGNS[key]["spike"],
+    game.regional_campaigns[key] = campaign_state(game, key, plan)
+    add_event(
+        game,
+        "campaign",
+        f"{CAMPAIGNS[key]['name']} campaign started",
+        "Acquisition will increase request volume.",
+        "info",
+        0,
     )

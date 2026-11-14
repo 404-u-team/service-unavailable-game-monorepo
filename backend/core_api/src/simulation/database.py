@@ -153,8 +153,12 @@ class DatabaseLoad:
             diagnostic = DatabaseDiagnostic(
                 level=level, resources=resources, limiting=overloaded, upgrades=upgrades
             )
+        disk_read, disk_write = disk_limits(self.cfg)
         return DatabaseTelemetry(
             read_demand=self.reads,
+            disk_read_iops=self.reads,
+            disk_write_iops=self.writes * self.disk_write_cost * disk_read / disk_write,
+            disk_capacity_iops=disk_read * self.factor,
             write_demand=self.writes if self.primary else 0,
             write_capacity=sustainable,
             replication_demand=self.writes if not self.primary else 0,

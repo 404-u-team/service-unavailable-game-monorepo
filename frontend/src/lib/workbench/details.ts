@@ -34,5 +34,8 @@ export const fieldNotes: Record<string, string> = {
   retention: 'Longer retention reduces the share of waiting jobs that expires each step.',
   slots: 'Maximum collection slots. Each component uses one slot, and service history reserves two.',
   detail: 'Service history unlocks metric trends and improves forecasts. It uses two slots and adds 20% of base daily cost.',
+  recovery: 'Managed replacement halves the recovery time from a random API hardware failure and adds 30% of base cost per instance.',
+  topic: 'Filter background jobs by topic. Connect a matching queue to a worker for required jobs.',
+  delivery: 'Distribute queues share jobs. Each broadcast queue receives a copy for its connected workers.',
   search_index: 'Indexed search uses 65% fewer read units. Maintaining the index adds 20% write work.'
 };

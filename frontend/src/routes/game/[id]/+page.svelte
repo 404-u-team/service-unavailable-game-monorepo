@@ -280,11 +280,11 @@
       </nav>
       <div class="controls row">
         <span class="badge good online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</span>
-        <a class="balance" data-tutorial={target.balance} href={link('finance')} title={t('Cash balance and daily net profit')} aria-label={t('Finance')}>
+        <a class="balance" data-tutorial={target.balance} href={link('finance')} title={t('Cash balance and daily operating profit')} aria-label={t('Finance')}>
           <strong>{money(game.economy.balance)}</strong>
-          <span class:positive={game.economy.daily_net_profit > 0} class:negative={game.economy.daily_net_profit < 0}>
-            {#if game.economy.daily_net_profit > 0}<ArrowUpRight size={12} />{:else if game.economy.daily_net_profit < 0}<ArrowDownRight size={12} />{/if}
-            {t('{0}/day', [preciseMoney(game.economy.daily_net_profit)])}
+          <span class:positive={game.economy.daily_profit > 0} class:negative={game.economy.daily_profit < 0}>
+            {#if game.economy.daily_profit > 0}<ArrowUpRight size={12} />{:else if game.economy.daily_profit < 0}<ArrowDownRight size={12} />{/if}
+            {t('{0}/day', [(game.economy.daily_profit > 0 ? '+' : '') + preciseMoney(game.economy.daily_profit)])}
           </span>
         </a>
         <div class="speed-group row" data-tutorial={target.clock} role="group" aria-label={t('Game speed')}>

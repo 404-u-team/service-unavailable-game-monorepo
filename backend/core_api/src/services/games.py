@@ -31,7 +31,7 @@ from src.api.game_schemas import (
     TutorialProgressAction,
 )
 from src.repositories.games import GameRepository
-from src.services.markets import languages, markets
+from src.services.markets import campaign_state, languages, markets
 from src.simulation.catalog import (
     ADVERTISING,
     BUSINESS,
@@ -49,7 +49,9 @@ from src.simulation.demand import (
     MINUTES_PER_DAY,
     acquire,
     ad_forecast,
+    arrival_weight,
     product_settings,
+    workload,
 )
 from src.simulation.engine import evaluate
 from src.simulation.models import (
@@ -57,12 +59,12 @@ from src.simulation.models import (
     DeploymentComparison,
     Diagram,
     Game,
+    Incident,
     Node,
     Onboarding,
     OneTimeCosts,
     OperatingCosts,
     ProductSettings,
-    RegionalCampaign,
     ResourcePressure,
     RevenueSources,
     Snapshot,
@@ -87,8 +89,10 @@ from src.simulation.topology import (
     daily_cost,
     deployment_warnings,
     diff,
+    has_split_dataset,
     inspect_graph,
     install_cost,
+    messenger_datasets,
     topology_cost,
 )
 
@@ -344,17 +348,33 @@ def forecast(
     audience = game.audience
     boost = 0.0
     if campaign_id and plan:
-        acquire(assumed, plan.region, plan.acquired * 0.8)
-        audience = assumed.audience
-        assumed.regional_campaigns[campaign_id] = RegionalCampaign(
-            region=plan.region,
-            start=game.tick,
-            duration=plan.duration,
-            audience=plan.acquired,
-            budget=plan.budget,
-            spike=CAMPAIGNS[campaign_id]["spike"],
+        control = assumed.model_copy(deep=True)
+        assumed.regional_campaigns[campaign_id] = campaign_state(
+            game, campaign_id, plan
         )
-        assumed.tick += int(plan.duration * 0.65)
+        peak_populations = {}
+        best = -1.0
+        baseline = 0.0
+        for step in range(1, plan.duration + 1):
+            assumed.tick = control.tick = game.tick + step
+            for region, part in plan.allocations.items():
+                acquire(
+                    assumed, region, part.audience * arrival_weight(step, plan.duration)
+                )
+            peak = sum(workload(assumed).operations.values())
+            baseline = max(baseline, sum(workload(control).operations.values()))
+            if peak > best:
+                best = peak
+                plan.peak_tick = assumed.tick
+                peak_populations = {**assumed.market_audience}
+                peak_north_america = assumed.north_america_audience
+                audience = assumed.audience
+        plan.peak_rps = best
+        plan.baseline_peak_rps = baseline
+        assumed.tick = plan.peak_tick
+        assumed.audience = audience
+        assumed.market_audience = peak_populations
+        assumed.north_america_audience = peak_north_america
     elif campaign_id:
         campaign = CAMPAIGNS[campaign_id]
         audience += campaign["audience"] * 0.8
@@ -445,6 +465,13 @@ def review(game: Game, revision: int, topology: Topology | None = None) -> Draft
         details = modifications(game.production, candidate)
         install = install_cost(game.production, candidate)
         warnings = deployment_warnings(graph)
+        datasets = messenger_datasets(graph)
+        if game.scenario == "messenger" and has_split_dataset(datasets):
+            message = "Messenger API servers receiving live requests must share one primary database."
+            if datasets != messenger_datasets(inspect_graph(game.production)):
+                errors.append(message)
+            else:
+                warnings.append(message)
         if game.speed and changes["disconnected"]:
             warnings.append(
                 "Live routing changes can cause a brief interruption while traffic shifts."
@@ -452,7 +479,7 @@ def review(game: Game, revision: int, topology: Topology | None = None) -> Draft
         estimate = forecast(game, candidate, compare_databases=True)
         if estimate.availability.low < 0.95:
             warnings.append("Some projected load exceeds the draft's service capacity.")
-        if install > game.balance:
+        if install > 0 and install > game.balance:
             errors.append("The game balance cannot cover the deployment cost.")
     except RuleError as error:
         errors.append(str(error))
@@ -501,13 +528,39 @@ def modifications(before: Topology, after: Topology) -> list[Modification]:
     return records
 
 
+def service_capacity(
+    game: Game, topology: Topology, snapshot: Snapshot
+) -> float | None:
+    """Current traffic mix at 99% successful processing, with state held fixed."""
+    if not snapshot.monitored or snapshot.metrics.rps <= 0:
+        return None
+    low, high = 0.0, 1.0
+
+    def serves(scale: float) -> bool:
+        return (
+            evaluate(game, topology, load_scale=scale).snapshot.metrics.availability
+            >= 0.99
+        )
+
+    while high < 1024 and serves(high):
+        low, high = high, high * 2
+    if high == 1024 and serves(high):
+        return None
+    for _ in range(16):
+        midpoint = (low + high) / 2
+        if serves(midpoint):
+            low = midpoint
+        else:
+            high = midpoint
+    return snapshot.metrics.rps * low
+
+
 def highest_pressure(snapshot: Snapshot, topology: Topology) -> ResourcePressure | None:
     resources = (
         ResourcePressure(component=node.name, resource=resource, utilization=value)
         for node in topology.nodes
         if (metric := snapshot.components.get(node.id))
         for resource, value in metric.utilization.items()
-        if value >= 0.78
     )
     return max(resources, key=lambda item: item.utilization, default=None)
 
@@ -541,6 +594,7 @@ def deploy(
     )
     before = evaluate(game).snapshot
     pressure_before = highest_pressure(before, game.production)
+    capacity_before = service_capacity(game, game.production, before)
     game.deployments.append(
         Deployment(
             id=request_id,
@@ -573,6 +627,8 @@ def deploy(
         if event.resolution is None and event.target and event.target not in live:
             event.resolution = "Affected component removed in deployment"
             event.end = game.tick
+    after = evaluate(game).snapshot
+    capacity_after = service_capacity(game, game.production, after)
     if result.changes.get("disconnected") and game.speed:
         add_event(
             game,
@@ -582,13 +638,15 @@ def deploy(
             "info",
             2,
             factor=0.96,
+            cause="Routing rollout",
         )
-    after = evaluate(game).snapshot
     game.deployments[-1].comparison = DeploymentComparison(
         before=before.metrics,
         after=after.metrics,
         daily_before=result.daily_before,
         daily_after=result.daily_after,
+        capacity_before=capacity_before,
+        capacity_after=capacity_after,
         pressure_before=pressure_before,
         pressure_after=highest_pressure(after, game.production),
     )
@@ -620,7 +678,7 @@ def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureVi
         RequirementView(
             id=rule_id,
             description=rule.description,
-            met=requirement_met(rule, graph, game),
+            met=requirement_met(rule, graph, game, feature["operation"]),
         )
         for rule_id in feature["infrastructure"]
         for rule in (REQUIREMENTS[rule_id],)
@@ -863,6 +921,7 @@ def finance(game: Game, active_users: float) -> Economy:
         daily_total_expenses=daily_total_expenses,
         daily_net_profit=daily_sources.total - daily_total_expenses,
         recent_purchases=recent,
+        purchases=sorted(game.recent_purchases.items(), reverse=True),
         revenue_sources=sources,
         daily_sources=daily_sources,
         operating_costs=costs,
@@ -874,6 +933,7 @@ def finance(game: Game, active_users: float) -> Economy:
         + game.marketing_spend
         + game.deployment_spend,
         cash_received=cash_received,
+        subscription_cash=game.subscription_cash,
         deferred_subscription_revenue=max(
             0, game.subscription_cash - game.subscription_revenue
         ),
@@ -1130,6 +1190,43 @@ def change_tutorial_progress(game: Game, body: TutorialProgressAction) -> None:
     game.onboarding = progress
 
 
+def incident_view(event: Incident, snapshot: Snapshot) -> IncidentView:
+    covered = event.target in snapshot.components
+    hidden = event.target is not None and not covered
+    diagnostic = {
+        "failure": "Service incident",
+        "degradation": "Service incident",
+        "storage": "Service incident",
+        "capacity": "Service incident",
+        "deploy": "Deployment event",
+        "spike": "Traffic event",
+    }
+    redact = hidden and event.title != "Instance failure drill"
+    return IncidentView(
+        id=event.id,
+        title="Service event" if redact else event.title,
+        category=diagnostic.get(event.kind, "Player action"),
+        symptom=(
+            "Requests failed during this event."
+            if event.failed_requests
+            else "Monitoring coverage is required for more detail."
+        )
+        if redact
+        else event.symptom,
+        severity=event.severity,
+        start=event.start,
+        end=event.end,
+        active=event.resolution is None,
+        cause=(event.cause or event.kind)
+        if not hidden and event.kind in diagnostic
+        else None,
+        target=event.target if covered else None,
+        resolution=event.resolution,
+        failed_requests=round(event.failed_requests),
+        acknowledged=event.acknowledged,
+    )
+
+
 def view(game: Game, saved_at: datetime) -> GameView:
     result = evaluate(game, overview=True)
     snapshot = result.snapshot
@@ -1195,6 +1292,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
             CampaignView(
                 id=key,
                 region=plan.region,
+                regions=plan.regions,
                 budget=plan.budget,
                 acquired=plan.audience,
                 remaining=plan.start + plan.duration - game.tick,
@@ -1205,21 +1303,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
         markets=markets(game),
         languages=languages(game),
         incidents=[
-            IncidentView(
-                id=event.id,
-                title=event.title,
-                symptom=event.symptom,
-                severity=event.severity,
-                start=event.start,
-                end=event.end,
-                active=event.resolution is None,
-                cause=event.kind if event.target in snapshot.components else None,
-                target=event.target if event.target in snapshot.components else None,
-                resolution=event.resolution,
-                failed_requests=round(event.failed_requests),
-                acknowledged=event.acknowledged,
-            )
-            for event in reversed(game.incidents)
+            incident_view(event, snapshot) for event in reversed(game.incidents)
         ],
         deployments=[
             DeploymentView(

@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from math import exp
+from math import exp, prod
 
 from src.simulation.catalog import (
     FEATURES,
@@ -8,6 +8,7 @@ from src.simulation.catalog import (
     MEDIA_QUALITY,
     MINUTES_PER_TICK,
     OPERATIONS,
+    topic_accepts,
 )
 from src.simulation.database import WARNING, DatabaseLoad
 from src.simulation.demand import active_incidents, product_settings, workload
@@ -62,11 +63,12 @@ def evaluate(
     audience: float | None = None,
     boost: float = 0,
     overview: bool = False,
+    load_scale: float = 1,
 ) -> Evaluation:
     topology = topology or game.production
     graph = inspect_graph(topology)
     activity = workload(game, audience, boost, overview=overview)
-    workloads = activity.operations
+    workloads = {key: rate * load_scale for key, rate in activity.operations.items()}
     media = MEDIA_QUALITY[product_settings(game).media_quality]
     operations = {
         key: {
@@ -457,7 +459,7 @@ def evaluate(
 
     # Background work is generated only by requests that reached a successful terminal.
     jobs: dict[str, float] = defaultdict(float)
-    async_routes: dict[tuple[str, str], list[str]] = {}
+    async_routes: dict[tuple[str, str], tuple[list[str], list[str]]] = {}
     queued_operations: dict[str, dict[str, float]] = defaultdict(
         lambda: defaultdict(float)
     )
@@ -468,6 +470,7 @@ def evaluate(
             target
             for target in graph.targets[origin]
             if graph.nodes[target].kind == "queue"
+            and topic_accepts(settings[target]["topic"], op)
         ]
         if "background_jobs" in enforced.get(op, ()):
             if not targets:
@@ -482,9 +485,20 @@ def evaluate(
                 )
             ] or targets
         if OPERATIONS[op]["jobs"] and targets:
-            async_routes[key] = targets
-            rate = batch.rate * OPERATIONS[op]["jobs"] / len(targets)
+            shared = [
+                target
+                for target in targets
+                if settings[target]["delivery"] == "Distribute"
+            ]
+            broadcast = [
+                target
+                for target in targets
+                if settings[target]["delivery"] == "Broadcast"
+            ]
+            async_routes[key] = shared, broadcast
             for target in targets:
+                copies = len(shared) if target in shared else 1
+                rate = batch.rate * OPERATIONS[op]["jobs"] / copies
                 jobs[target] += rate
                 edges[origin, target] += rate
                 edge_operations[origin, target][op] += rate
@@ -582,14 +596,23 @@ def evaluate(
         )
 
     success = Batch()
+    latency_cohorts = []
     ad_success = 0.0
     for key, batch in completed.items():
         if key in missing_queues:
             continue
-        routes = async_routes.get(key, [])
-        loss = sum(dropped[target] for target in routes) / len(routes) if routes else 0
-        served = batch.rate * (1 - loss)
+        shared, broadcast = async_routes.get(key, ([], []))
+        shared_success = (
+            1 - sum(dropped[target] for target in shared) / len(shared) if shared else 1
+        )
+        served = (
+            batch.rate
+            * shared_success
+            * prod(1 - dropped[target] for target in broadcast)
+        )
         success.add(served, batch.latency)
+        if served > 0:
+            latency_cohorts.append((batch.latency, served))
         if key[0] == "ad":
             ad_success += served
 
@@ -632,6 +655,14 @@ def evaluate(
     errors = min(requested, max(errors, rejected))
     throughput = requested - errors
     available = throughput / requested if requested else 1
+    p95 = None
+    if throughput:
+        cumulative = 0.0
+        for latency, served in sorted(latency_cohorts):
+            cumulative += served
+            if cumulative >= success.rate * 0.95:
+                p95 = latency
+                break
     snapshot = Snapshot(
         metrics=Metrics(
             rps=requested,
@@ -639,6 +670,7 @@ def evaluate(
             availability=available,
             latency=success.latency if success.rate else (2000 if requested else 0),
             errors=errors,
+            p95_latency=p95,
             rejected=rejected,
         ),
         components={
