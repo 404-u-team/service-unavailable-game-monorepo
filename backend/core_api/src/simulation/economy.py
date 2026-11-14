@@ -1,7 +1,18 @@
 from math import exp
 
-from src.simulation.catalog import ADVERTISING, BUSINESS, DAYS_PER_MONTH, TICKS_PER_DAY
-from src.simulation.demand import SECONDS_PER_DAY, product_settings
+from src.simulation.catalog import (
+    ADVERTISING,
+    BUSINESS,
+    DAYS_PER_MONTH,
+    REGIONS,
+    TICKS_PER_DAY,
+)
+from src.simulation.demand import (
+    SECONDS_PER_DAY,
+    daily_active_users,
+    product_settings,
+    regional_audience,
+)
 from src.simulation.engine import Evaluation
 from src.simulation.models import (
     FinanceSample,
@@ -34,10 +45,20 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
         if "advertising" in game.enabled_features
         else 0
     )
-    price_factor = exp(
-        -BUSINESS["premium_price_sensitivity"]
-        * (product.premium_price - BUSINESS["premium_default_price"])
-    )
+    price_delta = product.premium_price - BUSINESS["premium_default_price"]
+    price_factor = adoption_factor = population_weight = 0.0
+    for region_id, population in regional_audience(game, game.audience):
+        region = REGIONS[region_id]
+        weight = daily_active_users(game, population, region)
+        sensitivity = (
+            BUSINESS["premium_price_sensitivity"] * region["price_sensitivity"]
+        )
+        price_response = exp(-sensitivity * price_delta)
+        population_weight += weight
+        price_factor += weight * price_response
+        adoption_factor += weight * price_response * region["premium_adoption"]
+    price_factor /= max(1, population_weight)
+    adoption_factor /= max(1, population_weight)
     reliability = max(
         0,
         1
@@ -59,7 +80,7 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
         * min(
             BUSINESS["premium_max_daily_adoption"],
             BUSINESS["premium_daily_adoption"]
-            * price_factor
+            * adoption_factor
             * benefits
             * (1 + BUSINESS["premium_ad_free_adoption"] * ad_free_value),
         )
@@ -111,4 +132,7 @@ def book_tick(
         cash_received=received,
         daily_active_users=result.daily_active_users,
         ad_impressions=impressions,
+        regional_ads={
+            key: rate * STEP_SECONDS for key, rate in result.regional_ad_rates.items()
+        },
     )

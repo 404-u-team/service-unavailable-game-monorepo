@@ -12,11 +12,12 @@
   import Forecast from './Forecast.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { api } from '../api';
+  import { findPlacement } from './placement';
   import { groupComponents, nestedGroups, removeGroup } from './groups';
   import { connectionError, connectionKind, connectionLabels } from './connections';
   import { componentIcon, statusLabel } from '../labels';
   import { ms, num, pct, preciseMoney, rps, when } from '../format';
-  import type { Catalog, Component, Connection, Diagram, Game, Kind, Point, Review, Setting, Topology } from '../types';
+  import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
   let { game, catalog, act, busy, error, note, focusId, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
@@ -49,6 +50,15 @@
   let localRevision = -1;
   let editingDraft = false;
   let canvas: HTMLDivElement | undefined = $state();
+  let placement: { place: () => Point; reveal: (point: Point) => void } | undefined;
+  const bindPlacement = (tools?: typeof placement) => { placement = tools; };
+
+  function saveViewport(viewport: DiagramViewport) {
+    const mode = compact ? 'compact' : 'wide';
+    const last = savedDiagram.viewports?.[mode];
+    if (last?.x === viewport.x && last.y === viewport.y && last.zoom === viewport.zoom) return;
+    saveDiagram({ ...savedDiagram, viewports: { ...savedDiagram.viewports, [mode]: viewport } });
+  }
 
   let diagramHistory = $state.raw<Diagram[]>([]);
   let diagramFuture = $state.raw<Diagram[]>([]);
@@ -85,7 +95,7 @@
       diagramFuture = [...diagramFuture, savedDiagram];
       diagramHistory = stack.slice(0, -1);
     }
-    saveDiagram(next);
+    saveDiagram({ ...next, viewports: savedDiagram.viewports });
   }
 
   function chooseGroup(id: string) {
@@ -217,7 +227,7 @@
   ]);
 
   onMount(() => {
-    if (focusId && topology.nodes.some((item) => item.id === focusId)) select(focusId);
+    if (focusId && topology.nodes.some((item) => item.id === focusId)) select(focusId, false);
     const query = matchMedia('(max-width: 850px)');
     const update = () => { compact = query.matches; };
     update();
@@ -233,7 +243,7 @@
     }
   });
 
-  function select(id: string) {
+  function select(id: string, interaction = true) {
     if (selected !== id) inspectorTab = 'configuration';
     selected = id;
     if (touchSelect && id) selectMany(selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id]);
@@ -242,7 +252,7 @@
     selectedEdge = '';
     cluster = false;
     context = undefined;
-    if (topology.nodes.find((node) => node.id === id)?.kind === 'api') note('inspect');
+    if (interaction && topology.nodes.find((node) => node.id === id)?.kind === 'api') note('inspect');
   }
 
   function selectEdge(id: string) {
@@ -296,14 +306,18 @@
 
   async function add(kind: Kind) {
     const id = crypto.randomUUID();
-    if (await edit((value) => {
-      const right = Math.max(...value.nodes.map((node) => node.position.x));
-      const index = value.nodes.length;
-      const position = { x: index < 7 ? 505 + (index - 4) * 225 : right + 220, y: index < 7 ? 365 : 185 };
-      return { ...value, nodes: [...value.nodes, { id, kind, position, name: catalog.components[kind].name, config: {} }] };
-    })) {
+    const position = placement?.place() ?? findPlacement(
+      { x: 0, y: 0, width: 960, height: 580 }, { width: 167, height: 101 },
+      topology.nodes.map((node) => ({ ...(savedDiagram.positions[node.id] ?? node.position), width: 167, height: 101 }))
+    );
+    if (await edit((value) => ({
+      ...value, nodes: [...value.nodes, { id, kind, position, name: catalog.components[kind].name, config: {} }]
+    }))) {
+      saveDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, [id]: position } });
       select(id);
       dialog = undefined;
+      await tick();
+      placement?.reveal(position);
     }
   }
 
@@ -395,7 +409,7 @@
   }
 
   function shortcuts(event: KeyboardEvent) {
-    if (dialog || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement) return;
+    if (dialog || event.defaultPrevented || (event.target instanceof HTMLElement && event.target.closest('input, select, textarea, [contenteditable]:not([contenteditable=false]), [role=combobox]'))) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && canvas?.contains(document.activeElement)) {
       event.preventDefault();
       selectMany(topology.nodes.filter((node) => !diagram.groups.some((item) => item.collapsed && groupComponents(item, diagram.groups).includes(node.id))).map((node) => node.id));
@@ -407,7 +421,7 @@
       else void undo(redo);
     }
     if (event.key === 'Delete' && viewingDraft) { event.preventDefault(); void remove(); }
-    if (event.key === 'Escape') context = undefined;
+    if (event.key === 'Escape') { if (context) context = undefined; else select(''); }
     if (event.key === 'Enter' && event.target instanceof HTMLElement) {
       const node = event.target.closest<HTMLElement>('.svelte-flow__node');
       if (node?.dataset.id) select(node.dataset.id);
@@ -452,6 +466,14 @@
         <button aria-pressed={inspectorTab === 'configuration'} onclick={() => inspectorTab = 'configuration'}>{t("Configuration")}</button>
         <button aria-pressed={inspectorTab === 'metrics'} onclick={() => inspectorTab = 'metrics'}>{t("Metrics")}</button>
       </div>
+      {#if active.kind === 'replica'}
+        {@const primary = topology.nodes.find((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
+        <div class="notice stack">
+          <strong>{primary ? t('Primary database: {0}', [t(primary.name)]) : t('Connect this replica to a primary database.')}</strong>
+          <small>{t('This replica serves ordinary reads from APIs or caches that use its primary. Writes and indexed search go to the primary.')}</small>
+          <small>{t('Replication health: {0}', [t(!primary ? 'Disconnected' : metric?.replication_lag == null ? 'Metrics unavailable' : metric.replication_lag >= 5 ? 'Lagging' : 'Healthy')])}</small>
+        </div>
+      {/if}
       {#if inspectorTab === 'configuration'}
         {#if active.kind === 'api' && activeConfig}
           <div class="stack">
@@ -524,7 +546,7 @@
         </div>
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
-      {#if active.kind !== 'source'}<button class="btn primary block large" disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
+      {#if active.kind !== 'source'}<button class="btn primary block large" data-guide={active.kind === 'api' ? 'edit-api' : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
       {#if Number(activeConfig?.instances) > 1}<button class="btn block" aria-pressed={cluster} onclick={() => { cluster = !cluster; if (compact) dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</button>{/if}
       {#if viewingDraft}
         <div class="row wrap"><button class="btn" onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</button>
@@ -532,7 +554,7 @@
       {/if}
     {:else}
       <p class="muted">{metric ? `${t(statusLabel[metric.status])} · ${rps(metric.rps)}` : t(definition.name)}</p>
-      <button class="btn primary block" onclick={() => dialog = 'inspector'}>{t("Open component")} <ArrowRight size={15} /></button>
+      <button class="btn primary block" data-guide={active.kind === 'api' ? 'edit-api' : undefined} onclick={() => dialog = 'inspector'}>{t("Open component")} <ArrowRight size={15} /></button>
     {/if}
   {:else if group}
     <div class="stack">
@@ -597,20 +619,20 @@
           <button class="btn" aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</button>
           {#if selection.length > 1}<button class="btn" onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</button>{/if}
           <button class="btn icon-btn" aria-label={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} title={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} onclick={() => layout = layout === 'canvas' ? 'list' : 'canvas'}>{#if layout === 'canvas'}<List size={16} />{:else}<MousePointer2 size={16} />{/if}</button>
-          <button class="btn" disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; }}><Plus size={14} /> {t("Add node")}</button>
+          <button class="btn" data-guide="add" disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; }}><Plus size={14} /> {t("Add node")}</button>
           <button class="btn" onclick={() => { helpKind = active?.kind ?? 'api'; dialog = 'reference'; }}>{t("Connection reference")}</button>
         </div>
       </div>
       {#if layout === 'canvas'}
-        <div class="canvas" bind:this={canvas}>
+        <div class="canvas" data-guide="canvas" bind:this={canvas}>
           {#if canvas}
           {#key compact}
             <TopologyGraph {topology} {diagram} {game} {catalog} {requestType} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft && !busy}
               {compact} {removed} {touchSelect} {select} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
-              {cluster} container={canvas} menu={openMenu} clear={() => { context = undefined; select(''); }} />
+              {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => { context = undefined; select(''); }} />
           {/key}
           {/if}
-          <p class="canvas-hint mono">{compact ? t("Pinch to zoom · Drag to pan") : t("Flow direction →")}</p>
+          <p class="canvas-hint mono">{compact ? t("Pinch to zoom · Drag to pan") : t("Scroll to pan · Ctrl + wheel to zoom")}</p>
         </div>
       {:else}
         <div class="component-list stack">
@@ -621,7 +643,7 @@
           {/each}
           {#each [...topology.nodes, ...removed] as node (node.id)}
             {@const Icon = componentIcon[node.kind]}
-            <button class="btn row spread" aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)}>
+            <button class="btn row spread" data-guide={node.id === 'api' ? 'api-list' : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)}>
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
             </button>
           {/each}
@@ -638,7 +660,7 @@
           <button class="btn icon-btn" aria-label={t("Redo draft edit")} title={t("Redo")} disabled={busy || !future.length} onclick={() => undo(true)}><Redo2 size={16} /></button>
           <button class="btn" disabled={busy} onclick={openConnect}>{t("Connect")}</button>
           <button class="btn" disabled={busy} onclick={() => { review = undefined; dialog = 'discard'; }}>{t("Discard")}</button>
-          <button class="btn primary" disabled={busy} onclick={inspectReview}>{t("Review deployment")} <ArrowRight size={14} /></button>
+          <button class="btn primary" data-guide="review" disabled={busy} onclick={inspectReview}>{t("Review deployment")} <ArrowRight size={14} /></button>
         {:else if game.draft}<button class="btn" onclick={() => showProduction = false}>{t('Return to draft')}</button>
         {:else}<button class="btn" disabled={busy} onclick={draft}><GitBranch size={15} /> {t("Create draft")}</button>{/if}
       </div>

@@ -19,7 +19,6 @@ from src.simulation.models import (
     Topology,
     Traffic,
 )
-from src.simulation.requirements import MEDIA_FREE_GB
 from src.simulation.topology import config, database_capacity, inspect_graph
 
 
@@ -45,6 +44,7 @@ class Evaluation:
     daily_active_users: float = 0
     ad_impressions_per_second: float = 0
     ad_value_per_impression: float = 0
+    regional_ad_rates: dict[str, float] = field(default_factory=dict)
 
 
 def demand(
@@ -160,6 +160,27 @@ def evaluate(
             **details,
         )
 
+    primary_for = {
+        node.id: next(iter(graph.primaries(node.id)), None)
+        for node in topology.nodes
+        if node.kind in {"api", "replica"}
+    }
+
+    def read_targets(api: str, source: str) -> list[str]:
+        primary = primary_for.get(api)
+        if primary is None:
+            return []
+        return [
+            target
+            for target in graph.targets[source]
+            if target == primary
+            or (
+                graph.nodes[target].kind == "replica"
+                and primary_for[target] == primary
+                and not failures[target]
+            )
+        ]
+
     for op, rate in workloads.items():
         add(incoming["traffic"], (op, ""), rate, 18)
 
@@ -185,13 +206,6 @@ def evaluate(
         by_kind = defaultdict(list)
         for target in targets:
             by_kind[graph.nodes[target].kind].append(target)
-
-        def read_targets(api: str) -> list[str]:
-            return [
-                target
-                for target in graph.targets[api]
-                if graph.relationships[api, target] in {"queries", "reads"}
-            ]
 
         def load(
             field: str,
@@ -239,8 +253,10 @@ def evaluate(
             }
             if kind == "database":
                 followers = sum(
-                    graph.relationships.get((source, node_id)) == "replication"
-                    for source in graph.reachable
+                    primary_for.get(source) == node_id
+                    and graph.nodes[source].kind == "replica"
+                    and not failures[source]
+                    for source in primary_for
                 )
                 indexing = 0.20 if cfg["search_index"] == "Enabled" else 0
                 usage["Writes"] = (
@@ -250,25 +266,21 @@ def evaluate(
                 details["storage_used"] = game.storage.get(node_id, 0)
                 usage["Storage"] = details["storage_used"] / cfg["storage"]
             else:
-                primary = next(
-                    (
-                        target
-                        for target in graph.targets[node_id]
-                        if graph.relationships[node_id, target] == "replication"
-                    ),
-                    None,
-                )
+                primary = primary_for[node_id]
                 if not primary:
                     capacity = 0
-                elif failures[primary]:
-                    details["replication_lag"] = 30.0
                 else:
-                    details["replication_lag"] = round(
-                        0.2
-                        + 1.8
-                        * (reads / read_capacity) ** 2
-                        / max(factors[primary], 0.1),
-                        2,
+                    stale = bool(failures[primary] or failures[node_id])
+                    details["replication_lag"] = (
+                        30.0
+                        if stale
+                        else round(
+                            0.2
+                            + 1.8
+                            * (reads / read_capacity) ** 2
+                            / max(factors[primary] * factor, 0.1),
+                            2,
+                        )
                     )
             base = 21
         elif kind == "cache":
@@ -331,29 +343,20 @@ def evaluate(
             elif kind == "api":
                 key = (op, node_id)
                 if operation["write"]:
-                    databases = by_kind["database"]
-                    if "media_storage" in enforced.get(op, ()):
-                        with_space = [
-                            target
-                            for target in databases
-                            if settings[target]["storage"] - game.storage.get(target, 0)
-                            >= MEDIA_FREE_GB
-                        ]
-                        # Keep using remaining space after release. The database's
-                        # storage limit rejects writes when it fills.
-                        databases = with_space or databases
-                    forward(node_id, databases, key, accepted, total_latency)
+                    primary = primary_for[node_id]
+                    if primary is not None:
+                        forward(node_id, [primary], key, accepted, total_latency)
                 elif "search_index" in enforced.get(op, ()):
-                    indexed = [
-                        target
-                        for target in by_kind["database"]
-                        if settings[target]["search_index"] == "Enabled"
-                    ]
-                    forward(node_id, indexed, key, accepted, total_latency)
+                    primary = primary_for[node_id]
+                    if (
+                        primary is not None
+                        and settings[primary]["search_index"] == "Enabled"
+                    ):
+                        forward(node_id, [primary], key, accepted, total_latency)
                 elif operation["read"]:
                     forward(
                         node_id,
-                        by_kind["cache"] or by_kind["replica"] + by_kind["database"],
+                        by_kind["cache"] or read_targets(node_id, node_id),
                         key,
                         accepted,
                         total_latency,
@@ -372,13 +375,16 @@ def evaluate(
                     )
                 else:
                     hit = 0
-                fallback = read_targets(origin)
-                if not targets and not fallback:
+                fallback = read_targets(origin, origin)
+                cache_data = read_targets(origin, node_id)
+                if not cache_data and not fallback:
                     hit = 0
                 cache_hits += accepted * hit
                 add(completed, key, accepted * hit, total_latency)
-                if targets:
-                    forward(node_id, targets, key, accepted * (1 - hit), total_latency)
+                if cache_data:
+                    forward(
+                        node_id, cache_data, key, accepted * (1 - hit), total_latency
+                    )
                 else:
                     forward(origin, fallback, key, accepted * (1 - hit), total_latency)
             elif kind == "balancer":
@@ -617,6 +623,7 @@ def evaluate(
         monitored=any(monitor.history for monitor in monitors.values()),
         monitors=monitors,
     )
+    ad_share = ad_success * rollout / workloads["ad"] if workloads.get("ad") else 0
     return Evaluation(
         snapshot,
         queues,
@@ -624,6 +631,7 @@ def evaluate(
         activity.active_users,
         ad_success * rollout,
         activity.ad_value_per_impression,
+        {key: rate * ad_share for key, rate in activity.regional_ad_rates.items()},
     )
 
 

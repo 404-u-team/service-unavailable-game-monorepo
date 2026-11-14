@@ -16,9 +16,11 @@ All paths below start with `/api/games`. FastAPI publishes request and response 
 | `GET /{id}/finance` | Read revenue and expense breakdowns, cash and the rolling game-day history |
 | `GET /{id}/incidents` | Read the visible incident history |
 | `POST /{id}/save` | Persist and return the current snapshot |
-| `PUT /{id}/clock` | Set speed to 0, 1 or 3 |
+| `PUT /{id}/clock` | Set speed to 0, 1, 3 or 5 |
 | `POST /{id}/draft` | Start a draft from production |
-| `PUT /{id}/diagram` | Save diagram positions, routes, and groups |
+| `PUT /{id}/diagram` | Replace diagram positions, routes, and groups |
+| `PATCH /{id}/diagram` | Merge changed positions, routes, groups, and viewports |
+| `WS /{id}/live` | Stream a game snapshot and ordered changes |
 | `PUT /{id}/draft` | Persist an edited topology |
 | `POST /{id}/draft/review` | Validate the draft or a supplied candidate topology and return the diff, costs and forecast |
 | `POST /{id}/draft/discard` | Discard the draft |
@@ -26,8 +28,11 @@ All paths below start with `/api/games`. FastAPI publishes request and response 
 | `POST /{id}/deployments/{deployment_id}/rollback` | Restore the topology before that deployment |
 | `POST /{id}/features/{feature_id}` | Develop, release, enable or disable a feature |
 | `PUT /{id}/product` | Set ad intensity, Premium terms, media quality, synchronization and market acquisition |
-| `GET /{id}/campaigns/{campaign_id}/forecast` | Preview campaign demand and availability |
-| `POST /{id}/campaigns/{campaign_id}` | Start a campaign |
+| `GET /{id}/campaigns/{campaign_id}/forecast` | Preview demand and availability, optionally with `region`, `budget`, and `duration` in ticks |
+| `POST /{id}/campaigns/{campaign_id}` | Start a campaign with an optional target, budget, and duration |
+| `POST /{id}/markets/{market_id}` | Develop or launch a regional market |
+| `POST /{id}/languages/{name}` | Start Messenger localization |
+| `POST /{id}/onboarding` | Record guided onboarding progress, skip, or resume |
 | `POST /{id}/incidents/drill` | Run a one-instance failure drill |
 | `POST /{id}/incidents/{event_id}/acknowledge` | Mark an event as reviewed |
 | `PUT /{id}/settings` | Persist onboarding and motion preferences |
@@ -37,9 +42,9 @@ Call `GET /api/games` first to establish the signed, HTTP-only guest cookie. Cli
 
 ## Simulation model
 
-- One step represents ten in-game minutes. The server advances saves from elapsed time at the selected speed. At 1×, two real seconds represent one step. At 3×, three steps take two seconds. On return to a running save, at most two in-game days are simulated for a single elapsed gap. Paused saves retain their tick and any fractional progress.
+- One step represents ten in-game minutes. The server advances saves from elapsed time at the selected speed. At 1×, two real seconds represent one step. At 3× and 5×, three and five steps take two seconds respectively. On return to a running save, at most two in-game days are simulated for a single elapsed gap. Paused saves retain their tick and any fractional progress.
 - Demand is generated in operation cohorts from regional audience, local activity, enabled features, campaigns and seeded events. CPU, RAM, network, connections, concurrency, disk I/O, database reads and writes, and storage affect throughput. Latency rises with resource pressure. Availability is successful throughput divided by incoming request rate.
-- Traffic can pass through a limiter or balancer to an API. Writes go directly to a primary. Read-only cohorts prefer linked caches, then use the cache's explicit data edges on a miss. If the cache has no explicit data links, misses return through the originating API's database or replica links. A replica needs a primary subscription and adds replication write overhead.
+- Traffic can pass through a limiter or balancer to an API. Writes go directly to a primary. Read-only cohorts prefer linked caches, then use the cache's explicit data edges on a miss. If the cache has no explicit data links, misses return through the originating API's database or replica links. A replica needs a subscription to the same primary the originating API uses. Healthy linked replicas split eligible reads with the primary and add replication write overhead. Indexed search and writes use the primary. Independent primaries hold separate datasets. New API configurations allow one primary link. Existing ambiguous links are retained for editing and use the first primary by component ID.
 - Successful foreground operations can submit background jobs to attached queues. Notifications and media jobs contribute job load. Workers process at the minimum of their CPU, RAM and concurrency limits, scaled by healthy instances. Queues absorb excess arrivals up to their capacity. New submissions fail on overflow. Retention expires a fraction of old work per step. Accepted jobs can wait beyond the response, and queue wait is estimated from backlog and worker throughput capacity.
 - Monitoring exposes metrics for linked components with a collection slot. Service history mode reserves two slots and exposes historical metrics. Forecasts evaluate representative future workload ranges with the same engine, excluding future random incidents. Higher monitoring coverage narrows the range.
 - Campaigns incur a one-time cost and acquire users along a growth curve. Organic growth and churn respond to service quality and feature appeal. The game records revenue, cash receipts and operating costs each step. See [Messenger economy and balance](BALANCE.md) for formulas, save compatibility and reproducible results. Running topology changes that remove routing connections can briefly reduce throughput.
@@ -47,7 +52,11 @@ Call `GET /api/games` first to establish the signed, HTTP-only guest cookie. Cli
 
 ### Diagram storage
 
-`PUT /api/games/{id}/diagram` accepts `request_id` and a `diagram` object with `positions`, `routes`, and `groups`. Route keys are `source:target`. The game view returns this object independently of `production`, `draft`, and the topology revision. Existing saves have an empty diagram and render their stored topology positions. The existing JSON save column stores the diagram and deployment metric comparisons.
+`PUT /api/games/{id}/diagram` accepts `request_id` and a `diagram` object with `positions`, `routes`, and `groups`. Route keys are `source:target`. The game view returns this object independently of `production`, `draft`, and the topology revision. Saves without a layout render their stored topology positions. The optional `viewports` map uses `wide` and `compact` keys. Patch entries merge by node or edge ID and accept null to remove an override. Group edits include a baseline to detect concurrent group changes. The existing JSON save column stores the diagram and deployment metric comparisons.
+
+### Live game state
+
+Open `/api/games/{id}/live` on the application's origin using the same signed cookie as REST. The server sends a `snapshot` with the full state and sequence 1, followed by `patch` messages with changed fields. History updates specify how many leading samples to drop and which samples to append. Idle sockets receive heartbeat messages. Sequence numbers restart per connection, and reconnecting always starts with a snapshot. The browser uses the saved timestamp to reconcile REST replies with the stream. Simulation advancement uses the existing row lock across REST and WebSocket clients.
 
 ### Feature releases
 

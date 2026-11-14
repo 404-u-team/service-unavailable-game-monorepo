@@ -2,7 +2,7 @@
   import { apiMessage, message, t } from '../i18n.svelte';
   import Language from '../Language.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { ArrowRight, ArrowUpRight, ChevronRight } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
@@ -10,6 +10,7 @@
   import Chart from './Chart.svelte';
   import Finance from './Finance.svelte';
   import ProductSettings from './ProductSettings.svelte';
+  import MarketProjects from './MarketProjects.svelte';
   import RegionalDemand from './RegionalDemand.svelte';
   import ForecastCard from './Forecast.svelte';
   import { api } from '../api';
@@ -17,10 +18,10 @@
   import { clock, duration, money, ms, num, pct, preciseMoney, rps, when } from '../format';
   import type { Catalog, Feature, Game, Forecast, Incident } from '../types';
 
-  let { section, game, catalog, link, act, busy, error, note }: {
+  let { section, game, catalog, link, act, busy, error, note, resumeTutorial }: {
     section: Section; game: Game; catalog: Catalog; link: (section: Section, focus?: string) => string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
-    busy: boolean; error: string; note: (interaction: 'inspect' | 'monitor') => void;
+    busy: boolean; error: string; resumeTutorial: () => Promise<Game | null> | undefined; note: (interaction: 'inspect' | 'monitor') => void;
   } = $props();
   let dialog = $state<'campaign' | 'feature' | 'incident' | 'rollback' | 'drill'>();
   let detail = $state('');
@@ -31,6 +32,9 @@
   let settingsTab = $state<'general' | 'accessibility' | 'storage'>('general');
   let estimate = $state<Forecast>();
   let readiness = $state<Forecast>();
+  let targetMarket = $state('europe');
+  let budget = $state<number>();
+  let campaignHours = $state<number>();
   let forecastError = $state('');
   let pending = $state(false);
   let range = $state('24');
@@ -78,20 +82,40 @@
   });
 
   async function plan(id: string) {
-    const token = ++forecastToken;
     dialog = 'campaign';
     detail = id;
+    targetMarket = 'europe';
+    budget = catalog.campaigns[id].cost;
+    campaignHours = catalog.campaigns[id].duration * catalog.minutes_per_tick / 60;
+    await requestForecast(id);
+  }
+
+  async function requestForecast(id: string) {
+    const token = ++forecastToken;
+    const ticks = Math.round((campaignHours ?? 0) * 60 / catalog.minutes_per_tick);
     pending = true;
     estimate = undefined;
     forecastError = '';
     try {
-      const result = await api<Forecast>(`/${game.id}/campaigns/${id}/forecast`);
+      if (budget == null || budget < 10 || budget > 100_000 || ticks < 1 || ticks > 288) return;
+      const query = new URLSearchParams({ region: targetMarket, budget: String(budget), duration: String(ticks) });
+      const result = await api<Forecast>(`/${game.id}/campaigns/${id}/forecast?${query}`);
       if (token === forecastToken) estimate = result;
     } catch (reason) {
       if (token === forecastToken) forecastError = apiMessage(reason);
     } finally {
       if (token === forecastToken) pending = false;
     }
+  }
+
+  let campaignTimer: ReturnType<typeof setTimeout>;
+  onDestroy(() => clearTimeout(campaignTimer));
+  function updatePlan() {
+    forecastToken += 1;
+    estimate = undefined;
+    pending = true;
+    clearTimeout(campaignTimer);
+    campaignTimer = setTimeout(() => { if (dialog === 'campaign') void requestForecast(detail); }, 300);
   }
 
   async function confirm(path: string, body?: object) {
@@ -281,7 +305,7 @@
           {/each}
         {:else}<p class="muted">{t("Connect components to Monitoring to inspect utilization and component health.")}</p>{/if}
       </section>
-      <section class="panel pad stack">
+      <section class="panel pad stack" data-guide="diagnostics">
         <h2>{t("Diagnostics")}</h2>
         {#if pressured.length}
           {#each pressured as [id, item]}
@@ -306,6 +330,8 @@
         {:else}<p class="muted">{t("Open a campaign to request a forecast.")}</p>{/if}
       </section>
     </div>
+    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} />{/if}
+    <MarketProjects {game} {busy} {act} />
     <div><h2>{t("Campaign catalog")}</h2><p class="muted">{t("Compare cost, reach and projected demand.")}</p></div>
     <div class="cards campaigns">
       {#each Object.entries(catalog.campaigns) as [id, campaign]}
@@ -315,7 +341,9 @@
           <h2>{t(campaign.name)}</h2>
           <div class="row spread"><strong class="stat">{money(campaign.cost)}</strong><span class="mono muted">{duration(campaign.duration)}</span></div>
           <p class="muted">≈ {num(campaign.audience)} {t("new users")}</p>
-          {#if running}<Meter value={running.progress} label={t("{0} remaining", [duration(running.remaining)])} />
+          {#if running}
+            {#if running.region}<p>{t(game.markets.find((market) => market.id === running.region)?.name ?? '')} · {money(running.budget ?? 0)}</p>{/if}
+            <Meter value={running.progress} label={t("{0} remaining", [duration(running.remaining)])} />
           {:else}<button class="btn {id === 'creator' ? 'primary' : ''}" onclick={() => plan(id)}>{t("Plan campaign")} <ArrowRight size={14} /></button>{/if}
         </article>
       {/each}
@@ -362,6 +390,7 @@
         </aside>
       {/if}
     </div>
+    <MarketProjects {game} {busy} {act} localization />
     <ProductSettings {game} {catalog} {busy} {error} save={(product) => act('/product', { product }, 'PUT')} />
   {:else if section === 'finance'}
     <Finance {game} {catalog} />
@@ -398,7 +427,7 @@
       {#if game.draft && game.deployments.length}<p class="muted">{t("Discard the current draft to roll back.")}</p>{/if}
     </section>
   {:else if section === 'guide'}
-    <Guide {catalog} {game} {link} />
+    <Guide {catalog} {game} {link} {resumeTutorial} />
   {:else if section === 'settings'}
     <div class="split settings-layout">
       <nav class="panel inset pad settings-tabs" aria-label={t("Settings sections")}>
@@ -415,12 +444,19 @@
               <button class="btn" aria-pressed={game.speed === option.speed} disabled={busy} onclick={() => act('/clock', { speed: option.speed }, 'PUT')}>{t(option.label)}</button>
             {/each}
           </div></div>
-          <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><input type="checkbox" checked={game.settings.show_tutorial} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, show_tutorial: event.currentTarget.checked } }, 'PUT')} /></label>
-          <label class="row spread setting"><span><strong>{t('Show optional objectives')}</strong></span><input type="checkbox" checked={game.settings.show_objectives !== false} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, show_objectives: event.currentTarget.checked } }, 'PUT')} /></label>
+          <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><input type="checkbox" role="switch" checked={game.settings.show_tutorial} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, show_tutorial: event.currentTarget.checked } }, 'PUT')} /></label>
+          {#if game.settings.show_tutorial && game.onboarding.skipped && game.onboarding.step < 9}<button class="btn" disabled={busy} onclick={resumeTutorial}>{t('Resume tutorial')}</button>{/if}
+          <div class="stack"><h3>{t('Keyboard shortcuts')}</h3>
+            <dl class="breakdown">
+              {#each [['Ctrl/Cmd + S', 'Save game'], ['Space', 'Pause or resume'], ['1 / 2 / 3', 'Set speed to 1× / 3× / 5×'], ['Escape', 'Close a dialog or clear selection']] as [key, label]}
+                <div><dt>{t(label)}</dt><dd><kbd>{t(key)}</kbd></dd></div>
+              {/each}
+            </dl>
+          </div>
           <div class="row wrap"><button class="btn" disabled={busy} onclick={() => act('/settings', { settings: { show_tutorial: true, reduced_motion: false } }, 'PUT')}>{t("Restore defaults")}</button><button class="btn primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</button></div>
         {:else if settingsTab === 'accessibility'}
           <h2>{t("Accessibility")}</h2>
-          <label class="row spread setting"><span><strong>{t("Reduce motion")}</strong><small>{t("Reduce animation and transitions.")}</small></span><input type="checkbox" checked={game.settings.reduced_motion} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, reduced_motion: event.currentTarget.checked } }, 'PUT')} /></label>
+          <label class="row spread setting"><span><strong>{t("Reduce motion")}</strong><small>{t("Reduce animation and transitions.")}</small></span><input type="checkbox" role="switch" checked={game.settings.reduced_motion} disabled={busy} onchange={(event) => act('/settings', { settings: { ...game.settings, reduced_motion: event.currentTarget.checked } }, 'PUT')} /></label>
 
         {:else}
           <div><h2>{t("Save management")}</h2><p class="muted">{t("The server saves progress as you play.")}</p></div>
@@ -444,18 +480,31 @@
   <Modal title={t("Campaign planning")} subtitle={t(currentCampaign.name)} close={() => dialog = undefined}>
     <div class="stack">
       <p>{t(currentCampaign.description)}</p>
-      <dl class="breakdown">
-        <div><dt>{t("Campaign cost")}</dt><dd>{money(currentCampaign.cost)}</dd></div>
-        <div><dt>{t("Duration")}</dt><dd>{duration(currentCampaign.duration)}</dd></div>
-        <div><dt>{t("Expected acquisition")}</dt><dd>≈ {num(currentCampaign.audience)} {t("users")}</dd></div>
-      </dl>
+      <div class="split equal">
+        <label class="field"><span>{t('Target market')}</span><select bind:value={targetMarket} onchange={updatePlan}>
+          {#each game.markets.filter((market) => market.stage === 'active') as market (market.id)}
+            <option value={market.id}>{t(market.name)}</option>
+          {/each}
+        </select></label>
+        <label class="field"><span>{t('Campaign budget')}</span><input type="number" min="10" max="100000" bind:value={budget} oninput={updatePlan} /></label>
+        <label class="field"><span>{t('Duration (game hours)')}</span><input type="number" min={catalog.minutes_per_tick / 60} max="48" step="any" bind:value={campaignHours} oninput={updatePlan} /></label>
+      </div>
+      {#if estimate?.plan}
+        <dl class="breakdown">
+          <div><dt>{t("Duration")}</dt><dd>{duration(estimate.plan.duration)}</dd></div>
+          <div><dt>{t("Expected acquisition")}</dt><dd>≈ {num(estimate.plan.acquired)} {t("users")}</dd></div>
+          <div><dt>{t("Cost per acquired user")}</dt><dd>{estimate.plan.cost_per_user == null ? '—' : preciseMoney(estimate.plan.cost_per_user)}</dd></div>
+        </dl>
+      {:else if !pending && !forecastError}
+        <p class="notice warn">{t('Enter a valid budget and duration to see the forecast.')}</p>
+      {/if}
       {#if pending}<p aria-live="polite">{t("Calculating forecast…")}</p>{/if}
       {#if estimate}<ForecastCard forecast={estimate} />{/if}
       {#if forecastError || error}<p class="notice error" role="alert">{message(forecastError || error)}</p>{/if}
-      {#if game.balance < currentCampaign.cost}<p class="notice warn">{t("Insufficient funds.")}</p>{/if}
+      {#if game.balance < (budget ?? Infinity)}<p class="notice warn">{t("Insufficient funds.")}</p>{/if}
     </div>
     {#snippet footer()}
-      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn primary" disabled={busy || pending || !estimate || game.balance < currentCampaign.cost || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`)}>{t("Start campaign")}</button></div>
+      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn primary" disabled={busy || pending || !estimate?.plan?.acquired || game.balance < (budget ?? Infinity) || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`, { region: targetMarket, budget, duration: estimate?.plan?.duration })}>{t("Start campaign")}</button></div>
     {/snippet}
   </Modal>
 {:else if dialog === 'feature' && currentFeature}

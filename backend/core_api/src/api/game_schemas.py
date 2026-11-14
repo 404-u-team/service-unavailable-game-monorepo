@@ -8,6 +8,8 @@ from src.simulation.models import (
     AdIntensity,
     DeploymentComparison,
     Diagram,
+    DiagramGroup,
+    DiagramViewport,
     Difficulty,
     FinanceSample,
     GameSettings,
@@ -15,13 +17,18 @@ from src.simulation.models import (
     Metrics,
     Model,
     Name,
+    NodeId,
+    Onboarding,
     OneTimeCosts,
     OperatingCosts,
+    Position,
     ProductSettings,
     RevenueSources,
+    RouteId,
     Snapshot,
     Speed,
     Topology,
+    Waypoints,
 )
 
 ScenarioId = Literal["messenger", "social", "multiplayer", "education"]
@@ -68,6 +75,20 @@ class UpdateDiagram(Action):
     diagram: Diagram
 
 
+class PatchDiagram(Action):
+    positions: dict[NodeId, Position | None] = Field(
+        default_factory=dict, max_length=240
+    )
+    routes: dict[RouteId, Waypoints | None] = Field(
+        default_factory=dict, max_length=480
+    )
+    groups: list[DiagramGroup] | None = Field(default=None, max_length=80)
+    group_base: list[DiagramGroup] | None = Field(default=None, max_length=80)
+    viewports: dict[Literal["compact", "wide"], DiagramViewport] = Field(
+        default_factory=dict
+    )
+
+
 class SettingsAction(Action):
     settings: GameSettings
 
@@ -84,9 +105,60 @@ class TutorialAction(Action):
     interaction: Literal["inspect", "monitor"]
 
 
+class OnboardingAction(Action):
+    step: int = Field(ge=0, le=9)
+    interaction: Literal[
+        "back",
+        "next",
+        "skip",
+        "resume",
+        "inspect",
+        "monitor",
+        "coverage",
+    ]
+
+
 class DraftReviewRequest(Model):
     revision: int = Field(ge=0)
     topology: Topology | None = None
+
+
+class MarketAction(Action):
+    action: Literal["develop", "launch"]
+
+
+class CampaignAction(Action):
+    region: str | None = None
+    budget: float | None = Field(default=None, ge=10, le=100_000)
+    duration: int | None = Field(default=None, ge=1, le=288)
+
+
+class MarketView(Model):
+    id: str
+    name: str
+    population: int
+    potential: int
+    language: str
+    cost: float
+    duration: int
+    remaining: int
+    stage: Literal["planned", "developing", "ready", "active"]
+
+
+class LanguageView(Model):
+    name: str
+    cost: float
+    duration: int
+    ready: bool
+    remaining: int
+
+
+class CampaignPlan(Model):
+    region: str
+    budget: float
+    duration: int
+    acquired: float
+    cost_per_user: float | None
 
 
 class Range(Model):
@@ -100,6 +172,7 @@ class Forecast(Model):
     availability: Range
     audience: Range
     confidence: Literal["low", "medium", "high"]
+    plan: CampaignPlan | None = None
 
 
 class Modification(Model):
@@ -207,6 +280,9 @@ class CampaignView(Model):
     id: str
     remaining: int = 0
     progress: float = 0
+    region: str | None = None
+    budget: float | None = None
+    acquired: float | None = None
 
 
 class IncidentView(Model):
@@ -251,10 +327,13 @@ class GameView(SaveSummary):
     product: ProductSettings
     advertising_estimates: dict[AdIntensity, AdvertisingEstimate]
     campaigns: list[CampaignView]
+    markets: list[MarketView]
+    languages: list[LanguageView]
     incidents: list[IncidentView]
     deployments: list[DeploymentView]
     settings: GameSettings
     tutorial: int
+    onboarding: Onboarding
     peak: Metrics | None = None
 
 

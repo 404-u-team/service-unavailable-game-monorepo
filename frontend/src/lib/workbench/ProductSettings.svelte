@@ -51,7 +51,7 @@
             value={product.premium_price} oninput={(event) => edits.premium_price = event.currentTarget.valueAsNumber} />
         </label>
         <p class="muted">{t('Higher prices reduce adoption. Price changes apply to new subscriptions and renewals.')}</p>
-        <label class="row"><input type="checkbox" checked={product.premium_fast_sync} onchange={(event) => edits.premium_fast_sync = event.currentTarget.checked} /> {t('Offer faster synchronization')}</label>
+        <label class="row"><input type="checkbox" role="switch" checked={product.premium_fast_sync} onchange={(event) => edits.premium_fast_sync = event.currentTarget.checked} /> {t('Offer faster synchronization')}</label>
         <p class="muted">{t('Premium is ad-free. Faster synchronization adds load and makes the plan more attractive. Existing terms retain their benefits.')}</p>
         <p class="muted">{t('Reliability and latency affect renewals.')}</p>
         <dl class="estimate">
@@ -79,12 +79,14 @@
       </label>
       <p class="muted">{t('Compression reduces network and storage use for future uploads and requires more CPU. Higher quality improves satisfaction.')}</p>
     </fieldset>
+    {#if game.product.north_america}
     <fieldset class="stack">
       <legend>{t('Markets')}</legend>
       <p>{t('Europe is the starting market.')}</p>
-      <label class="row"><input type="checkbox" checked={product.north_america} onchange={(event) => edits.north_america = event.currentTarget.checked} /> {t('Acquire users in North America')}</label>
+      <label class="row"><input type="checkbox" role="switch" checked={product.north_america} onchange={(event) => edits.north_america = event.currentTarget.checked} /> {t('Acquire users in North America')}</label>
       <p class="muted">{t('Campaigns and organic growth can reach this market. Existing users keep access if you stop acquisition.')}</p>
     </fieldset>
+    {/if}
   </div>
   {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
   <div><button class="btn primary" type="submit" disabled={busy || !Object.keys(edits).length}>{t('Save product settings')}</button></div>

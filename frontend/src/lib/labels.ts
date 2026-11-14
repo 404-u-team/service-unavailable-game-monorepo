@@ -26,13 +26,6 @@ export const componentIcon = {
   cache: Layers, limiter: Gauge, queue: Cable, worker: Workflow, monitor: Network
 } satisfies Record<Kind, typeof Server>;
 
-export const tutorial = [
-  { title: 'Inspect an API server', text: 'Open Topology and select the Messenger API to see its instance settings.', section: 'build' },
-  { title: 'Change the API configuration', text: 'Edit the API server, then save a CPU, RAM or instance change to the draft.', section: 'build' },
-  { title: 'Deploy the draft', text: 'Open Deployment review. Check the forecast and confirm the change.', section: 'build' },
-  { title: 'Review telemetry', text: 'Open Telemetry to see how the deployment changed service metrics.', section: 'monitor' }
-] as const;
-
 export const statusLabel = {
   healthy: 'Healthy', warning: 'Warning', overloaded: 'Overloaded', failed: 'Failed', idle: 'Idle'
 };

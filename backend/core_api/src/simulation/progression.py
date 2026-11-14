@@ -11,12 +11,20 @@ from src.simulation.catalog import (
     HISTORY_LIMIT,
     MEDIA_QUALITY,
     MINUTES_PER_TICK,
+    REGIONS,
     SCENARIOS,
     START_MINUTE_UTC,
     SYNC_FREQUENCY,
     TICKS_PER_DAY,
 )
-from src.simulation.demand import free_share, product_settings
+from src.simulation.demand import (
+    acquire,
+    active_markets,
+    adoption,
+    free_share,
+    product_settings,
+    regional_audience,
+)
 from src.simulation.economy import book_tick, update_subscriptions
 from src.simulation.engine import evaluate
 from src.simulation.models import (
@@ -25,6 +33,7 @@ from src.simulation.models import (
     Game,
     HistoryPoint,
     Incident,
+    Onboarding,
     OneTimeCosts,
     Snapshot,
 )
@@ -52,6 +61,7 @@ def new_game(
         balance=profile["balance"],
         difficulty=difficulty,
         start_minute=START_MINUTE_UTC,
+        onboarding=Onboarding(),
     )
     game.history = [history_point(game, evaluate(game).snapshot)]
     return game
@@ -196,6 +206,23 @@ def advance(game: Game, steps: int) -> None:
             if game.tick < start + CAMPAIGNS[key]["duration"]
         }
 
+        for key, plan in list(game.regional_campaigns.items()):
+            elapsed = game.tick - plan.start
+            if 0 < elapsed <= plan.duration:
+                phase = (elapsed - 0.5) / plan.duration
+                weight = 6 * phase * (1 - phase) / (plan.duration + 0.5 / plan.duration)
+                acquire(game, plan.region, plan.audience * weight)
+            if elapsed >= plan.duration:
+                del game.regional_campaigns[key]
+                add_event(
+                    game,
+                    "campaign-complete",
+                    f"{CAMPAIGNS[key]['name']} campaign has ended",
+                    "The campaign has finished acquiring users.",
+                    "info",
+                    0,
+                )
+
         roll_event(game)
         result = evaluate(game)
         game.queues = result.queues
@@ -230,16 +257,43 @@ def advance(game: Game, steps: int) -> None:
             + game.strain * 0.13
             + (ads["churn"] * eligible_share if ads else 0)
         )
-        organic_acquisition = game.audience * growth / TICKS_PER_DAY
+        base_population = game.audience - sum(game.market_audience.values())
+        if "north_america" in game.launched_markets and not product.north_america:
+            base_population -= game.north_america_audience
+        organic_acquisition = (
+            max(0, base_population) * growth * adoption(game, "europe") / TICKS_PER_DAY
+        )
         churned = game.audience * churn / TICKS_PER_DAY
         retained = 1 - churn / TICKS_PER_DAY
         game.audience = max(
             50, game.subscribers, game.audience - churned + organic_acquisition
         )
         game.north_america_audience *= retained
+        game.market_audience = {
+            key: users * retained for key, users in game.market_audience.items()
+        }
         if product.north_america:
             game.north_america_audience += (
                 organic_acquisition * BUSINESS["expansion_acquisition_share"]
+            )
+        for region, population in regional_audience(game, game.audience):
+            if (
+                region not in active_markets(game)
+                or region == "europe"
+                or (region == "north_america" and product.north_america)
+            ):
+                continue
+            profile = REGIONS[region]
+            room = max(0.0, 1 - population / profile["potential"])
+            acquire(
+                game,
+                region,
+                (population + 300)
+                * growth
+                * profile["organic"]
+                * adoption(game, region)
+                * room
+                / TICKS_PER_DAY,
             )
         premium_latency = max(
             0, metrics.latency - BUSINESS["premium_latency_threshold"]

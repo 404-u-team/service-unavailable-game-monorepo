@@ -4,7 +4,7 @@
     type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { onDestroy, untrack } from 'svelte';
-  import FitOnResize from './FitOnResize.svelte';
+  import CanvasViewport from './CanvasViewport.svelte';
   import FlowNode, { type WorkbenchNode } from './FlowNode.svelte';
   import GroupNode, { type GroupFlowNode } from './GroupNode.svelte';
   import RoutedEdge, { type RoutedEdge as DiagramEdge } from './RoutedEdge.svelte';
@@ -16,7 +16,7 @@
   import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
   let { topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
-    select, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container }: {
+    select, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
     topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
     edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
     select: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
@@ -24,6 +24,8 @@
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
     menu: (event: MouseEvent, id?: string) => void; clear: () => void; cluster: boolean; container: HTMLElement;
+    bindPlacement: (tools?: { place: () => Point; reveal: (point: Point) => void }) => void;
+    saveViewport: (viewport: Viewport) => void;
   } = $props();
 
   const edgeKey = (edge: Connection) => `${edge.source}:${edge.target}`;
@@ -36,14 +38,17 @@
   let reconnectKey = $state('');
   let dragPositions = $state.raw<Record<string, Point>>({});
   let routeFrame: ReturnType<typeof setTimeout> | undefined;
+  let queuedDrag: Record<string, Point> = {};
+  let dragging = $state(false);
 
   function previewPositions(next: Record<string, Point>) {
-    if (topology.edges.length < 80) {
-      dragPositions = next;
-      return;
-    }
+    dragging = true;
+    queuedDrag = next;
     if (routeFrame !== undefined) return;
-    routeFrame = setTimeout(() => { routeFrame = undefined; dragPositions = next; }, 75);
+    routeFrame = setTimeout(() => {
+      routeFrame = undefined;
+      dragPositions = queuedDrag;
+    }, topology.edges.length < 80 ? 16 : 75);
   }
 
   function finishMove(next: Record<string, Point>) {
@@ -51,26 +56,35 @@
     routeFrame = undefined;
     move(next);
     dragPositions = {};
+    dragging = false;
   }
 
   onDestroy(() => clearTimeout(routeFrame));
   let linkFeedback = $state('');
   function viewportKey() { return `workbench-viewport:${game.id}:${compact ? 'compact' : 'wide'}`; }
   function restoreViewport(): Viewport | undefined {
+    const saved = diagram.viewports?.[compact ? 'compact' : 'wide'];
+    if (saved) return saved;
     try {
       const stored = JSON.parse(localStorage.getItem(viewportKey()) ?? 'null');
       if (stored && [stored.x, stored.y, stored.zoom].every(Number.isFinite)) return stored;
     } catch { /* The diagram still fits when browser preferences are unavailable. */ }
   }
   const initialViewport = untrack(restoreViewport);
+  let viewportReady = false;
   const card = $derived({ width: compact ? 156 : 167, height: compact ? 86 : 101 });
+  let graphSnapshot = $state.raw(untrack(() => game.snapshot));
+  $effect(() => { if (!dragging) graphSnapshot = game.snapshot; });
   const actual = $derived(Object.fromEntries(game.production.nodes.map((node) => [node.id, node])));
   const components = $derived(Object.fromEntries(topology.nodes.map((node) => [node.id, node])));
-  const hiddenGroups = $derived(new Set(diagram.groups.filter((group) => group.collapsed)
-    .flatMap((group) => [...nestedGroups(group, diagram.groups)])));
-  const collapsedMembers = $derived(new Map(diagram.groups.filter((group) => group.collapsed && !hiddenGroups.has(group.id))
-    .flatMap((group) => groupComponents(group, diagram.groups).map((member) => [member, group.id] as const))));
-  const allGroups = $derived(new Map(diagram.groups.map((group) => [group.id, group])));
+  const groups = $derived(diagram.groups);
+  const savedPositions = $derived(diagram.positions);
+  const routes = $derived(diagram.routes);
+  const hiddenGroups = $derived(new Set(groups.filter((group) => group.collapsed)
+    .flatMap((group) => [...nestedGroups(group, groups)])));
+  const collapsedMembers = $derived(new Map(groups.filter((group) => group.collapsed && !hiddenGroups.has(group.id))
+    .flatMap((group) => groupComponents(group, groups).map((member) => [member, group.id] as const))));
+  const allGroups = $derived(new Map(groups.map((group) => [group.id, group])));
 
 
   const compactOffsets: Record<string, Point> = {
@@ -87,7 +101,7 @@
   }
 
   function position(node: Component) {
-    return project(dragPositions[node.id] ?? diagram.positions[node.id] ?? node.position, node.id);
+    return project(dragPositions[node.id] ?? savedPositions[node.id] ?? node.position, node.id);
   }
 
   function projectWaypoint(point: Point, edge: Connection, inverse = false) {
@@ -101,7 +115,7 @@
       const found = boxes.get(group.id);
       if (found) return found;
       const items: Rect[] = [];
-      for (const id of group.collapsed ? groupComponents(group, diagram.groups) : group.members) {
+      for (const id of group.collapsed ? groupComponents(group, groups) : group.members) {
         const node = components[id];
         const child = allGroups.get(id);
         const rect = node ? { ...position(node), ...card } : child && measure(child);
@@ -117,7 +131,7 @@
       boxes.set(group.id, box);
       return box;
     }
-    for (const group of diagram.groups) if (!hiddenGroups.has(group.id)) measure(group);
+    for (const group of groups) if (!hiddenGroups.has(group.id)) measure(group);
     return boxes;
   });
 
@@ -125,11 +139,11 @@
     const current = untrack(() => nodes);
     const stable = new Map(current.map((node) => [node.id, node]));
     const next: CanvasNode[] = [];
-    for (const group of diagram.groups) {
+    for (const group of groups) {
       const bounds = groupBoxes.get(group.id);
       if (!bounds || hiddenGroups.has(group.id)) continue;
-      const members = groupComponents(group, diagram.groups).filter((id) => components[id]);
-      const stats = members.flatMap((id) => game.snapshot.components[id] ? [game.snapshot.components[id]] : []);
+      const members = groupComponents(group, groups).filter((id) => components[id]);
+      const stats = members.flatMap((id) => graphSnapshot.components[id] ? [graphSnapshot.components[id]] : []);
       const warnings = stats.filter((metric) => !['idle', 'healthy'].includes(metric.status)).length;
       const priority = ['failed', 'overloaded', 'warning', 'healthy', 'idle'] as const;
       const status = priority.find((state) => stats.some((metric) => metric.status === state));
@@ -140,24 +154,24 @@
           throughput: stats.length ? stats.reduce((sum, metric) => sum + metric.throughput, 0) : undefined,
           toggle: stable.get(group.id)?.type === 'groupCard' ? (stable.get(group.id) as GroupFlowNode).data.toggle : () => toggleGroup(group.id) },
         selected: group.id === groupSelected, draggable: true, dragHandle: '.drag-group',
-        selectable: true, connectable: false, deletable: false, ariaLabel: group.name, zIndex: group.collapsed ? 0 : -1 - nestedGroups(group, diagram.groups).size
+        selectable: true, connectable: false, deletable: false, ariaLabel: group.name, zIndex: group.collapsed ? 0 : -1 - nestedGroups(group, groups).size
       });
     }
     for (const node of [...topology.nodes, ...removed]) {
       if (collapsedMembers.has(node.id)) continue;
       const live = actual[node.id];
       const definition = catalog.components[node.kind];
-      const metric = game.snapshot.components[node.id];
+      const metric = graphSnapshot.components[node.id];
       const pending = removed.includes(node);
       const settings = Object.fromEntries(Object.entries(definition.fields).map(([key, field]) => [key, node.config[key] ?? field.default]));
       const configured = live && Object.keys(definition.fields).some((key) => (live.config[key] ?? definition.fields[key].default) !== settings[key]);
       const change = pending ? t('Pending removal') : !live ? t('Added in draft') : configured || live.name !== node.name ? t('Modified in draft') : '';
-      const monitor = game.snapshot.monitors?.[node.id];
+      const monitor = graphSnapshot.monitors?.[node.id];
       const status = metric?.status ?? (monitor ? monitor.failed ? 'failed' : monitor.dropped.length ? 'warning' : monitor.covered.length ? 'healthy' : 'idle' : undefined);
       const use = metric && Object.keys(metric.utilization).length ? Math.max(...Object.values(metric.utilization)) : undefined;
       const tone = status === 'failed' || status === 'overloaded' ? 'bad' : status === 'warning' ? 'warn' : status === 'healthy' || node.kind === 'source' ? 'good' : 'dim';
       const instances = Number(settings.instances ?? 1);
-      const meta = node.kind === 'source' ? rps(game.snapshot.metrics.rps)
+      const meta = node.kind === 'source' ? rps(graphSnapshot.metrics.rps)
         : node.kind === 'api' ? `${instances > 1 ? `${instances}× · ` : ''}${t('{0} vCPU · {1} GB', [num(Number(settings.cpu)), num(Number(settings.memory))])}`
         : node.kind === 'worker' ? `${instances}× · ${t('{0} vCPU', [num(Number(settings.cpu))])}`
         : node.kind === 'balancer' ? t(String(settings.algorithm)) : t(definition.name);
@@ -213,24 +227,33 @@
     return [...bundles.values()];
   });
 
-  const paths = $derived.by(() => {
+  const geometry = $derived.by(() => {
     const boxes: Record<string, Rect> = {};
     for (const node of [...topology.nodes, ...removed]) {
       if (!collapsedMembers.has(node.id)) boxes[node.id] = { ...position(node), ...card };
     }
-    for (const group of diagram.groups) {
+    for (const group of groups) {
       const box = groupBoxes.get(group.id);
       if (group.collapsed && box) boxes[group.id] = box;
     }
-    const obstacles = Object.values(boxes);
+    return { boxes, obstacles: Object.values(boxes) };
+  });
+
+  const paths = $derived.by(() => {
+    const { boxes, obstacles } = geometry;
     const occupied: [Point, Point][] = [];
     const paths = edgeSpecs.flatMap((item, index) => {
       const from = boxes[item.source];
       const to = boxes[item.target];
       if (!from || !to) return [];
-      const waypoints = item.aggregated ? [] : (diagram.routes[item.key] ?? []).map((point) => projectWaypoint(point, item.originals[0]));
-      const points = routeConnection({ x: from.x + from.width, y: from.y + from.height / 2 },
-        { x: to.x, y: to.y + to.height / 2 }, obstacles, waypoints, occupied, (index % 7 - 3) * 9);
+      const waypoints = item.aggregated ? [] : (routes[item.key] ?? []).map((point) => projectWaypoint(point, item.originals[0]));
+      const start = { x: from.x + from.width, y: from.y + from.height / 2 };
+      const end = { x: to.x, y: to.y + to.height / 2 };
+      const preview = dragging && topology.edges.length >= 40;
+      const stops = preview ? [start, ...waypoints, end] : [];
+      const points = preview
+        ? [start, ...segments(stops).flatMap(([a, b]) => [{ x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }, b])]
+        : routeConnection(start, end, obstacles, waypoints, occupied, (index % 7 - 3) * 9);
       occupied.push(...segments(points));
       return [{ ...item, waypoints, points }];
     });
@@ -238,7 +261,7 @@
   });
 
   $effect(() => {
-    const traffic = new Map(game.snapshot.traffic.map((item) => [edgeKey(item), requestType ? item.operations?.[requestType] ?? 0 : item.rps]));
+    const traffic = new Map(graphSnapshot.traffic.map((item) => [edgeKey(item), requestType ? item.operations?.[requestType] ?? 0 : item.rps]));
     const liveEdges = new Set(game.production.edges.map(edgeKey));
     const current = untrack(() => edges);
     const previous = new Map(current.map((edge) => [edge.id, edge]));
@@ -279,7 +302,7 @@
     for (const item of dragged) {
       if (item.type === 'workbench' && components[item.id]) positions[item.id] = project(item.position, item.id, true);
       else if (item.type === 'groupCard') {
-        const group = diagram.groups.find((group) => group.id === item.id);
+        const group = groups.find((group) => group.id === item.id);
         if (!group) continue;
         const bounds = groupBoxes.get(group.id);
         if (!bounds) continue;
@@ -287,7 +310,7 @@
         // The group's bounds follow its children as the drag progresses.
         const dx = item.position.x - bounds.x;
         const dy = item.position.y - bounds.y;
-        for (const id of groupComponents(group, diagram.groups)) {
+        for (const id of groupComponents(group, groups)) {
           if (!components[id]) continue;
           const start = current[id] ?? diagram.positions[id] ?? components[id].position;
           positions[id] = { x: start.x + dx, y: start.y + dy };
@@ -378,15 +401,16 @@
   onnodedragstop={({ nodes: dragged }) => finishMove(trackDrag(dragged))}
   onselectiondrag={(_, dragged) => previewPositions(trackDrag(dragged))}
   onselectiondragstop={(_, dragged) => finishMove(trackDrag(dragged))}
+  oninit={() => { viewportReady = true; }}
   onmoveend={(event, viewport) => {
-    if (event) localStorage.setItem(viewportKey(), JSON.stringify(viewport));
+    if (event || viewportReady) saveViewport(viewport);
   }}
   onpaneclick={() => { linkFeedback = ''; clear(); }}
   onnodecontextmenu={({ event, node }) => { if (node.type === 'groupCard') { selectGroup(node.id); menu(event); } else menu(event, node.id); }}
   onpanecontextmenu={({ event }) => menu(event)}
   onedgecontextmenu={({ event, edge }) => { selectEdge(edge.id); menu(event); }}
-  panOnDrag zoomOnPinch>
-  <FitOnResize {container} {compact} preserveInitial={Boolean(initialViewport)} nodeIds={nodes.map((node) => node.id)} />
+  panOnDrag={[0, 1]} panOnScroll zoomOnScroll={false} zoomActivationKey="Control" zoomOnPinch>
+  <CanvasViewport {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
   <Controls position="bottom-left" showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}

@@ -15,7 +15,7 @@ Kind = Literal[
     "worker",
     "monitor",
 ]
-Speed = Literal[0, 1, 3]
+Speed = Literal[0, 1, 3, 5]
 Difficulty = Literal["beginner", "standard", "expert"]
 NodeId = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]{1,48}$")]
 Name = Annotated[
@@ -67,10 +67,20 @@ RouteId = Annotated[
 Waypoints = Annotated[list[Position], Field(max_length=24)]
 
 
+class DiagramViewport(Model):
+    x: float
+    y: float
+    zoom: float = Field(ge=0.15, le=2.5)
+
+
 class Diagram(Model):
     positions: dict[NodeId, Position] = Field(default_factory=dict, max_length=240)
     routes: dict[RouteId, Waypoints] = Field(default_factory=dict, max_length=480)
     groups: list[DiagramGroup] = Field(default_factory=list, max_length=80)
+
+    viewports: dict[Literal["compact", "wide"], DiagramViewport] = Field(
+        default_factory=dict
+    )
 
     @model_validator(mode="after")
     def unique_groups(self) -> Self:
@@ -142,6 +152,8 @@ class RegionDemand(Model):
     audience: int
     daily_active_users: float
     requests: float
+    daily_ad_revenue: float = 0
+    earned_ad_revenue: float = 0
 
 
 class DemandOverview(Model):
@@ -200,6 +212,9 @@ class FinanceSample(Model):
     cash_received: float
     daily_active_users: float
     ad_impressions: float
+    regional_ads: dict[str, float] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
 
 class HistoryPoint(Model):
@@ -274,6 +289,21 @@ class SubscriptionTerm(Model):
     fast_sync: bool = True
 
 
+class Onboarding(Model):
+    step: int = Field(default=0, ge=0, le=9)
+    furthest: int = Field(default=0, ge=0, le=9)
+    skipped: bool = False
+
+
+class RegionalCampaign(Model):
+    region: str
+    start: int
+    duration: int
+    budget: float
+    audience: float
+    spike: float
+
+
 class Game(Model):
     id: UUID
     name: Name
@@ -309,6 +339,11 @@ class Game(Model):
     disabled_features: set[str] = Field(default_factory=set)
     product: ProductSettings | None = None
     north_america_audience: float = 0
+    market_audience: dict[str, float] = Field(default_factory=dict)
+    market_projects: dict[str, int] = Field(default_factory=dict)
+    launched_markets: set[str] = Field(default_factory=set)
+    language_projects: dict[str, int] = Field(default_factory=dict)
+    regional_campaigns: dict[str, RegionalCampaign] = Field(default_factory=dict)
     premium_quality: float = 0.98
     subscriptions: list[SubscriptionTerm] = Field(default_factory=list)
     development: dict[str, int] = Field(default_factory=dict)
@@ -321,6 +356,7 @@ class Game(Model):
     storage: dict[str, float] = Field(default_factory=lambda: {"db": 2.0})
     settings: GameSettings = Field(default_factory=GameSettings)
     tutorial: int = 0
+    onboarding: Onboarding | None = None
 
     @property
     def enabled_features(self) -> set[str]:

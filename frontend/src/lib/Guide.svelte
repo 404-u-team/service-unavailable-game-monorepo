@@ -4,9 +4,10 @@
   import { connectionKind, connectionLabels } from './workbench/connections';
   import { componentNotes } from './workbench/details';
   import { preciseMoney } from './format';
-  import { componentIcon, tutorial } from './labels';
+  import { componentIcon } from './labels';
+  import { onboarding } from './workbench/onboarding';
   import type { Catalog, Game, Kind } from './types';
-  let { catalog, game, link }: { catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string } = $props();
+  let { catalog, game, link, resumeTutorial }: { catalog: Catalog; game?: Game; link?: (section: 'build' | 'monitor') => string; resumeTutorial?: () => void } = $props();
   const kinds = $derived(Object.keys(catalog.components) as Kind[]);
 </script>
 
@@ -15,15 +16,18 @@
     <section class="panel pad stack">
       <div><p class="eyebrow">{t("Onboarding")}</p><h2>{t("First deployment")}</h2></div>
       <ol class="steps">
-        {#each tutorial as step, index}
-          <li class:current={index === game.tutorial}>
-            <span class="index">{#if index < game.tutorial}<Check size={15} />{:else}{index + 1}{/if}</span>
+        {#each onboarding as step, index}
+          <li class:current={index === game.onboarding.step}>
+            <span class="index">{#if index < game.onboarding.step}<Check size={15} />{:else}{index + 1}{/if}</span>
             <div><strong>{t(step.title)}</strong><p class="muted">{t(step.text)}</p>
-              {#if index === game.tutorial}<a href={link(step.section)} class="btn">{t("Open")} {step.section === 'build' ? t("topology") : t("telemetry")}</a>{/if}
+              {#if index === game.onboarding.step && 'section' in step && step.section}<a href={link(step.section)} class="btn">{t("Open")} {step.section === 'build' ? t("topology") : t("telemetry")}</a>{/if}
             </div>
           </li>
         {/each}
       </ol>
+      {#if game.onboarding.skipped && game.onboarding.step < onboarding.length && game.settings.show_tutorial && resumeTutorial}
+        <div><button class="btn" onclick={resumeTutorial}>{t('Resume tutorial')}</button></div>
+      {/if}
     </section>
   {/if}
   <section class="panel pad stack">
@@ -54,6 +58,8 @@
     <details>
       <summary>{t("Scaling and shared dependencies")}</summary>
       <p>{t("Scale vertically to add resources to one instance or horizontally to add instances. Shared databases still receive the requests handled by all API instances. Check reads and writes independently when evaluating a database bottleneck.")}</p>
+      <p>{t("Each API writes to one primary. Independent primaries hold separate datasets. This simulation does not shard or synchronize them. Connect each read replica to its primary and to an API or cache serving that dataset.")}</p>
+      <p>{t("Caches model independent memory and hit rates. Worker instances share available jobs from their connected queues.")}</p>
     </details>
     <details>
       <summary>{t("Game time and drafts")}</summary>

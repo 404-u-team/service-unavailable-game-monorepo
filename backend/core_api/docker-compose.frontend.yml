@@ -1,10 +1,19 @@
 services:
     frontend:
+        image: nginx:1.29-alpine
+        volumes:
+            - ../../deploy/workbench.conf:/etc/nginx/conf.d/default.conf:ro
+        ports:
+            - "${FRONTEND_PORT:-3000}:3000"
+        depends_on:
+            workbench:
+                condition: service_started
+
+    workbench:
         build: ../../frontend
         environment:
             CORE_API_URL: http://core-api:8000
-        ports:
-            - "${FRONTEND_PORT:-3000}:3000"
+            ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:${FRONTEND_PORT:-3000}}
         depends_on:
             core-api:
                 condition: service_healthy

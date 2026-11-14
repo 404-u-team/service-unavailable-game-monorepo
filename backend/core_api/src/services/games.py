@@ -4,10 +4,13 @@ from math import floor
 from random import SystemRandom
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from src.api.game_schemas import (
     Action,
     AdvertisingEstimate,
     BusinessPoint,
+    CampaignPlan,
     CampaignView,
     CreateGame,
     DeploymentView,
@@ -19,11 +22,14 @@ from src.api.game_schemas import (
     GameView,
     IncidentView,
     Modification,
+    OnboardingAction,
+    PatchDiagram,
     Range,
     RequirementView,
     SaveSummary,
 )
 from src.repositories.games import GameRepository
+from src.services.markets import languages, markets
 from src.simulation.catalog import (
     ADVERTISING,
     BUSINESS,
@@ -37,16 +43,24 @@ from src.simulation.catalog import (
     SECONDS_PER_TICK,
     TICKS_PER_DAY,
 )
-from src.simulation.demand import MINUTES_PER_DAY, ad_forecast, product_settings
+from src.simulation.demand import (
+    MINUTES_PER_DAY,
+    acquire,
+    ad_forecast,
+    product_settings,
+)
 from src.simulation.engine import evaluate
 from src.simulation.models import (
     Deployment,
     DeploymentComparison,
+    Diagram,
     Game,
     Node,
+    Onboarding,
     OneTimeCosts,
     OperatingCosts,
     ProductSettings,
+    RegionalCampaign,
     ResourcePressure,
     RevenueSources,
     Snapshot,
@@ -166,6 +180,36 @@ class GameService:
             return view(game, saved_at)
 
 
+def patch_diagram(game: Game, patch: PatchDiagram) -> None:
+    diagram = game.diagram
+    if (
+        patch.groups is not None
+        and patch.groups != diagram.groups
+        and patch.group_base != diagram.groups
+    ):
+        raise RevisionConflict(
+            "Diagram groups changed in another session. Reload the latest layout and retry.",
+            code="diagram_conflict",
+        )
+    positions = diagram.positions | patch.positions
+    routes = diagram.routes | patch.routes
+    try:
+        game.diagram = Diagram(
+            positions={
+                key: point for key, point in positions.items() if point is not None
+            },
+            routes={
+                key: points for key, points in routes.items() if points is not None
+            },
+            groups=diagram.groups if patch.groups is None else patch.groups,
+            viewports=diagram.viewports | patch.viewports,
+        )
+    except ValidationError as error:
+        raise RuleError(
+            "Some submitted values are invalid.", code="invalid_values"
+        ) from error
+
+
 def advance_clock(game: Game, anchor: datetime, now: datetime) -> tuple[datetime, int]:
     if not game.speed:
         return now, 0
@@ -206,10 +250,29 @@ def edit_draft(game: Game, revision: int, topology: Topology) -> None:
         raise RuleError("Create a draft first.")
     graph = inspect_graph(topology)
     validate_identity(game.production, graph.nodes)
+    previous = inspect_graph(game.draft)
+    for node in topology.nodes:
+        if node.kind != "api":
+            continue
+        primaries = graph.primaries(node.id)
+        if len(primaries) > 1 and (
+            node.id not in previous.nodes or primaries != previous.primaries(node.id)
+        ):
+            raise RuleError(
+                "An API can use one primary database for its dataset.",
+                code="one_write_primary",
+            )
     game.draft = topology
     game.revision += 1
-    if game.tutorial == 1 and diff(game.production, topology)["modified"]:
+    modified = (
+        diff(game.production, topology)["modified"]
+        if game.tutorial == 1 or onboarding_progress(game).step == 6
+        else []
+    )
+    if game.tutorial == 1 and modified:
         game.tutorial = 2
+    if "api" in modified:
+        advance_onboarding(game, 6)
 
 
 def validate_identity(production: Topology, nodes: dict[str, Node]) -> None:
@@ -221,7 +284,10 @@ def validate_identity(production: Topology, nodes: dict[str, Node]) -> None:
 
 
 def forecast(
-    game: Game, topology: Topology, campaign_id: str | None = None
+    game: Game,
+    topology: Topology,
+    campaign_id: str | None = None,
+    plan: CampaignPlan | None = None,
 ) -> Forecast:
     telemetry = evaluate(game).snapshot
     coverage = len(telemetry.components)
@@ -234,7 +300,19 @@ def forecast(
     assumed.incidents = []
     audience = game.audience
     boost = 0.0
-    if campaign_id:
+    if campaign_id and plan:
+        acquire(assumed, plan.region, plan.acquired * 0.8)
+        audience = assumed.audience
+        assumed.regional_campaigns[campaign_id] = RegionalCampaign(
+            region=plan.region,
+            start=game.tick,
+            duration=plan.duration,
+            audience=plan.acquired,
+            budget=plan.budget,
+            spike=CAMPAIGNS[campaign_id]["spike"],
+        )
+        assumed.tick += int(plan.duration * 0.65)
+    elif campaign_id:
         campaign = CAMPAIGNS[campaign_id]
         audience += campaign["audience"] * 0.8
         boost = campaign["spike"] * 0.85
@@ -255,6 +333,7 @@ def forecast(
         availability=span(low.availability, high.availability),
         audience=span(audience * (1 - uncertainty), audience * (1 + uncertainty)),
         confidence=confidence,
+        plan=plan,
     )
 
 
@@ -415,6 +494,10 @@ def deploy(
     )
     if game.tutorial == 2:
         game.tutorial = 3
+    if not rollback:
+        advance_onboarding(game, 7)
+        if {"api", "db"}.issubset(after.components):
+            advance_onboarding(game, 3)
 
 
 def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureView:
@@ -712,7 +795,7 @@ def finance(game: Game, active_users: float) -> Economy:
 
 
 def start_campaign(game: Game, key: str) -> None:
-    if key in game.campaigns:
+    if key in game.campaigns or key in game.regional_campaigns:
         raise RuleError("That campaign is already running.")
     campaign = CAMPAIGNS[key]
     spend(game, campaign["cost"], "marketing")
@@ -734,9 +817,58 @@ def acknowledge_incident(game: Game, event_id: str) -> None:
     event.acknowledged = True
 
 
+def onboarding_progress(game: Game) -> Onboarding:
+    if game.onboarding is not None:
+        return game.onboarding
+    stage = {0: 0, 1: 3, 2: 7, 3: 4}.get(game.tutorial, 9)
+    return Onboarding(step=stage, furthest=stage)
+
+
+def advance_onboarding(game: Game, step: int) -> None:
+    progress = onboarding_progress(game)
+    if game.settings.show_tutorial and not progress.skipped and progress.step == step:
+        progress.step += 1
+        progress.furthest = max(progress.furthest, progress.step)
+        game.onboarding = progress
+
+
+def change_onboarding(game: Game, body: OnboardingAction) -> None:
+    progress = onboarding_progress(game)
+    if body.step != progress.step:
+        return
+    interaction = body.interaction
+    step = progress.step
+    if interaction in {"skip", "resume"}:
+        progress.skipped = interaction == "skip"
+    elif interaction == "back":
+        progress.step = max(0, step - 1)
+    elif not progress.skipped:
+        advance_step = interaction == "next" and (
+            step in {0, 1, 5, 8} or step < progress.furthest
+        )
+        if interaction == "inspect" and step == 2:
+            advance_step = True
+        elif interaction == "coverage" and step == 3:
+            coverage = evaluate(game).snapshot.components
+            advance_step = {"api", "db"}.issubset(coverage)
+        elif interaction == "monitor" and step == 4:
+            advance_step = True
+        if advance_step:
+            progress.step = min(9, step + 1)
+            progress.furthest = max(progress.step, progress.furthest)
+    game.onboarding = progress
+
+
 def view(game: Game, saved_at: datetime) -> GameView:
     result = evaluate(game, overview=True)
     snapshot = result.snapshot
+    if snapshot.demand_overview:
+        for region in snapshot.demand_overview.regions:
+            region.earned_ad_revenue = sum(
+                point.finance.regional_ads.get(region.id, 0)
+                for point in game.history
+                if point.finance
+            )
     estimates = {}
     if "advertising" in game.released:
         for intensity in ADVERTISING:
@@ -787,7 +919,20 @@ def view(game: Game, saved_at: datetime) -> GameView:
                 progress=(game.tick - start) / CAMPAIGNS[key]["duration"],
             )
             for key, start in game.campaigns.items()
+        ]
+        + [
+            CampaignView(
+                id=key,
+                region=plan.region,
+                budget=plan.budget,
+                acquired=plan.audience,
+                remaining=plan.start + plan.duration - game.tick,
+                progress=(game.tick - plan.start) / plan.duration,
+            )
+            for key, plan in game.regional_campaigns.items()
         ],
+        markets=markets(game),
+        languages=languages(game),
         incidents=[
             IncidentView(
                 id=event.id,
@@ -817,6 +962,7 @@ def view(game: Game, saved_at: datetime) -> GameView:
         ],
         settings=game.settings,
         tutorial=game.tutorial,
+        onboarding=onboarding_progress(game),
         peak=max(
             (point.metrics for point in history),
             key=lambda metrics: metrics.rps,

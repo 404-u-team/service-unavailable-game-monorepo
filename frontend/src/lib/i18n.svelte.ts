@@ -38,6 +38,7 @@ const matches: [RegExp, string][] = [
   [/^(.+) has no write path\. Route traffic to an API with a direct connection to a primary database\.$/, '{0} has no write path. Route traffic to an API with a direct connection to a primary database.'],
   [/^(.+) cannot serve cache misses without a data connection\.$/, '{0} cannot serve cache misses without a data connection.'],
   [/^(.+) needs a connection to a primary database\.$/, '{0} needs a connection to a primary database.'],
+  [/^(.+) has multiple primary links\. Only the first by component ID serves its dataset\.$/, '{0} has multiple primary links. Only the first by component ID serves its dataset.'],
   [/^(.+) has no worker\. Its backlog will build up\.$/, '{0} has no worker. Its backlog will build up.'],
   [/^(.+) campaign started$/, '{0} campaign started'],
   [/^(.+) campaign completed$/, '{0} campaign completed'],

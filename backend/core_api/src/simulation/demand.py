@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from math import pi, sin
+from zoneinfo import ZoneInfo
 
 from src.simulation.catalog import (
     ADVERTISING,
@@ -47,16 +50,73 @@ def game_minute(game: Game) -> int:
     return game.start_minute + game.tick * MINUTES_PER_TICK
 
 
+def active_markets(game: Game) -> set[str]:
+    active = {"europe"} | game.launched_markets
+    if product_settings(game).north_america:
+        active.add("north_america")
+    return active
+
+
+def language_ready(game: Game, language: str) -> bool:
+    return (
+        language == "English"
+        or game.language_projects.get(language, game.tick + 1) <= game.tick
+    )
+
+
+def adoption(game: Game, region: str) -> float:
+    return (
+        1.18
+        if language_ready(game, REGIONS[region]["language"])
+        and REGIONS[region]["language"] != "English"
+        else 1.0
+    )
+
+
 def regional_audience(game: Game, audience: float) -> list[tuple[str, float]]:
-    share = min(1, game.north_america_audience / max(1, game.audience))
-    regions = [("europe", audience * (1 - share))]
-    if share or (game.product and game.product.north_america):
-        regions.append(("north_america", audience * share))
-    return regions
+    populations = {**game.market_audience, "north_america": game.north_america_audience}
+    markets = active_markets(game)
+    regional_total = sum(populations.values())
+    denominator = max(1, game.audience, regional_total)
+    return [
+        (
+            key,
+            audience
+            * (
+                max(0, 1 - regional_total / denominator)
+                if key == "europe"
+                else populations.get(key, 0) / denominator
+            ),
+        )
+        for key in REGIONS
+        if key in markets or populations.get(key, 0) > 0
+    ]
+
+
+def acquire(game: Game, region: str, users: float) -> None:
+    game.audience += users
+    if region == "north_america":
+        game.north_america_audience += users
+    elif region != "europe":
+        game.market_audience[region] = game.market_audience.get(region, 0) + users
+
+
+GAME_EPOCH = datetime(2025, 1, 6, tzinfo=UTC)
+
+
+@lru_cache(maxsize=4096)
+def local_time(zone: str, utc_minute: int) -> tuple[int, int, int]:
+    local = (GAME_EPOCH + timedelta(minutes=utc_minute)).astimezone(ZoneInfo(zone))
+    offset = local.utcoffset()
+    return (
+        local.weekday(),
+        local.hour * 60 + local.minute,
+        int(offset.total_seconds() / 60) if offset else 0,
+    )
 
 
 def activity(region: dict, utc_minute: int) -> float:
-    day, minute = divmod(utc_minute + region["utc_offset"], MINUTES_PER_DAY)
+    day, minute, _ = local_time(region["timezone"], utc_minute)
     index, fraction = divmod(minute / 180, 1)
     anchors = region["profile"]
     left, right = anchors[int(index)], anchors[(int(index) + 1) % len(anchors)]
@@ -128,6 +188,7 @@ class Demand:
     active_users: float
     ad_value_per_impression: float
     overview: DemandOverview | None
+    regional_ad_rates: dict[str, float]
 
 
 def workload(
@@ -169,7 +230,7 @@ def workload(
     # Ad-heavy sessions generate fewer application requests.
     friction = ad_params["friction"] * eligible_share if ad_params else 0
     engagement = (0.82 + 0.18 * game.satisfaction) * (1 - friction * 0.55)
-    campaign = sum(
+    legacy_campaign = sum(
         CAMPAIGNS[key]["spike"]
         * campaign_weight((game.tick - start) / CAMPAIGNS[key]["duration"])
         for key, start in game.campaigns.items()
@@ -183,43 +244,55 @@ def workload(
     noise = 1 + 0.025 * sin(game.seed + game.tick * 2 * pi / (TICKS_PER_DAY * 2.7))
     utc_minute = game_minute(game)
     regions = regional_audience(game, users)
-    population_activity = active = ad_rate = ad_value = 0.0
+    population_activity = active = ad_rate = ad_value = campaign_requests = (
+        baseline_requests
+    ) = 0.0
     regional_details = []
+    regional_ad_rates: dict[str, float] = {}
     expected = [0.0] * 25 if overview else []
     base_rps = sum(base_rates.values()) * engagement * scenario["activity"]
     weekday_start = utc_minute - utc_minute % MINUTES_PER_DAY
     for region_id, population in regions:
         region = REGIONS[region_id]
         profile = activity(region, utc_minute)
-        audience_activity = population * profile
+        targeted = sum(
+            plan.spike * campaign_weight((game.tick - plan.start) / plan.duration)
+            for plan in game.regional_campaigns.values()
+            if plan.region == region_id
+        )
+        regional_lift = 1 + targeted + legacy_campaign + event + boost
+        audience_activity = population * profile * regional_lift
         active_users = daily_active_users(game, population, region)
         population_activity += audience_activity
         active += active_users
-        region_ads = 0.0
+        region_ads = daily_ad_revenue = 0.0
         if ad_params:
             mean_profile = sum(region["profile"]) / len(region["profile"])
-            region_ads = (
-                filled_impressions(active_users * eligible_share, ad_params)
-                / SECONDS_PER_DAY
-                / mean_profile
+            price = ad_params["cpm"] * region["ad_value"] / 1000
+            daily_impressions = filled_impressions(
+                active_users * eligible_share, ad_params
             )
-            ad_rate += region_ads * profile
-            ad_value += (
-                region_ads * profile * ad_params["cpm"] * region["ad_value"] / 1000
-            )
+            region_ads = daily_impressions / SECONDS_PER_DAY / mean_profile
+            requested_ads = region_ads * profile * regional_lift
+            regional_ad_rates[region_id] = requested_ads * price * noise
+            daily_ad_revenue = daily_impressions * price
+            ad_rate += requested_ads
+            ad_value += requested_ads * price
+        baseline = profile * (base_rps * population + region_ads)
+        baseline_requests += baseline
+        campaign_requests += baseline * targeted
         if overview:
+            _, local_minute, offset = local_time(region["timezone"], utc_minute)
             regional_details.append(
                 RegionDemand(
                     id=region_id,
                     name=region["name"],
-                    utc_offset=region["utc_offset"],
-                    local_minute=(utc_minute + region["utc_offset"]) % MINUTES_PER_DAY,
+                    utc_offset=offset,
+                    local_minute=local_minute,
                     audience=round(population),
                     daily_active_users=active_users,
-                    requests=profile
-                    * (base_rps * population + region_ads)
-                    * noise
-                    * (1 + campaign + event + boost),
+                    requests=baseline * noise * regional_lift,
+                    daily_ad_revenue=daily_ad_revenue,
                 )
             )
             for hour in range(len(expected)):
@@ -227,13 +300,12 @@ def workload(
                     region, weekday_start + hour * 60
                 )
 
-    lift = noise * (1 + campaign + event + boost)
     operations = {
-        key: rate * population_activity * engagement * scenario["activity"] * lift
+        key: rate * population_activity * engagement * scenario["activity"] * noise
         for key, rate in base_rates.items()
     }
     if ad_params:
-        operations["ad"] = ad_rate * lift
+        operations["ad"] = ad_rate * noise
     return Demand(
         operations,
         active,
@@ -243,9 +315,11 @@ def workload(
             utc_minute=utc_minute % MINUTES_PER_DAY,
             regions=regional_details,
             expected=expected,
-            campaign_lift=campaign,
+            campaign_lift=legacy_campaign
+            + (campaign_requests / baseline_requests if baseline_requests else 0),
             event_lift=event,
         )
         if overview
         else None,
+        regional_ad_rates,
     )

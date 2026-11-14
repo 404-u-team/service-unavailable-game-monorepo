@@ -1,41 +1,28 @@
 <script lang="ts">
   import { apiMessage, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
+  import { beforeNavigate } from '$app/navigation';
   import { page } from '$app/state';
-  import { ArrowRight, ChevronDown, Pause, X, Play, Save as SaveIcon } from '@lucide/svelte';
+  import { ArrowDownRight, ArrowUpRight, Pause, X, Save as SaveIcon } from '@lucide/svelte';
   import Brand from '#lib/Brand.svelte';
   import Architecture from '#lib/workbench/Architecture.svelte';
+  import Onboarding from '#lib/workbench/Onboarding.svelte';
   import Dashboard from '#lib/workbench/Dashboard.svelte';
   import { ApiError, gameAction, loadCatalog, loadGame } from '#lib/api.ts';
-  import { desktop, mobile, sections, tutorial, type Section } from '#lib/labels.ts';
-  import { minuteClock, when } from '#lib/format.ts';
+  import { desktop, mobile, sections, type Section } from '#lib/labels.ts';
+  import { subscribeGame } from '#lib/live.ts';
+  import { syncLayout } from '#lib/workbench/layout-sync.ts';
+  import { money, minuteClock, preciseMoney, when } from '#lib/format.ts';
   import type { Catalog, Diagram, Game, Speed } from '#lib/types.ts';
 
   let game = $state.raw<Game>();
-  type DiagramWrite = { gameId: string; diagram: Diagram; requestId: string };
-  let pendingDiagram = $state.raw<DiagramWrite>();
-  let writingDiagram = false;
+  let pendingDiagram = $state.raw<Diagram>();
+  let layout: ReturnType<typeof syncLayout> | undefined;
+  let live: ReturnType<typeof subscribeGame> | undefined;
   let layoutFailed = $state(false);
-  let dismissed = $state(false);
   let viewedEvent = '';
   let recentEvent = $state<Game['incidents'][number]>();
   const latestIncident = $derived(game?.incidents[0]);
-  const objective = $derived.by(() => {
-    if (!game || !game.settings.show_tutorial || game.settings.show_objectives === false || dismissed) return;
-    if (tutorial[game.tutorial]) return tutorial[game.tutorial];
-    if (Object.values(game.snapshot.monitors ?? {}).some((monitor) => monitor.dropped.length)) {
-      return { title: 'Expand monitoring coverage', text: 'Check which components lost collection slots.', section: 'monitor' } as const;
-    }
-    if (!Object.keys(game.snapshot.components).length) {
-      return { title: 'Set up monitoring coverage', text: 'Link components to a collector to see resource metrics.', section: 'build' } as const;
-    }
-    if (Object.values(game.snapshot.components).some((item) => item.status === 'overloaded' || item.status === 'failed')) {
-      return { title: 'Investigate an overloaded component', text: 'Use the highest resource load to decide which capacity to add.', section: 'monitor' } as const;
-    }
-    if (!game.campaigns.length) {
-      return { title: 'Check capacity for a campaign', text: 'Open a campaign forecast before adding traffic.', section: 'growth' } as const;
-    }
-  });
   $effect(() => {
     if (!latestIncident || latestIncident.id === viewedEvent) return;
     viewedEvent = latestIncident.id;
@@ -50,10 +37,9 @@
   let loading = $state(true);
   let busy = $state(false);
   let saved = $state(false);
-  let clockOpen = $state(false);
+  let lastSpeed: Exclude<Speed, 0> = 1;
   let currentId = '';
   let mounted = $state(false);
-  let polling = false;
   let generation = 0;
   let feedback: ReturnType<typeof setTimeout>;
   let actionRequest: { gameId: string; path: string; method: string; key: string; body: string } | undefined;
@@ -64,34 +50,51 @@
   });
   const link = (target: Section, focus?: string) => `/game/${id}?view=${target}${focus ? `&component=${encodeURIComponent(focus)}` : ''}`;
   const primary: Section[] = ['build', 'monitor', 'growth', 'finance'];
-  const speedOptions: { value: Speed; label: string }[] = [
-    { value: 0, label: 'Pause game' }, { value: 1, label: 'Normal speed (1×)' }, { value: 3, label: 'Fast speed (3×)' }
+  const speedOptions: { value: Speed; label: string; shortcut: string }[] = [
+    { value: 0, label: 'Pause simulation', shortcut: 'Space' },
+    { value: 1, label: 'Run simulation at normal speed', shortcut: '1' },
+    { value: 3, label: 'Fast speed (3×)', shortcut: '2' },
+    { value: 5, label: 'Fast speed (5×)', shortcut: '3' }
   ];
 
   onMount(() => {
     mounted = true;
-    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 1500);
-    const visible = () => { if (!document.hidden) void refresh(); };
-    document.addEventListener('visibilitychange', visible);
+    const flush = () => { if (document.hidden) void layout?.flush(); };
+    document.addEventListener('visibilitychange', flush);
     return () => {
       mounted = false;
-      clearInterval(timer);
+      ++generation;
+      live?.close();
+      layout?.close();
       clearTimeout(feedback);
-      document.removeEventListener('visibilitychange', visible);
+      document.removeEventListener('visibilitychange', flush);
     };
   });
+  beforeNavigate(() => { void layout?.flush(); });
 
   $effect(() => { if (mounted && id !== currentId) void open(id); });
 
   function accept(next: Game) {
-    if (next.id !== currentId) return;
-    if (!game || next.saved_at >= game.saved_at) game = next;
+    if (next.id !== currentId || (game && next.saved_at < game.saved_at)) return;
+    if (next.speed) lastSpeed = next.speed;
+    if (game) {
+      // Keep structural references stable when REST replies or reconnect snapshots include them again.
+      for (const key of ['production', 'draft', 'diagram', 'settings'] as const) {
+        if (next[key] === game[key] || JSON.stringify(next[key]) !== JSON.stringify(game[key])) continue;
+        Object.assign(next, { [key]: game[key] });
+      }
+    }
+    game = next;
   }
 
   async function open(gameId: string) {
+    live?.close();
+    layout?.close();
     currentId = gameId;
+    actionRequest = undefined;
+    busy = false;
     recentEvent = undefined;
-    dismissed = false;
+    lastSpeed = 1;
     const version = ++generation;
     loading = true;
     game = undefined;
@@ -100,9 +103,14 @@
     error = '';
     connection = '';
     try {
-      const definitions = await loadCatalog();
-      const state = await loadGame(gameId);
-      if (version === generation) { game = state; catalog = definitions; }
+      const [definitions, state] = await Promise.all([loadCatalog(), loadGame(gameId)]);
+      if (version !== generation) return;
+      catalog = definitions;
+      accept(state);
+      layout = syncLayout(gameId, (diagram) => pendingDiagram = diagram, accept, (failed) => layoutFailed = failed);
+      live = subscribeGame(gameId, accept, (connected) => {
+        connection = connected ? '' : 'Live connection lost. Reconnecting…';
+      });
     } catch (reason) {
       if (version === generation) connection = apiMessage(reason);
     } finally {
@@ -111,48 +119,39 @@
   }
 
   function saveDiagram(diagram: Diagram) {
-    pendingDiagram = { gameId: currentId, diagram, requestId: crypto.randomUUID() };
-    void flushDiagram();
+    if (game) layout?.queue(pendingDiagram ?? game.diagram, diagram);
   }
 
-  async function flushDiagram() {
-    if (writingDiagram || !pendingDiagram) return;
-    writingDiagram = true;
-    layoutFailed = false;
-    try {
-      while (pendingDiagram) {
-        const edit: DiagramWrite = pendingDiagram;
-        try {
-          const next = await gameAction(edit.gameId, '/diagram', { diagram: edit.diagram }, 'PUT', edit.requestId);
-          accept(next);
-          if (pendingDiagram === edit) pendingDiagram = undefined;
-        } catch {
-          if (pendingDiagram === edit) {
-            layoutFailed = true;
-            break;
-          }
-        }
-      }
-    } finally {
-      writingDiagram = false;
+  async function save() {
+    await act('/save');
+  }
+
+  function speed(value: Speed) {
+    if (game && game.speed !== value) void act('/clock', { speed: value }, 'PUT');
+  }
+
+  function shortcuts(event: KeyboardEvent) {
+    if (!game || event.defaultPrevented || event.isComposing || event.repeat) return;
+    const target = event.target instanceof HTMLElement ? event.target : undefined;
+    if (target?.closest('input, textarea, select, [role=combobox], [contenteditable]:not([contenteditable=false])')) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      void save();
+      return;
     }
-  }
-
-  async function refresh(force = false) {
-    if (!game || (!force && busy) || polling) return;
-    const gameId = currentId;
-    polling = true;
-    try {
-      const next = await loadGame(gameId);
-      if (mounted && currentId === gameId) { accept(next); connection = ''; }
-    } catch (reason) {
-      if (currentId === gameId) connection = apiMessage(reason);
-    } finally { polling = false; }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || document.querySelector('dialog[open]')) return;
+    if (event.code === 'Space' && !target?.closest('button, a, summary, [role=button]')) {
+      event.preventDefault();
+      speed(game.speed ? 0 : lastSpeed);
+    }
+    const option = speedOptions.find((item) => item.shortcut === event.key);
+    if (option) speed(option.value);
   }
 
   async function act(path: string, body: object = {}, method = 'POST') {
     if (!game || busy) return null;
     const gameId = currentId;
+    if (path === '/save' && layout && (!await layout.flush() || busy || gameId !== currentId)) return null;
     const signature = JSON.stringify(body);
     if (actionRequest?.gameId !== gameId || actionRequest.path !== path || actionRequest.method !== method || actionRequest.body !== signature) {
       actionRequest = { gameId, path, method, body: signature, key: crypto.randomUUID() };
@@ -161,10 +160,9 @@
     error = '';
     try {
       const next = await gameAction(gameId, path, body, method, actionRequest.key);
-      actionRequest = undefined;
       if (!mounted || currentId !== gameId) return null;
+      actionRequest = undefined;
       accept(next);
-      connection = '';
       if (path === '/save') {
         saved = true;
         clearTimeout(feedback);
@@ -172,45 +170,72 @@
       }
       return next;
     } catch (reason) {
+      if (!mounted || currentId !== gameId) return null;
       error = apiMessage(reason);
       if (reason instanceof ApiError && reason.status < 500) actionRequest = undefined;
-      if (reason instanceof ApiError && reason.status === 409) await refresh(true);
+      if (reason instanceof ApiError && reason.status === 409) live?.reconnect();
       return null;
-    } finally { busy = false; }
+    } finally { if (currentId === gameId) busy = false; }
+  }
+
+  let recorded = '';
+  function guide(interaction: string) {
+    if (!game) return;
+    return act('/onboarding', { step: game.onboarding.step, interaction });
   }
 
   function note(interaction: 'inspect' | 'monitor') {
-    if ((interaction === 'inspect' && game?.tutorial === 0) || (interaction === 'monitor' && game?.tutorial === 3)) {
+    const stage = game?.onboarding.step;
+    if (game?.settings.show_tutorial && !game.onboarding.skipped &&
+        ((interaction === 'inspect' && stage === 2) || (interaction === 'monitor' && stage === 4))) {
+      void guide(interaction);
+    } else if ((interaction === 'inspect' && game?.tutorial === 0) || (interaction === 'monitor' && game?.tutorial === 3)) {
       void act('/tutorial', { interaction });
     }
   }
+
+  $effect(() => {
+    if (!game?.settings.show_tutorial || game.onboarding.skipped || busy) return;
+    const step = game.onboarding.step;
+    const interaction =
+      step === 3 && game.snapshot.components.api && game.snapshot.components.db ? 'coverage'
+      : step === 4 && section === 'monitor' ? 'monitor' : '';
+    const key = `${game.id}:${step}:${interaction}`;
+    if (interaction && recorded !== key) {
+      recorded = key;
+      void guide(interaction);
+    }
+  });
 </script>
+
+<svelte:window onkeydown={shortcuts} />
 
 <div class="game" data-reduced-motion={game?.settings.reduced_motion ?? false}>
   <header class="topbar">
     <Brand />
     {#if game}
       <nav class="primary-nav" aria-label={t("Primary navigation")}>
-        {#each primary as item}<a href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
+        {#each primary as item}<a data-guide-nav={item} href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
       </nav>
       <div class="controls row">
         <span class="badge good online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</span>
-        <button class="btn quick-pause" aria-label={game.speed ? t("Pause simulation") : t("Run simulation at normal speed")} disabled={busy} onclick={() => act('/clock', { speed: game?.speed ? 0 : 1 }, 'PUT')}>
-          {#if game.speed}<Pause size={15} />{:else}<Play size={15} />{/if}
-        </button>
-        <div class="clock-control">
-          <button class="btn speed" aria-label={t("Game speed")} aria-expanded={clockOpen} onclick={() => clockOpen = !clockOpen}>
-            {game.speed ? `${game.speed}×` : t("Paused")} <ChevronDown size={13} />
-          </button>
-          {#if clockOpen}
-            <div class="clock-options panel stack">
-              {#each speedOptions as speed}<button class="btn" disabled={busy} aria-pressed={game.speed === speed.value}
-                onclick={async () => { if (await act('/clock', { speed: speed.value }, 'PUT')) clockOpen = false; }}>{t(speed.label)}</button>{/each}
-            </div>
-          {/if}
+        <a class="balance" data-guide="balance" href={link('finance')} title={t('Cash balance and daily net profit')} aria-label={t('Finance')}>
+          <strong>{money(game.economy.balance)}</strong>
+          <span class:positive={game.economy.daily_net_profit > 0} class:negative={game.economy.daily_net_profit < 0}>
+            {#if game.economy.daily_net_profit > 0}<ArrowUpRight size={12} />{:else if game.economy.daily_net_profit < 0}<ArrowDownRight size={12} />{/if}
+            {t('{0}/day', [preciseMoney(game.economy.daily_net_profit)])}
+          </span>
+        </a>
+        <div class="speed-group row" data-guide="clock" role="group" aria-label={t('Game speed')}>
+          {#each speedOptions as option (option.value)}
+            <button class="btn" disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
+              title={t('{0} ({1})', [t(option.label), t(option.shortcut)])} onclick={() => speed(option.value)}>
+              {#if option.value}{option.value}×{:else}<Pause size={14} />{/if}
+            </button>
+          {/each}
         </div>
         <span class="time mono">{game.snapshot.demand_overview ? t('Day {0} / {1}', [game.snapshot.demand_overview.day, minuteClock(game.snapshot.demand_overview.utc_minute)]) : when(game.tick)}</span>
-        <button class="btn icon-btn quick-save" title={saved ? t("Game saved") : t("Save game")} aria-label={t("Save game")} disabled={busy} onclick={() => act('/save')}><SaveIcon size={15} /></button>
+        <button class="btn icon-btn quick-save" title={saved ? t("Game saved") : t("Save game (Ctrl/Cmd + S)")} aria-label={t("Save game")} disabled={busy} onclick={save}><SaveIcon size={15} /></button>
       </div>
     {/if}
   </header>
@@ -225,22 +250,22 @@
     <nav class="rail" aria-label={t("Workbench navigation")}>
       {#each desktop as item}
         {@const Icon = sections[item].icon}
-        <a href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
+        <a data-guide-nav={item} href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
       {/each}
       <a href="/?view=saves" class="rail-saves" aria-label={t("Saved games")}><span class="avatar">{t("SU")}</span></a>
     </nav>
     <div class="main-area">
       {#if connection || error}
-        <div class="server-message notice error row spread" role="alert"><span>{message(connection || error)}</span><button class="btn" onclick={() => { error = ''; void refresh(); }}>{connection ? t("Reconnect") : t("Dismiss")}</button></div>
+        <div class="server-message notice error row spread" role="alert"><span>{message(connection || error)}</span><button class="btn" onclick={() => { if (connection) live?.reconnect(); else error = ''; }}>{connection ? t("Reconnect") : t("Dismiss")}</button></div>
       {/if}
       {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture {game} {catalog} {act} {busy} {error} {note} {saveDiagram} {layoutFailed}
-            retryDiagram={flushDiagram} savedDiagram={pendingDiagram?.diagram ?? game.diagram}
+            retryDiagram={() => { if (game) void layout?.retry(game.diagram); }} savedDiagram={pendingDiagram ?? game.diagram}
             focusId={page.url.searchParams.get('component') ?? undefined} />
         {:else}
-          <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} />
+          <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} {note} resumeTutorial={() => guide('resume')} />
         {/if}
       {/key}
       {#if recentEvent && section !== 'events'}
@@ -249,21 +274,15 @@
           <button class="btn icon-btn" aria-label={t('Dismiss notification')} onclick={() => recentEvent = undefined}><X size={14} /></button>
         </aside>
       {/if}
-      {#if objective && (section === 'build' || section === 'home')}
-        <aside class="tutorial panel row spread wrap" aria-label={t("Onboarding tip")}>
-          <div><p class="eyebrow">{t('Objective')}</p><strong>{t(objective.title)}</strong></div>
-          <div class="row wrap">
-            <a class="btn" href={link(objective.section === section ? 'guide' : objective.section)}>{t('Open')} <ArrowRight size={14} /></a>
-            <button class="btn icon-btn" aria-label={t('Dismiss objective')} onclick={() => dismissed = true}><X size={14} /></button>
-          </div>
-        </aside>
+      {#if game.settings.show_tutorial}
+        <Onboarding progress={game.onboarding} {section} {link} {busy} change={(action) => void guide(action)} />
       {/if}
     </div>
     <nav class="bottom" aria-label={t("Mobile navigation")}>
       {#each mobile as item}
         {@const Icon = sections[item].icon}
         {@const active = section === item || (item === 'more' && !mobile.includes(section))}
-        <a href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
+        <a data-guide-nav={item} href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
       {/each}
     </nav>
   {/if}
@@ -279,10 +298,13 @@
   .controls { gap: 6px; }
   .controls .online { margin-right: 8px; min-width: 65px; }
   .controls .btn { min-height: 31px; font-family: var(--mono); }
-  .quick-pause { width: 32px; padding: 0; }
-  .clock-control { position: relative; }
-  .speed { min-width: 54px; }
-  .clock-options { position: absolute; right: 0; top: calc(100% + 8px); width: 170px; padding: 7px; gap: 5px; }
+  .speed-group { gap: 2px; }
+  .speed-group button { min-width: 32px; justify-content: center; padding-inline: 4px; }
+  .balance { display: grid; min-width: max-content; gap: 1px; margin-inline: 4px; font-family: var(--mono); }
+  .balance strong { font-size: 15px; }
+  .balance span { display: flex; gap: 2px; align-items: center; font-size: 10px; color: var(--muted); }
+  .balance span.positive { color: var(--primary); }
+  .balance span.negative { color: var(--error); }
   .time { display: inline-flex; align-items: center; min-height: 31px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 11px; white-space: nowrap; text-transform: uppercase; }
   .rail { position: sticky; top: 65px; height: calc(100dvh - 65px); min-height: 630px; background: var(--rail); display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; padding: 11px 5px 30px; }
   .rail a, .bottom a { display: grid; justify-items: center; gap: 3px; color: var(--muted); text-align: center; font-size: 10px; line-height: 1.2; }
@@ -295,12 +317,8 @@
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
   .server-message { position: sticky; top: 69px; z-index: 8; margin: 8px 14px; }
   .save-feedback { position: fixed; top: 73px; right: 20px; z-index: 8; }
-  .tutorial { width: fit-content; margin: 0 18px 12px auto; max-width: calc(100vw - 38px); padding: 8px 11px; box-shadow: 0 5px 18px #0005; }
   .event-feedback { position: sticky; bottom: 10px; z-index: 6; margin: 6px 15px; background: var(--surface); }
   .event-feedback a:hover { text-decoration: underline; }
-  .tutorial strong { font-size: 13px; }
-  .tutorial p { font-size: 9px; }
-  .tutorial .btn { min-height: 31px; }
   .bottom { display: none; }
   @media (max-width: 1120px) {
     .topbar { grid-template-columns: minmax(205px, 1fr) minmax(290px, 1.3fr) auto; padding-inline: 12px; }
@@ -311,8 +329,13 @@
     .game { grid-template: 66px 1fr / minmax(0, 1fr); padding-bottom: calc(69px + env(safe-area-inset-bottom)); }
     .topbar { display: flex; justify-content: space-between; padding: 0 16px; min-height: 66px; }
     .topbar :global(.brand) { font-size: 14px; }
-    .primary-nav, .rail, .time, .quick-save, .quick-pause { display: none; }
+    .primary-nav, .rail, .time { display: none; }
     .controls .btn { min-height: 34px; }
+    .topbar { padding-inline: 8px; gap: 5px; }
+    .topbar :global(.brand) { min-width: 0; font-size: 12px; }
+    .topbar :global(.brand > span:last-child) { display: none; }
+    .controls { gap: 3px; }
+    .balance strong { font-size: 12px; }
     .main-area { grid-column: 1; }
     .bottom { position: fixed; inset: auto 0 0; z-index: 12; display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border); }
     .bottom a { min-height: 49px; align-content: center; gap: 4px; }
@@ -320,6 +343,5 @@
     .bottom a[aria-current] { color: var(--text); }
     .bottom a[aria-current] span { background: var(--tint); color: var(--primary); }
     .event-feedback { bottom: 68px; }
-    .tutorial { position: static; margin: 0 17px 14px; }
   }
 </style>

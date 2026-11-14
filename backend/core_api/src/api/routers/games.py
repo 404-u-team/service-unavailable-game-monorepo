@@ -1,14 +1,26 @@
+from asyncio import timeout
 from datetime import UTC, datetime, timedelta
 from json import dumps
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import asyncpg
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from src.api.game_schemas import (
     Action,
+    CampaignAction,
     CampaignId,
     Catalog,
     ClockAction,
@@ -21,6 +33,9 @@ from src.api.game_schemas import (
     Forecast,
     GameView,
     IncidentView,
+    MarketAction,
+    OnboardingAction,
+    PatchDiagram,
     ProductAction,
     SaveSummary,
     SettingsAction,
@@ -38,15 +53,24 @@ from src.services.games import (
     RevisionConflict,
     acknowledge_incident,
     change_feature,
+    change_onboarding,
     change_product,
     deploy,
     discard_draft,
     edit_draft,
     forecast,
     open_draft,
+    patch_diagram,
     review,
     start_campaign,
     view,
+)
+from src.services.live import live_frame
+from src.services.markets import (
+    campaign_plan,
+    develop_language,
+    market_action,
+    targeted_campaign,
 )
 from src.simulation.catalog import (
     ALLOWED,
@@ -85,13 +109,20 @@ def token_subject(token: str | None, kind: str) -> str | None:
         return None
 
 
-def owner(request: Request, response: Response) -> str:
+def existing_owner(request: Request | WebSocket) -> str | None:
     account = token_subject(request.cookies.get("access_token"), "access")
     if account:
         return f"account:{account}"
     guest = token_subject(request.cookies.get(COOKIE), "game_guest")
     if guest:
         return f"guest:{guest}"
+    return None
+
+
+def owner(request: Request, response: Response) -> str:
+    identity = existing_owner(request)
+    if identity:
+        return identity
     guest = str(uuid4())
     lifetime = timedelta(days=365)
     token = jwt.encode(
@@ -180,6 +211,57 @@ async def get_game(game_id: UUID, owner_id: Owner, service: Service):
         return await service.read(owner_id, game_id, view)
     except SaveNotFound as error:
         raise game_errors(error) from error
+
+
+@router.websocket("/{game_id}/live")
+async def game_live(socket: WebSocket, game_id: UUID, service: Service):
+    origin = urlsplit(socket.headers.get("origin", ""))
+    host = socket.headers.get("host", "").lower()
+    owner_id = existing_owner(socket)
+    if (
+        not owner_id
+        or origin.scheme not in {"http", "https"}
+        or origin.netloc.lower() != host
+    ):
+        await socket.close(code=1008)
+        return
+    await socket.accept()
+    previous = None
+    version = None
+    sequence = 0
+    idle = 0
+    try:
+        while True:
+            state = await service.read(
+                owner_id,
+                game_id,
+                lambda game, saved_at: (
+                    view(game, saved_at) if saved_at != version else None
+                ),
+            )
+            if state is not None:
+                sequence += 1
+                frame, previous = live_frame(state, previous, sequence)
+                await socket.send_json(frame)
+                version = state.saved_at
+                idle = 0
+            elif idle >= 30:
+                await socket.send_json({"type": "heartbeat"})
+                idle = 0
+            try:
+                async with timeout(0.5):
+                    event = await socket.receive()
+            except TimeoutError:
+                idle += 1
+                continue
+            if event["type"] == "websocket.disconnect":
+                return
+            await socket.close(code=1008)
+            return
+    except SaveNotFound:
+        await socket.close(code=1008)
+    except WebSocketDisconnect:
+        return
 
 
 @router.get("/{game_id}/architecture", response_model=Topology)
@@ -283,7 +365,27 @@ async def update_diagram(
         game_id,
         body,
         "diagram",
-        lambda game: setattr(game, "diagram", body.diagram),
+        lambda game: setattr(
+            game,
+            "diagram",
+            body.diagram.model_copy(
+                update={"viewports": body.diagram.viewports or game.diagram.viewports}
+            ),
+        ),
+    )
+
+
+@router.patch("/{game_id}/diagram", response_model=GameView)
+async def update_diagram_fields(
+    game_id: UUID, body: PatchDiagram, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "patch diagram",
+        lambda game: patch_diagram(game, body),
     )
 
 
@@ -395,15 +497,28 @@ async def product(
 
 @router.get("/{game_id}/campaigns/{campaign_id}/forecast", response_model=Forecast)
 async def campaign_forecast(
-    game_id: UUID, campaign_id: CampaignId, owner_id: Owner, service: Service
+    game_id: UUID,
+    campaign_id: CampaignId,
+    owner_id: Owner,
+    service: Service,
+    region: str | None = None,
+    budget: Annotated[float | None, Query(ge=10, le=100_000)] = None,
+    duration: Annotated[int | None, Query(ge=1, le=288)] = None,
 ):
     try:
         return await service.read(
             owner_id,
             game_id,
-            lambda game, _: forecast(game, game.production, campaign_id),
+            lambda game, _: forecast(
+                game,
+                game.production,
+                campaign_id,
+                campaign_plan(game, campaign_id, region, budget, duration)
+                if region
+                else None,
+            ),
         )
-    except SaveNotFound as error:
+    except (SaveNotFound, RuleError) as error:
         raise game_errors(error) from error
 
 
@@ -411,17 +526,49 @@ async def campaign_forecast(
 async def campaign(
     game_id: UUID,
     campaign_id: CampaignId,
-    body: Action,
+    body: CampaignAction,
     owner_id: Owner,
     service: Service,
+):
+    def start(game: Game) -> None:
+        if body.region is None:
+            start_campaign(game, campaign_id)
+        else:
+            plan = campaign_plan(
+                game, campaign_id, body.region, body.budget, body.duration
+            )
+            targeted_campaign(game, campaign_id, plan)
+
+    return await mutate(
+        service, owner_id, game_id, body, f"campaign:{campaign_id}", start
+    )
+
+
+@router.post("/{game_id}/markets/{market_id}", response_model=GameView)
+async def update_market(
+    game_id: UUID, market_id: str, body: MarketAction, owner_id: Owner, service: Service
 ):
     return await mutate(
         service,
         owner_id,
         game_id,
         body,
-        f"campaign:{campaign_id}",
-        lambda game: start_campaign(game, campaign_id),
+        f"market:{market_id}",
+        lambda game: market_action(game, market_id, body.action),
+    )
+
+
+@router.post("/{game_id}/languages/{name}", response_model=GameView)
+async def update_language(
+    game_id: UUID, name: str, body: Action, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        f"language:{name}",
+        lambda game: develop_language(game, name),
     )
 
 
@@ -469,3 +616,17 @@ async def tutorial(
             game.tutorial += 1
 
     return await mutate(service, owner_id, game_id, body, "tutorial", record)
+
+
+@router.post("/{game_id}/onboarding", response_model=GameView)
+async def onboarding(
+    game_id: UUID, body: OnboardingAction, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "onboarding",
+        lambda game: change_onboarding(game, body),
+    )

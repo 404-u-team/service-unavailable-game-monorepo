@@ -16,9 +16,11 @@ Existing saves keep their cumulative balances, release history, clock offset and
 
 ## Regional traffic and game time
 
-FastAPI advances the clock and evaluates workload, purchases, incidents and history. The browser renders the server tick and UTC time. New games begin at 08:00 UTC. Europe uses a fixed UTC+1 offset and starts with the entire audience. North America uses UTC−5. When acquisition is enabled there, 55% of new organic and campaign users enter that market. Stopping acquisition leaves existing regional users in place.
+FastAPI advances the clock and evaluates workload, purchases, incidents and history. New games begin at 08:00 UTC on a simulated Monday. Europe starts with the full audience. The regional profiles use representative IANA time zones on a calendar anchored to January 6, 2025. The profiles cover Europe, North America, South America, East Asia, South and Southeast Asia, the Middle East and North Africa, Sub-Saharan Africa, and Oceania.
 
-The backend interpolates regional activity between three-hour anchors. Local activity is lowest overnight and highest in the evening. Weekends, smooth seeded variation, campaigns and occasional events modify demand. Telemetry shows each region's time, registered audience, estimated DAU and live contribution beside a UTC baseline curve. Regional activity is modeled with fixed offsets and two representative profiles.
+Growth shows the cost and game time for market research and launch preparation. Launching a ready market requires 65% satisfaction. Active markets gain organic users and can run targeted campaigns. Forecasts use campaign budget, duration and the selected market's acquisition costs and activity. Localized Messenger languages increase organic and paid acquisition by 18% in matching markets. Markets have distinct engagement, advertising value, Premium adoption and price sensitivity. Existing saves with North American acquisition enabled keep that behavior.
+
+The backend interpolates activity between three-hour anchors. Weekends, seeded variation, campaigns and incidents modify demand. Telemetry and Growth show regional audience, estimated daily active users, live request contribution, local time, and potential ad revenue when ads are enabled, and ad revenue earned in the rolling game-day window. Regional earned revenue uses the same served ad share and regional pricing as the ledger. Premium cohorts remain service-wide.
 
 ## Reproduce the balance runs
 
@@ -52,4 +54,4 @@ Figures are means across the three seeds. Net includes one-time development and 
 
 On Beginner, $4 Premium ended $255.3 ahead after setup with 12.9% audience growth. On Expert, the same setup was $165.0 short of recovering setup costs but earned $59.6 in operating profit on the final day. Standard's $12 plan ended with about 38 paying users versus 802 for the $4 plan. Manual downsizing saved $104 in operating costs relative to the moderate-ad reference over 35 days, with a 50.0% audience decline. Frequent failures cut the mixed plan's net by about $440 and left about 132 fewer paying subscribers.
 
-Scaling is manual through drafts and deployments. Product language development and time-based media retention are outside this iteration. Finance retains one game day of detailed samples and cumulative totals. The balance results cover the modeled strategies and seeds above.
+Scaling is manual through drafts and deployments. Time-based media retention is outside the simulation. Finance retains one game day of detailed samples and cumulative totals. The balance results cover the modeled strategies and seeds above.

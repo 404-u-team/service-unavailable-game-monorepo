@@ -34,6 +34,13 @@ class Graph:
     reachable: set[str]
     relationships: dict[tuple[str, str], str]
 
+    def primaries(self, node_id: str) -> list[str]:
+        return [
+            target
+            for target in self.targets[node_id]
+            if self.nodes[target].kind == "database"
+        ]
+
 
 def inspect_graph(topology: Topology) -> Graph:
     nodes = {node.id: node for node in topology.nodes}
@@ -167,6 +174,10 @@ def deployment_warnings(graph: Graph) -> list[str]:
         elif node.kind in {"api", "limiter", "balancer"} and node.id not in writes:
             warnings.append(
                 f"{node.name} has no write path. Route traffic to an API with a direct connection to a primary database."
+            )
+        elif node.kind == "api" and len(graph.primaries(node.id)) > 1:
+            warnings.append(
+                f"{node.name} has multiple primary links. Only the first by component ID serves its dataset."
             )
         elif node.kind == "replica" and not any(
             graph.nodes[t].kind == "database" for t in graph.targets[node.id]

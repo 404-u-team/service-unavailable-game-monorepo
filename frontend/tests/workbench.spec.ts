@@ -18,6 +18,11 @@ async function create(page: Page, mobile = false, capture = true) {
   if (mobile) await submit.tap();
   else await submit.click();
   await expect(page.getByRole('heading', { name: /topology/i })).toBeVisible();
+  const skip = page.getByRole('button', { name: 'Skip tutorial' });
+  if (await skip.isVisible()) {
+    await skip.click();
+    await expect(skip).toHaveCount(0);
+  }
   return new URL(page.url()).pathname.split('/').at(-1)!;
 }
 
@@ -28,13 +33,11 @@ async function state(page: Page, id: string): Promise<Game> {
 }
 
 async function fast(page: Page) {
-  await page.getByRole('button', { name: 'Game speed' }).click();
   await page.getByRole('button', { name: 'Fast speed (3×)' }).click();
 }
 
 async function pause(page: Page) {
-  await page.getByRole('button', { name: 'Game speed' }).click();
-  await page.getByRole('button', { name: 'Pause game' }).click();
+  await page.getByRole('button', { name: 'Pause simulation' }).click();
 }
 
 async function navigate(page: Page, name: string, mobile = false) {
@@ -75,7 +78,7 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(2);
   await pause(page);
   await page.getByRole('button', { name: 'Save game' }).click();
-  await expect(page.getByRole('status')).toHaveText('Game saved');
+  await expect(page.getByRole('status').filter({ hasText: 'Game saved' })).toBeVisible();
   const saved = await state(page, id);
   await page.getByRole('link', { name: 'Service Unavailable main menu' }).click();
   await page.getByRole('link', { name: /Saved games/ }).click();
@@ -326,8 +329,8 @@ test.describe('Mobile workbench', () => {
     await navigate(page, 'More', true);
     await page.getByRole('link', { name: /Settings/ }).tap();
     await expect(page.getByRole('heading', { name: 'Game preferences' })).toBeVisible();
-    await page.getByRole('button', { name: 'Save game' }).tap();
-    await expect(page.getByRole('status')).toHaveText('Game saved');
+    await page.getByRole('main').getByRole('button', { name: 'Save game' }).tap();
+    await expect(page.getByRole('status').filter({ hasText: 'Game saved' })).toBeVisible();
   });
 
   test('touch players can use component help, group cards, and typed connections', async ({ page }) => {
@@ -411,6 +414,7 @@ test('failed request can be retried and the responsive shell stays inside the vi
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await expect(page.locator('.svelte-flow')).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.getByRole('button', { name: 'Fit view' }).click();
     await expect.poll(() => page.locator('.svelte-flow').evaluate((canvas) => {
       const bounds = canvas.getBoundingClientRect();
       const nodes = [...canvas.querySelectorAll('.svelte-flow__node')].map((node) => node.getBoundingClientRect());
@@ -524,7 +528,7 @@ test('production node dragging sends one layout write and survives Draft and rel
   await page.mouse.up();
   const saved = await response;
   expect(saved.status()).toBe(200);
-  expect(writes).toEqual(['PUT']);
+  expect(writes).toEqual(['PATCH']);
   const updated: Game = await saved.json();
   expect(updated.diagram.positions.api.y).toBeLessThan(initial.production.nodes.find((node) => node.id === 'api')!.position.y);
   expect(updated.production).toEqual(initial.production);
@@ -643,6 +647,7 @@ test('Russian is persisted across menus, editor, settings, and game screens', as
   await expect(page.getByRole('button', { name: 'Создать черновик' })).toBeVisible();
   for (const width of [1920, 1440, 768, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.getByRole('button', { name: 'Вписать в экран' }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     await expect.poll(() => page.locator('.svelte-flow').evaluate((canvas) => {
@@ -883,13 +888,21 @@ test('monetization controls, revenue history and server time render in both lang
     await page.getByRole('button', { name: 'Release feature' }).click();
     await expect(item.getByText('Released and enabled')).toBeVisible();
   }
+  await navigate(page, 'Growth');
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'North America', exact: true }) })
+    .getByRole('button', { name: 'Start preparation' }).click();
+  const update = await page.request.put(`/api/games/${id}/clock`, { data: { request_id: crypto.randomUUID(), speed: 5 } });
+  expect(update.ok()).toBeTruthy();
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'North America', exact: true }) })
+    .getByRole('button', { name: 'Launch market' }).click({ timeout: 20_000 });
+  await pause(page);
+  await navigate(page, 'Product');
   await page.getByLabel('Ad intensity').selectOption('high');
   await page.getByLabel('Price per game month (USD)').fill('5.50');
   await page.getByLabel('Offer faster synchronization').uncheck();
-  await page.getByLabel('Acquire users in North America').check();
   await page.getByRole('button', { name: 'Save product settings' }).click();
   await expect.poll(async () => (await state(page, id)).product).toMatchObject({
-    ad_intensity: 'high', premium_price: 5.5, premium_fast_sync: false, north_america: true,
+    ad_intensity: 'high', premium_price: 5.5, premium_fast_sync: false,
   });
   if (visualDir) await page.getByRole('heading', { name: 'Product settings' }).scrollIntoViewIfNeeded();
   if (visualDir) await page.screenshot({ path: `${visualDir}/monetization-1440.png` });
@@ -912,7 +925,7 @@ test('monetization controls, revenue history and server time render in both lang
   await expect(page.getByRole('img', { name: /Revenue per simulation step/ })).toBeVisible();
   const final = await state(page, id);
   expect(final.economy.revenue_sources.advertising).toBeCloseTo(final.economy.revenue);
-  expect(final.economy.daily_total_expenses).toBeCloseTo(final.economy.daily_operating + 1200);
+  expect(final.economy.daily_total_expenses).toBeCloseTo(final.economy.daily_operating + 1420);
   await page.getByRole('button', { name: 'Dismiss notification' }).click();
   if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-finance-1440.png`, fullPage: true });
   await navigate(page, 'Telemetry');

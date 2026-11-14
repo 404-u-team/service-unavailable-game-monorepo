@@ -59,7 +59,11 @@ def requirement_met(rule: Requirement, graph: Graph, game: Game) -> bool:
             candidates = {
                 target
                 for source in candidates
-                for target in graph.targets[source]
+                for target in (
+                    graph.primaries(source)[:1]
+                    if kind == "database" and graph.nodes[source].kind == "api"
+                    else graph.targets[source]
+                )
                 if graph.nodes[target].kind == kind
             }
         if (

@@ -28,6 +28,10 @@ export function connectionError(topology: Topology, catalog: Catalog, candidate:
   }
   const remaining = topology.edges.filter((edge) => `${edge.source}:${edge.target}` !== replaces);
   if (remaining.some((edge) => edge.source === source.id && edge.target === target.id)) return 'A connection already exists between these components.';
+  if (source.kind === 'api' && target.kind === 'database' && remaining.some((edge) =>
+    edge.source === source.id && topology.nodes.some((node) => node.id === edge.target && node.kind === 'database'))) {
+    return 'An API can use one primary database for its dataset.';
+  }
   if (source.kind === 'replica' && target.kind === 'database' && remaining.some((edge) =>
     edge.source === source.id && topology.nodes.some((node) => node.id === edge.target && node.kind === 'database'))) {
     return 'A read replica can subscribe to one primary database.';

@@ -68,6 +68,7 @@ class GameApiTests(TestCase):
             self.client, self.path + "/diagram", "PUT", action(diagram=diagram)
         )
         self.assertEqual(status, 200, updated)
+        diagram["viewports"] = {}
         self.assertEqual(updated["diagram"], diagram)
         self.assertEqual(updated["production"], self.game["production"])
         self.assertEqual(updated["revision"], self.game["revision"])
