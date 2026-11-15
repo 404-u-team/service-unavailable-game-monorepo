@@ -6,6 +6,7 @@ export type ToastMessage = {
   tone?: Tone;
   duration?: number;
   announce?: 'polite' | 'assertive';
+  action?: { label: string } & ({ href: string; onclick?: never } | { href?: never; onclick: () => void });
 };
 
 export type ToastItem = Readonly<ToastMessage & { id: number }>;

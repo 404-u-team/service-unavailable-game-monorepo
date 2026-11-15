@@ -1,9 +1,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { X } from '@lucide/svelte';
+  import Button from './Button.svelte';
   import type { ToastItem, Toasts } from './toasts.svelte';
 
-  let { toasts, label, dismissLabel }: { toasts: Toasts; label: string; dismissLabel: (title: string) => string } = $props();
+  let { toasts, label, dismissLabel, placement = 'bottom-end' }: {
+    toasts: Toasts; label: string; dismissLabel: (title: string) => string; placement?: 'top-end' | 'bottom-end';
+  } = $props();
 
   const buttons = new Map<number, HTMLButtonElement>();
   let visibility = $state<DocumentVisibilityState>('visible');
@@ -21,7 +24,7 @@
 
   async function dismiss(item: ToastItem) {
     const index = toasts.items.indexOf(item);
-    const focused = buttons.get(item.id) === document.activeElement;
+    const focused = buttons.get(item.id)?.closest('li')?.contains(document.activeElement);
     toasts.dismiss(item.id);
     if (!focused) return;
     await tick();
@@ -44,7 +47,7 @@
 </div>
 
 {#if toasts.items.length}
-  <section class="toasts" class:paused={visibility === 'hidden'} aria-label={label} onfocusin={rememberFocus}>
+  <section class="toasts" class:top={placement === 'top-end'} class:paused={visibility === 'hidden'} aria-label={label} onfocusin={rememberFocus}>
     <ul>
       {#each toasts.items as item (item.id)}
         {@const duration = item.duration ?? 6000}
@@ -52,6 +55,13 @@
           <div>
             <strong>{item.title}</strong>
             {#if item.description}<p>{item.description}</p>{/if}
+            {#if item.action}
+              <div class="action">
+                <Button variant="ghost" href={item.action.href} onclick={() => { item.action?.onclick?.(); void dismiss(item); }}>
+                  {item.action.label}
+                </Button>
+              </div>
+            {/if}
           </div>
           <button type="button" class="sui-button" data-variant="ghost" data-icon-only use:register={item.id}
             aria-label={dismissLabel(item.title)} onclick={() => void dismiss(item)}>
@@ -72,6 +82,7 @@
     inset-inline-end: var(--sui-space-4); inline-size: min(22rem, calc(100% - 2 * var(--sui-space-4))); max-block-size: 55dvh;
     overflow: auto; overscroll-behavior: contain; padding: 5px; box-sizing: border-box;
   }
+  .toasts.top { inset-block: var(--sui-toast-top, max(var(--sui-space-4), env(safe-area-inset-top))) auto; }
   ul { display: grid; gap: var(--sui-space-2); padding: 0; margin: 0; list-style: none; }
   li {
     position: relative; overflow: hidden; display: flex; align-items: start; justify-content: space-between; gap: var(--sui-space-2);
@@ -82,6 +93,7 @@
   .timer {
     position: absolute; inset: auto 0 0; block-size: 2px; pointer-events: none; background: var(--sui-tone-text);
     transform-origin: left; animation: countdown var(--duration) linear forwards;
+    animation-duration: var(--duration) !important;
   }
   .timer:dir(rtl) { transform-origin: right; }
   @keyframes countdown { to { transform: scaleX(0); } }
@@ -90,4 +102,6 @@
   @media (prefers-reduced-motion: reduce) { .timer { animation-timing-function: step-end; } }
   strong { color: var(--sui-tone-text); }
   p { margin: var(--sui-space-1) 0 0; }
+  .action { margin-block-start: var(--sui-space-1); }
+  .action :global(.sui-button) { padding-inline: var(--sui-space-2); }
 </style>

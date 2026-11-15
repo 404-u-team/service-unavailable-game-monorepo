@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '@service-unavailable/ui';
   import { t } from '../i18n.svelte';
   import type { Game } from '../types';
   import { chapters, onboarding, stepId, type TutorialAction } from './onboarding';
@@ -16,10 +17,10 @@
     </div>
     <div class="row wrap">
       {#if current !== 'complete'}
-        <button class="btn primary" disabled={busy} onclick={() => change('resume')}>{t('Resume tutorial')}</button>
+        <Button variant="primary" disabled={busy} onclick={() => change('resume')}>{t('Resume tutorial')}</Button>
       {/if}
       {#if current !== 'clock' || game.onboarding.skipped || !game.settings.show_tutorial}
-        <button class="btn" disabled={busy} onclick={() => change('restart')}>{t('Restart tutorial')}</button>
+        <Button disabled={busy} onclick={() => change('restart')}>{t('Restart tutorial')}</Button>
       {/if}
     </div>
   </section>

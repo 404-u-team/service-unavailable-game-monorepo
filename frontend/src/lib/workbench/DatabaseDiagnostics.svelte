@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Help from './Help.svelte';
+  import { Button, Tooltip } from '@service-unavailable/ui';
   import { guideArticleHref, resourceArticle } from '../guide';
   import { t } from '../i18n.svelte';
   import { num, pct } from '../format';
@@ -39,7 +39,7 @@
     {#if diagnostic}<strong>{t(titles[diagnostic.level])}</strong>{/if}
     <dl>
       <div><dt>{t('Read demand')}</dt><dd>{t('{0} units/s', [num(data.read_demand)])}</dd></div>
-      <div><dt class="row">{t('Disk I/O')} <Help label={t('Help with {0}', [t('Disk I/O')])}
+      <div><dt class="row">{t('Disk I/O')} <Tooltip label={t('Help with {0}', [t('Disk I/O')])}
         text={t('Open the relevant guide article.')} href={guideArticleHref(guide, 'database-io', 'io')} /></dt><dd>{pct(metric.utilization['Disk I/O'])}</dd></div>
       {#if hasDisk}
         <div><dt>{t('Modeled read IOPS')}</dt><dd>{num(data.disk_read_iops ?? 0)}</dd></div>
@@ -84,8 +84,8 @@
       {/if}
       {#if diagnostic.upgrades.length}
         <ul>{#each diagnostic.upgrades as upgrade}<li>{t(actions[upgrade])}</li>{/each}</ul>
-        {#if configureHref}<a class="btn" href={configureHref}>{t('Edit configuration')}</a>
-        {:else if configure}<button class="btn" disabled={busy} onclick={configure}>{t('Edit configuration')}</button>{/if}
+        {#if configureHref}<Button href={configureHref}>{t('Edit configuration')}</Button>
+        {:else if configure}<Button disabled={busy} onclick={configure}>{t('Edit configuration')}</Button>{/if}
       {/if}
       {#if diagnostic.read_options}
         <p>{t('Offloading eligible reads can free shared capacity. Caches remove repeated reads. Replicas also add disk work on the primary.')}</p>
@@ -106,5 +106,5 @@
   .database-details dd { font: 600 13px var(--mono); margin: 0; }
   .database-details ul { margin: 0; padding-inline-start: 18px; }
   .resource { display: block; }
-  .database-details a:not(.btn) { color: var(--primary); text-decoration: underline; }
+  .database-details a:not(.sui-button) { color: var(--primary); text-decoration: underline; }
 </style>

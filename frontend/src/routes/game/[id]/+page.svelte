@@ -3,7 +3,8 @@
   import { onMount, untrack } from 'svelte';
   import { beforeNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { ArrowDownRight, ArrowUpRight, Pause, X, Save as SaveIcon } from '@lucide/svelte';
+  import { ArrowDownRight, ArrowUpRight, Pause, Save as SaveIcon } from '@lucide/svelte';
+  import { Badge, Button, Alert, NavTabs, Toaster, createToasts, type NavItem } from '@service-unavailable/ui';
   import Brand from '#lib/Brand.svelte';
   import Architecture from '#lib/workbench/Architecture.svelte';
   import Onboarding from '#lib/workbench/Onboarding.svelte';
@@ -35,28 +36,47 @@
   let layout: ReturnType<typeof syncLayout> | undefined;
   let live: ReturnType<typeof subscribeGame> | undefined;
   let layoutFailed = $state(false);
-  let viewedEvent = '';
-  let recentEvent = $state<Game['incidents'][number]>();
-  const latestIncident = $derived(game?.incidents[0]);
-  $effect(() => {
-    if (!latestIncident || latestIncident.id === viewedEvent) return;
-    viewedEvent = latestIncident.id;
-    if (latestIncident.severity === 'info' && !latestIncident.id.startsWith('campaign-complete-') &&
-        !latestIncident.id.startsWith('release-')) return;
-    if (game && game.tick - latestIncident.start < 3) recentEvent = latestIncident;
-  });
+  const toasts = createToasts();
+  let connectionToast: number | undefined;
+  let saveToast: number | undefined;
+
+  function reportConnection(connected: boolean) {
+    if (connected) {
+      if (connectionToast !== undefined) toasts.dismiss(connectionToast);
+      connectionToast = undefined;
+      return;
+    }
+    if (connectionToast !== undefined && toasts.items.some((item) => item.id === connectionToast)) return;
+    connectionToast = toasts.add({
+      title: t('Live connection lost. Reconnecting…'), tone: 'warning', duration: 0,
+      action: { label: t('Reconnect'), onclick: () => live?.reconnect() }
+    });
+  }
+
+  function reportEvents(next: Game, previous: Game) {
+    if (next.incidents === previous.incidents || untrack(() => section) === 'events') return;
+    const known = new Set(previous.incidents.map((item) => item.id));
+    const fresh = next.incidents.filter((item) => !known.has(item.id) && next.tick - item.start < 3 &&
+      (item.severity !== 'info' || item.id.startsWith('campaign-complete-') || item.id.startsWith('release-')));
+    for (const item of fresh.slice(0, 3).reverse()) {
+      toasts.add({
+        title: message(item.title), tone: item.severity === 'info' ? 'info' : 'warning',
+        action: { label: t('View events'), href: `${link('events')}&event=${encodeURIComponent(item.id)}` }
+      });
+    }
+  }
 
   let catalog = $state<Catalog>();
   let error = $state('');
   let connection = $state('');
   let loading = $state(true);
   let busy = $state(false);
-  let saved = $state(false);
   let lastSpeed: Exclude<Speed, 0> = 1;
   let currentId = '';
   let mounted = $state(false);
   let compact = $state(false);
   let architecture = $state<{ revealTutorialApi: () => void }>();
+  let workbench = $state<{ revealTutorialWidget: (key: Target) => void }>();
   let tutorialUi = $state.raw<TutorialArchitecture>();
   let tutorialEvent = $state<{ step: StepId; name: TutorialEvent }>();
   let completion = $state(false);
@@ -64,7 +84,6 @@
   let pendingTutorial = $state(false);
   let rejected = $state<StepId>();
   let generation = 0;
-  let feedback: ReturnType<typeof setTimeout>;
   let actionRequest: { gameId: string; path: string; method: string; key: string; body: string } | undefined;
   const id = $derived(page.params.id ?? '');
   const section = $derived.by((): Section => {
@@ -72,6 +91,14 @@
     return Object.hasOwn(sections, key) && key !== 'saves' ? key as Section : 'build';
   });
   const link = (target: Section, focus?: string) => `/game/${id}?view=${target}${focus ? `&component=${encodeURIComponent(focus)}` : ''}`;
+  function navItems(items: Section[], compact = false): NavItem[] {
+    return items.map((item) => ({
+      id: item, href: item === 'saves' ? '/?view=saves' : link(item),
+      label: t(compact ? sections[item].mobile : sections[item].name),
+      current: section === item || (compact && item === 'more' && !items.includes(section)),
+      attributes: { 'data-tutorial': nav(item) }
+    }));
+  }
   const tutorialStep = $derived(game ? stepId(game.onboarding) : 'complete');
   const tutorialEnabled = $derived(game?.scenario === 'messenger' && game.settings.show_tutorial && !game.onboarding.skipped && tutorialStep !== 'complete');
   const tutorialVisible = $derived(tutorialEnabled && section !== 'guide' && section !== 'settings');
@@ -106,7 +133,6 @@
       ++generation;
       live?.close();
       layout?.close();
-      clearTimeout(feedback);
       document.removeEventListener('visibilitychange', flush);
       media.removeEventListener('change', resize);
     };
@@ -125,6 +151,7 @@
     if (next.id !== currentId || (game && next.saved_at < game.saved_at)) return;
     if (next.speed) lastSpeed = next.speed;
     if (game) {
+      reportEvents(next, game);
       // Keep structural references stable when REST replies or reconnect snapshots include them again.
       for (const key of ['production', 'draft', 'diagram', 'settings'] as const) {
         if (next[key] === game[key] || JSON.stringify(next[key]) !== JSON.stringify(game[key])) continue;
@@ -146,7 +173,8 @@
     tutorialUi = undefined;
     tutorialEvent = undefined;
     rejected = undefined;
-    recentEvent = undefined;
+    toasts.clear();
+    connectionToast = saveToast = undefined;
     lastSpeed = 1;
     const version = ++generation;
     loading = true;
@@ -161,9 +189,7 @@
       catalog = definitions;
       accept(state);
       layout = syncLayout(gameId, (diagram) => pendingDiagram = diagram, accept, (failed) => layoutFailed = failed);
-      live = subscribeGame(gameId, accept, (connected) => {
-        connection = connected ? '' : 'Live connection lost. Reconnecting…';
-      });
+      live = subscribeGame(gameId, accept, reportConnection);
     } catch (reason) {
       if (version === generation) connection = apiMessage(reason);
     } finally {
@@ -192,7 +218,7 @@
       void save();
       return;
     }
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || document.querySelector('dialog[open]')) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || openDialog()) return;
     if (event.code === 'Space' && !target?.closest('button, a, summary, [role=button]')) {
       event.preventDefault();
       speed(game.speed ? 0 : lastSpeed);
@@ -218,14 +244,14 @@
       actionRequest = undefined;
       accept(next);
       if (path === '/save') {
-        saved = true;
-        clearTimeout(feedback);
-        feedback = setTimeout(() => saved = false, 2600);
+        if (saveToast !== undefined) toasts.dismiss(saveToast);
+        saveToast = toasts.add({ title: t('Game saved'), tone: 'success' });
       }
       return next;
     } catch (reason) {
       if (!mounted || currentId !== gameId) return null;
       error = apiMessage(reason);
+      toasts.add({ title: message(error), tone: 'danger', announce: 'assertive' });
       if (reason instanceof ApiError && reason.status < 500) actionRequest = undefined;
       if (reason instanceof ApiError && reason.status === 409) live?.reconnect();
       return null;
@@ -271,6 +297,7 @@
   function recoverTutorial(key?: Target) {
     rejected = undefined;
     if (key === target.api) architecture?.revealTutorialApi();
+    else if (key) workbench?.revealTutorialWidget(key);
   }
 
   $effect(() => {
@@ -283,15 +310,18 @@
 
 <svelte:window onkeydown={shortcuts} />
 
+{#snippet navIcon(item: NavItem)}
+  {@const Icon = sections[item.id as Section].icon}
+  <Icon size={22} strokeWidth={1.8} />
+{/snippet}
+
 <div class="game" data-reduced-motion={game?.settings.reduced_motion ?? false}>
   <header class="topbar" data-tutorial-obstruction="top">
     <Brand />
     {#if game}
-      <nav class="primary-nav" aria-label={t("Primary navigation")}>
-        {#each primary as item}<a data-tutorial={nav(item)} href={link(item)} aria-current={section === item ? 'page' : undefined}>{t(sections[item].name)}</a>{/each}
-      </nav>
+      <NavTabs class="primary-nav" label={t('Primary navigation')} items={navItems(primary)} />
       <div class="controls row">
-        <span class="badge good online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</span>
+        <Badge tone="success" class="online"><i class="dot"></i>{game.speed ? t("Live") : t("Paused")}</Badge>
         <a class="balance" data-tutorial={target.balance} href={link('finance')} title={t('Cash balance and daily operating profit')} aria-label={t('Finance')}>
           <strong>{money(game.economy.balance)}</strong>
           <span class:positive={game.economy.daily_profit > 0} class:negative={game.economy.daily_profit < 0}>
@@ -301,38 +331,34 @@
         </a>
         <div class="speed-group row" data-tutorial={target.clock} role="group" aria-label={t('Game speed')}>
           {#each speedOptions as option (option.value)}
-            <button class="btn" disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
+            <Button disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
               title={t('{0} ({1})', [t(option.label), t(option.shortcut)])} onclick={() => speed(option.value)}>
               {#if option.value}{option.value}×{:else}<Pause size={14} />{/if}
-            </button>
+            </Button>
           {/each}
         </div>
         <span class="time mono">{game.snapshot.demand_overview ? t('Day {0} / {1}', [game.snapshot.demand_overview.day, minuteClock(game.snapshot.demand_overview.utc_minute)]) : when(game.tick)}</span>
-        <button class="btn icon-btn quick-save" title={saved ? t("Game saved") : t("Save game (Ctrl/Cmd + S)")} aria-label={t("Save game")} disabled={busy} onclick={save}><SaveIcon size={15} /></button>
+        <Button iconOnly class="quick-save" title={t("Save game (Ctrl/Cmd + S)")} aria-label={t("Save game")} disabled={busy} onclick={save}><SaveIcon size={15} /></Button>
       </div>
     {/if}
   </header>
+
+  <Toaster {toasts} placement="top-end" label={t('Notifications')} dismissLabel={(title) => t('Dismiss {0}', [title])} />
 
   {#if loading}
     <main class="fallback"><p aria-live="polite">{t("Loading service…")}</p></main>
   {:else if !game || !catalog}
     <main class="fallback stack"><h1>{t("Could not open game")}</h1><p class="notice error" role="alert">{connection ? message(connection) : t("The save is unavailable.")}</p>
-      <div class="row"><button class="btn primary" onclick={() => open(id)}>{t("Retry connection")}</button><a class="btn" href="/?view=saves">{t("Saved games")}</a></div>
+      <div class="row"><Button variant="primary" onclick={() => open(id)}>{t("Retry connection")}</Button><Button href="/?view=saves">{t("Saved games")}</Button></div>
     </main>
   {:else}
-    <nav class="rail" aria-label={t("Workbench navigation")}>
-      {#each desktop as item}
-        {@const Icon = sections[item].icon}
-        <a data-tutorial={nav(item)} href={link(item)} aria-current={section === item ? 'page' : undefined}><span><Icon size={24} strokeWidth={1.8} /></span>{t(sections[item].name)}</a>
-      {/each}
-      <a href="/?view=saves" class="rail-saves" aria-label={t("Saved games")}><span class="avatar">{t("SU")}</span></a>
-    </nav>
+    <NavTabs class="rail" variant="rail" label={t('Workbench navigation')} items={navItems([...desktop, 'saves'])} icon={navIcon} />
     <div class="main-area">
-      {#if connection || error}
-        <div class="server-message notice error row spread" role="alert"><span>{message(connection || error)}</span><button class="btn" onclick={() => { if (connection) live?.reconnect(); else error = ''; }}>{connection ? t("Reconnect") : t("Dismiss")}</button></div>
+      {#if game.migration}
+        <div class="migration"><Alert tone="warning" title={t('Architecture migration')}>
+          {t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])}
+        </Alert></div>
       {/if}
-      {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
-      {#if game.migration}<p class="notice warn" role="status">{t('Architecture migration')} · {t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])}</p>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture bind:this={architecture} {game} {catalog} {act} {busy} {error} tutorial={tutorialEnabled} tutorialSelect={currentView.target === target.api}
@@ -341,18 +367,12 @@
             focusId={page.url.searchParams.get('component') ?? undefined}
             openConfiguration={page.url.searchParams.get('configure') === '1'} guideHref={link('guide')} />
         {:else}
-          <Dashboard {section} {game} {catalog} {link} {act} {busy} {error} tutorialAction={guide} />
+          <Dashboard bind:this={workbench} {section} {game} {catalog} {link} {act} {busy} {error} tutorialAction={guide} />
         {/if}
       {/key}
-      {#if recentEvent && section !== 'events'}
-        <aside class="event-feedback notice row spread" class:warn={recentEvent.severity !== 'info'} aria-live="polite">
-          <a href={link('events')} onclick={() => recentEvent = undefined}>{message(recentEvent.title)}</a>
-          <button class="btn icon-btn" aria-label={t('Dismiss notification')} onclick={() => recentEvent = undefined}><X size={14} /></button>
-        </aside>
-      {/if}
       {#if engineeringWalkthrough && engineeringStep}
         <Onboarding progress={game.onboarding} lesson={{ ...engineeringStep, index: game.engineering_lesson ?? 0 }}
-          view={{ target: engineeringStep.target, open: engineeringStep.open, allowed: true }} {link} {busy} waiting={false}
+          view={{ target: engineeringStep.target, open: engineeringStep.open, allowed: true }} link={(section) => link(section) + (section === 'product' ? '&engineering=1' : '')} {busy} waiting={false}
           change={changeEngineering} recover={() => {}} />
       {:else if tutorialVisible || completion}
         <Onboarding progress={game.onboarding} view={rejected === tutorialStep
@@ -361,70 +381,60 @@
           complete={() => completion = false} />
       {/if}
     </div>
-    <nav class="bottom" data-tutorial-obstruction="bottom" aria-label={t("Mobile navigation")}>
-      {#each mobile as item}
-        {@const Icon = sections[item].icon}
-        {@const active = section === item || (item === 'more' && !mobile.includes(section))}
-        <a data-tutorial={nav(item)} href={link(item)} aria-current={active ? 'page' : undefined}><span><Icon size={21} strokeWidth={1.8} /></span>{t(sections[item].mobile)}</a>
-      {/each}
-    </nav>
+    <NavTabs class="bottom" variant="dock" data-tutorial-obstruction="bottom"
+      label={t('Mobile navigation')} items={navItems(mobile, true)} icon={navIcon} />
   {/if}
 </div>
 
 <style>
-  .game { display: grid; min-height: 100dvh; grid-template: 65px 1fr / 76px minmax(0, 1fr); }
+  .game { --sui-toast-top: 70px; display: grid; min-height: 100dvh; grid-template: 65px 1fr / 76px minmax(0, 1fr); }
   .topbar { grid-column: 1 / -1; position: sticky; top: 0; z-index: var(--layer-workbench-navigation); display: grid; grid-template-columns: clamp(248px, 22.3vw, 350px) 1fr auto; align-items: center; gap: 10px; min-height: 65px; padding: 0 23px; background: var(--background); border-bottom: 1px solid var(--border); }
   .topbar :global(.brand) { font-size: 16px; }
-  .primary-nav { display: flex; height: 100%; }
-  .primary-nav a { min-width: 112px; padding: 0 8px; display: grid; place-items: center; color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 2px solid transparent; }
-  .primary-nav a[aria-current], .primary-nav a:hover { border-color: var(--primary); color: var(--text); }
+
+  .topbar :global(.primary-nav) { align-self: stretch; justify-content: center; border: 0; }
+  .topbar :global(.primary-nav a) { padding-inline: clamp(5px, 1.2vw, 20px); font-size: 0.75rem; }
   .controls { gap: 6px; }
-  .controls .online { margin-right: 8px; min-width: 65px; }
-  .controls .btn { min-height: 31px; font-family: var(--mono); }
+  .controls :global(.online) { margin-right: 8px; min-width: 65px; }
+  .controls :global(.sui-button) { min-height: 31px; font-family: var(--mono); }
   .speed-group { gap: 2px; }
-  .speed-group button { min-width: 32px; justify-content: center; padding-inline: 4px; }
+  .speed-group :global(button) { min-width: 32px; justify-content: center; padding-inline: 4px; }
   .balance { display: grid; min-width: max-content; gap: 1px; margin-inline: 4px; font-family: var(--mono); }
   .balance strong { font-size: 15px; }
   .balance span { display: flex; gap: 2px; align-items: center; font-size: 10px; color: var(--muted); }
   .balance span.positive { color: var(--primary); }
   .balance span.negative { color: var(--error); }
   .time { display: inline-flex; align-items: center; min-height: 31px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 11px; white-space: nowrap; text-transform: uppercase; }
-  .rail { position: sticky; top: 65px; height: calc(100dvh - 65px); min-height: 630px; background: var(--rail); display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; padding: 11px 5px 30px; }
-  .rail a, .bottom a { display: grid; justify-items: center; gap: 3px; color: var(--muted); text-align: center; font-size: 10px; line-height: 1.2; }
-  .rail a span { display: grid; place-items: center; width: 54px; height: clamp(37px, 6vh, 54px); border-radius: 12px; }
-  .rail a[aria-current] span, .rail a:hover span { background: var(--surface); color: var(--primary); }
-  .rail a[aria-current] { color: var(--text); }
-  .rail .rail-saves { margin-top: 4px; }
-  .rail .avatar { width: 32px; height: 32px; background: var(--surface); border-radius: 100%; font: 700 12px var(--head); color: var(--text); }
+
+  .game :global(.rail) {
+    position: sticky; top: 65px; align-self: start; height: calc(100dvh - 65px);
+    overflow: auto; background: var(--sui-inset); border-inline-end: 1px solid var(--sui-border); padding: 12px 5px;
+  }
   .main-area { position: relative; min-width: 0; }
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
-  .server-message { position: sticky; top: 69px; z-index: 8; margin: 8px 14px; }
-  .save-feedback { position: fixed; top: 73px; right: 20px; z-index: 8; }
-  .event-feedback { position: sticky; bottom: 10px; z-index: 6; margin: 6px 15px; background: var(--surface); }
-  .event-feedback a:hover { text-decoration: underline; }
-  .bottom { display: none; }
+  .migration { margin: 8px 16px 0; }
+
+  .game :global(.bottom) { display: none; }
   @media (max-width: 1120px) {
     .topbar { grid-template-columns: minmax(205px, 1fr) minmax(290px, 1.3fr) auto; padding-inline: 12px; }
-    .primary-nav a { min-width: 72px; }
-    .controls .online { display: none; }
+
+    .controls :global(.online) { display: none; }
   }
   @media (max-width: 850px) {
     .game { grid-template: 66px 1fr / minmax(0, 1fr); padding-bottom: calc(69px + env(safe-area-inset-bottom)); }
     .topbar { display: flex; justify-content: space-between; padding: 0 16px; min-height: 66px; }
     .topbar :global(.brand) { font-size: 14px; }
-    .primary-nav, .rail, .time { display: none; }
-    .controls .btn { min-height: 34px; }
+    .game :global(.primary-nav), .game :global(.rail), .time { display: none; }
+    .controls :global(.sui-button) { min-height: 34px; }
     .topbar { padding-inline: 8px; gap: 5px; }
     .topbar :global(.brand) { min-width: 0; font-size: 12px; }
     .topbar :global(.brand > span:last-child) { display: none; }
     .controls { gap: 3px; }
     .balance strong { font-size: 12px; }
     .main-area { grid-column: 1; }
-    .bottom { position: fixed; inset: auto 0 0; z-index: var(--layer-workbench-navigation); display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border); }
-    .bottom a { min-height: 49px; align-content: center; gap: 4px; }
-    .bottom a span { display: grid; place-items: center; height: 31px; width: 58px; border-radius: 12px; }
-    .bottom a[aria-current] { color: var(--text); }
-    .bottom a[aria-current] span { background: var(--tint); color: var(--primary); }
-    .event-feedback { bottom: 68px; }
+    .game :global(.bottom) {
+      position: fixed; inset: auto 0 0; z-index: var(--layer-workbench-navigation); display: flex;
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border);
+    }
+
   }
 </style>

@@ -1,11 +1,10 @@
 <script lang="ts">
   import { apiMessage, count, message, t } from '../i18n.svelte';
   import { onMount, tick } from 'svelte';
-  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Search,
+  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Scan, Search,
     Trash2, Undo2, X } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
-  import Help from './Help.svelte';
   import { componentNotes } from './details';
   import TopologyGraph from './TopologyGraph.svelte';
   import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
@@ -13,18 +12,17 @@
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
   import Select from '../controls/Select.svelte';
-  import TextInput from '../controls/TextInput.svelte';
-  import Toggle from '../controls/Toggle.svelte';
+  import { Badge, Button, Checkbox, Form, TextInput, Tooltip } from '@service-unavailable/ui';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { api } from '../api';
   import { inspectorPreference } from './layout-sync';
   import { guideArticleHref, resourceArticle } from '../guide';
   import { target as guideTarget, tutorialApi, type TutorialArchitecture, type TutorialEvent } from './onboarding';
-  import { findPlacement } from './placement';
+  import { findPlacement, type CanvasTools } from './placement';
   import { groupComponents, nestedGroups, removeGroup } from './groups';
   import { connectionError, connectionKind, connectionLabels } from './connections';
   import { componentIcon, statusLabel } from '../labels';
-  import { ms, num, pct, preciseMoney, rps, when } from '../format';
+  import { ms, num, pct, preciseMoney, rps } from '../format';
   import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
   let { game, catalog, act, busy, error, tutorial, tutorialSelect, tutorialState, tutorialEvent, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
@@ -36,57 +34,12 @@
   } = $props();
 
   let compact = $state(false);
-  const minInspector = 245;
-  let defaultInspector = $state(341);
-  let preferredWidth = $state<number>();
-  let workspaceWidth = $state(0);
-  let libraryWidth = $state(0);
-  let dragging = $state<{ pointer: number; start: number; width: number }>();
-  const maxInspector = $derived(Math.max(minInspector, Math.min(600, workspaceWidth - libraryWidth - 320)));
-  const inspectorWidth = $derived(Math.min(maxInspector, Math.max(minInspector, preferredWidth ?? defaultInspector)));
+  const defaultInspectorWidth = 410;
+  let inspectorWidth = $state(defaultInspectorWidth);
 
-  function resizeWidth(width: number) {
-    preferredWidth = Math.round(Math.min(maxInspector, Math.max(minInspector, width)));
-  }
-
-  function resetInspector() {
-    preferredWidth = undefined;
-    inspectorPreference(null);
-  }
-
-  function resizeStart(event: PointerEvent) {
-    if (event.button !== 0 || !event.isPrimary) return;
-    const handle = event.currentTarget as HTMLElement;
-    handle.focus();
-    handle.setPointerCapture(event.pointerId);
-    event.preventDefault();
-    dragging = { pointer: event.pointerId, start: event.clientX, width: inspectorWidth };
-  }
-
-  function resizeMove(event: PointerEvent) {
-    if (dragging?.pointer === event.pointerId) {
-      resizeWidth(dragging.width + dragging.start - event.clientX);
-    }
-  }
-
-  function resizeEnd(event: PointerEvent) {
-    if (dragging?.pointer !== event.pointerId) return;
-    dragging = undefined;
-    inspectorPreference(preferredWidth);
-  }
-
-  function resizeKey(event: KeyboardEvent) {
-    const delta = event.shiftKey ? 50 : 16;
-    const targets: Record<string, number> = {
-      ArrowLeft: inspectorWidth + delta, ArrowRight: inspectorWidth - delta,
-      Home: minInspector, End: maxInspector
-    };
-    if (event.key === 'Enter') resetInspector();
-    else if (Object.hasOwn(targets, event.key)) {
-      resizeWidth(targets[event.key]);
-      inspectorPreference(preferredWidth);
-    } else return;
-    event.preventDefault();
+  function saveInspectorWidth(width: number) {
+    inspectorWidth = width;
+    inspectorPreference(width);
   }
 
   let layout = $state<'canvas' | 'list'>('canvas');
@@ -106,6 +59,8 @@
   let reviewError = $state('');
   let reviewVersion = 0;
   let changedConfig = $state(false);
+  let configurationReturn: 'inspector' | undefined;
+  let referenceReturn: 'catalog' | undefined;
   let reviewing = $state(false);
   let context = $state<{ x: number; y: number }>();
   let cluster = $state(false);
@@ -113,7 +68,7 @@
   let localRevision = -1;
   let editingDraft = false;
   let canvas: HTMLDivElement | undefined = $state();
-  let placement: { place: () => Point; reveal: (point: Point) => void; revealNode: (id: string) => void } | undefined;
+  let placement = $state.raw<CanvasTools>();
   const bindPlacement = (tools?: typeof placement) => { placement = tools; };
 
   export function revealTutorialApi() {
@@ -292,7 +247,6 @@
     return items;
   });
   const changeLabels: Record<string, string> = { added: 'Added', removed: 'Removed', modified: 'Modified', moved: 'Moved', connected: 'Connections added', disconnected: 'Connections removed' };
-  const last = $derived(game.incidents[0]);
   const metrics = $derived(game.snapshot.metrics);
   const summary = $derived([
     { label: 'Active users', value: num(game.audience) },
@@ -302,22 +256,18 @@
   ]);
 
   onMount(() => {
-    preferredWidth = inspectorPreference();
+    inspectorWidth = inspectorPreference() ?? defaultInspectorWidth;
     if (focusId && topology.nodes.some((item) => item.id === focusId)) {
       select(focusId, false);
       if (openConfiguration) void configure();
+      else dialog = 'inspector';
     }
     const query = matchMedia('(max-width: 850px)');
-    const update = () => {
-      compact = query.matches;
-      defaultInspector = window.innerWidth <= 1200 ? 259 : window.innerWidth >= 1600 ? 355 : 341;
-    };
+    const update = () => compact = query.matches;
     update();
     query.addEventListener('change', update);
-    window.addEventListener('resize', update);
     return () => {
       query.removeEventListener('change', update);
-      window.removeEventListener('resize', update);
     };
   });
 
@@ -331,16 +281,12 @@
 
   $effect(() => {
     tutorialState({
-      api: guideApi, selected, missingDraftApi, inspector: !compact || dialog === 'inspector', tab: inspectorTab, dialog, layout,
+      api: guideApi, selected, missingDraftApi, inspector: dialog === 'inspector', tab: inspectorTab, dialog, layout,
       viewingDraft, connectSource: source, connectTarget: target, changedConfig, reviewReady: Boolean(review), reviewPending: reviewing, hasForecast: Boolean(review?.forecast),
       reviewValid: Boolean(review && !review.errors.length && Object.values(review.changes).some((items) => items.length)),
       comparison: dialog === 'deployed' && Boolean(deployed?.comparison),
       collectorVisible: t(catalog.components.monitor.name).toLowerCase().includes(search.trim().toLowerCase())
     });
-  });
-
-  $effect(() => {
-    if (!compact && dialog === 'inspector') dialog = undefined;
   });
 
   function selectTab(tab: typeof inspectorTab) {
@@ -473,7 +419,9 @@
   }
 
   async function configure() {
+    const from = dialog;
     if (active && active.kind !== 'source' && await draft()) {
+      configurationReturn = from === 'inspector' ? from : undefined;
       editError = '';
       changedConfig = false;
       dialog = 'configuration';
@@ -482,7 +430,7 @@
 
   async function updateConfig(name: string, config: Record<string, Setting>) {
     if (await edit((value) => ({ ...value, nodes: value.nodes.map((node) => node.id === selected ? { ...node, name, config } : node) }))) {
-      dialog = compact ? 'inspector' : undefined;
+      if (dialog === 'configuration') dialog = configurationReturn;
     } else editError = 'The server could not save this configuration. Check the values and retry.';
   }
 
@@ -544,6 +492,13 @@
 
 <svelte:window onkeydown={shortcuts} />
 
+{#snippet inspectorFooter()}
+  <Button variant="ghost" disabled={inspectorWidth === defaultInspectorWidth} onclick={() => {
+    inspectorWidth = defaultInspectorWidth;
+    inspectorPreference(null);
+  }}>{t('Reset width')}</Button>
+{/snippet}
+
 {#snippet catalogList()}
   <label class="search"><Search size={14} /><TextInput data-tutorial={guideTarget.catalogSearch} type="search" aria-label={t("Search components")} placeholder={t("Search nodes…")} bind:value={search} /></label>
   {#each categories as category}
@@ -554,10 +509,10 @@
         {#each matches as kind}
           {@const Icon = componentIcon[kind]}
           <div class="catalog-row">
-            <button class="btn catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined} disabled={busy} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></button>
-            <Help label={t("About {0}", [t(catalog.components[kind].name)])}
+            <Button class="catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined} disabled={busy} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
+            <Tooltip label={t("About {0}", [t(catalog.components[kind].name)])}
               text={t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
-              open={() => { helpKind = kind; dialog = 'reference'; }} />
+              onclick={() => { helpKind = kind; referenceReturn = 'catalog'; dialog = 'reference'; }} />
           </div>
         {/each}
       </div>
@@ -566,7 +521,7 @@
   {#if search && !kinds.some((kind) => t(catalog.components[kind].name).toLowerCase().includes(search.trim().toLowerCase()))}<p class="muted">{t("No matching components.")}</p>{/if}
 {/snippet}
 
-{#snippet inspect(full: boolean)}
+{#snippet inspect()}
   {#if active}
     {@const definition = catalog.components[active.kind]}
     {@const Icon = componentIcon[active.kind]}
@@ -574,15 +529,14 @@
       <span class="component-symbol"><Icon size={22} /></span>
       <div><h2>{t(active.name)}</h2><p class="eyebrow {metric?.status === 'failed' ? 'danger' : 'accent'}">{t(definition.name)}{metric ? ` / ${t(statusLabel[metric.status])}` : ''}</p></div>
     </div>
-    {#if full}
       <a class="inspector-help" href={guideArticleHref(guideHref, active.kind)}>{t('Component guide')}</a>
       <div class="switch" data-tutorial-obstruction="top" role="group" aria-label={t("Inspector view")}>
-        <button data-tutorial={active.id === guideApi ? guideTarget.configuration : undefined} aria-pressed={inspectorTab === 'configuration'} onclick={() => selectTab('configuration')}>{t("Configuration")}</button>
-        <button data-tutorial={active.id === guideApi ? guideTarget.metrics : undefined} aria-pressed={inspectorTab === 'metrics'} onclick={() => selectTab('metrics')}>{t("Metrics")}</button>
+        <Button variant="ghost" data-tutorial={active.id === guideApi ? guideTarget.configuration : undefined} aria-pressed={inspectorTab === 'configuration'} onclick={() => selectTab('configuration')}>{t("Configuration")}</Button>
+        <Button variant="ghost" data-tutorial={active.id === guideApi ? guideTarget.metrics : undefined} aria-pressed={inspectorTab === 'metrics'} onclick={() => selectTab('metrics')}>{t("Metrics")}</Button>
       </div>
       {#if metric?.status === 'failed'}
         {@const incident = game.incidents.find((item) => item.active && item.target === active?.id)}
-        <a class="btn danger" href={guideHref.replace('view=guide', 'view=events') + (incident ? `&event=${encodeURIComponent(incident.id)}` : '')}>{t('View incident history')}</a>
+        <Button variant="danger" href={guideHref.replace('view=guide', 'view=events') + (incident ? `&event=${encodeURIComponent(incident.id)}` : '')}>{t('View incident history')}</Button>
       {/if}
       {#if active.kind === 'api'}
         {@const primaries = topology.nodes.filter((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
@@ -603,14 +557,14 @@
       {#if inspectorTab === 'configuration'}
         {#if active.kind === 'api' && activeConfig}
           <div class="stack" data-tutorial={active.id === guideApi ? guideTarget.capacity : undefined}>
-            <div><p class="eyebrow">{t("Instance size")}</p><button class="btn block instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></button></div>
+            <div><p class="eyebrow">{t("Instance size")}</p><Button block class="instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></Button></div>
             <p class="muted">{t('Instances share the node settings and connections. Separate nodes have their own routing and dependencies.')}</p>
             <p class="mono">{t('Aggregate resources: {0} vCPU · {1} GB', [num(Number(activeConfig.cpu) * Number(activeConfig.instances)), num(Number(activeConfig.memory) * Number(activeConfig.instances))])}</p>
             <div class="row spread"><span class="eyebrow">{t("Replicas")}</span>
               <div class="row counter">
-                <button class="btn icon-btn" aria-label={t("Remove replica")} disabled={busy || Number(activeConfig.instances) <= 1} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) - 1 })}><Minus size={14} /></button>
+                <Button iconOnly aria-label={t("Remove replica")} disabled={busy || Number(activeConfig.instances) <= 1} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) - 1 })}><Minus size={14} /></Button>
                 <strong>{activeConfig.instances}</strong>
-                <button class="btn icon-btn accent" aria-label={t("Add replica")} disabled={busy || Number(activeConfig.instances) >= 24} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) + 1 })}><Plus size={14} /></button>
+                <Button iconOnly class="accent" aria-label={t("Add replica")} disabled={busy || Number(activeConfig.instances) >= 24} onclick={() => active && updateConfig(active.name, { ...active.config, instances: Number(activeConfig?.instances) + 1 })}><Plus size={14} /></Button>
               </div>
             </div>
           </div>
@@ -656,7 +610,7 @@
           {#each Object.entries(metric.utilization).slice(0, inspectorTab === 'configuration' ? 2 : undefined) as [label, value]}
             <div class="resource-meter" data-tutorial={inspectorTab === 'metrics' && active.id === guideApi && label === 'CPU' ? guideTarget.cpu : undefined}><div><Meter {value} label={t(label)} /></div>
               {#if metric.database && label !== 'Disk I/O'}
-                <Help label={t('Help with {0}', [t(label)])} text={t('Open the relevant guide article.')} href={guideArticleHref(guideHref, resourceArticle(label))} />
+                <Tooltip label={t('Help with {0}', [t(label)])} text={t('Open the relevant guide article.')} href={guideArticleHref(guideHref, resourceArticle(label))} />
               {/if}
             </div>
           {/each}
@@ -683,33 +637,29 @@
             {@const peer = topology.nodes.find((node) => node.id === (item.source === selected ? item.target : item.source))}
             {@const rate = game.snapshot.traffic.find((traffic) => edgeKey(traffic) === edgeKey(item))?.rps}
             {#if peer}
-              <button class="btn dependency" onclick={() => select(peer.id)}>
+              <Button class="dependency" onclick={() => select(peer.id)}>
                 <span class="row">{#if item.source === selected}<ArrowRight size={13} />{:else}<ArrowLeft size={13} />{/if} {t(peer.name)}</span>
                 <small>{t(connectionLabels[connectionKind(catalog, topology.nodes.find((node) => node.id === item.source)?.kind, topology.nodes.find((node) => node.id === item.target)?.kind)])}{rate === undefined ? '' : ` · ${rps(rate)}`}</small>
-              </button>
+              </Button>
             {/if}
           {/each}
         </div>
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
-      {#if active.kind !== 'source' && !metric?.database?.diagnostic?.upgrades.length}<button class="btn primary block large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></button>{/if}
-      {#if Number(activeConfig?.instances) > 1}<button class="btn block" aria-pressed={cluster} onclick={() => { cluster = !cluster; if (compact) dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</button>{/if}
+      {#if active.kind !== 'source' && !metric?.database?.diagnostic?.upgrades.length}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
+      {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
       {#if viewingDraft}
-        <div class="row wrap"><button class="btn" onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</button>
-        {#if active.kind !== 'source'}<button class="btn danger" disabled={busy} onclick={remove}><Trash2 size={13} /> {t("Remove")}</button>{/if}</div>
+        <div class="row wrap"><Button onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</Button>
+        {#if active.kind !== 'source'}<Button variant="danger" disabled={busy} onclick={remove}><Trash2 size={13} /> {t("Remove")}</Button>{/if}</div>
       {/if}
-    {:else}
-      <p class="muted">{metric ? `${t(statusLabel[metric.status])} · ${rps(metric.rps)}` : t(definition.name)}</p>
-      <button class="btn primary block" data-tutorial={active.id === guideApi ? guideTarget.openInspector : undefined} onclick={() => dialog = 'inspector'}>{t("Open component")} <ArrowRight size={15} /></button>
-    {/if}
   {:else if group}
     <div class="stack">
       <h2>{group.name}</h2>
       <p>{count(groupComponents(group, diagram.groups).filter((id) => topology.nodes.some((node) => node.id === id)).length,
         'component', 'components', ['компонент', 'компонента', 'компонентов'])}</p>
-      <button class="btn" onclick={() => toggleGroup(group.id)}>{group.collapsed ? t("Expand group") : t("Collapse group")}</button>
-      <button class="btn" onclick={() => groupDialog(true)}>{t("Edit group")}</button>
-      <button class="btn" onclick={disband}>{t("Ungroup")}</button>
+      <Button onclick={() => toggleGroup(group.id)}>{group.collapsed ? t("Expand group") : t("Collapse group")}</Button>
+      <Button onclick={() => groupDialog(true)}>{t("Edit group")}</Button>
+      <Button onclick={disband}>{t("Ungroup")}</Button>
     </div>
   {:else if edge}
     {@const from = topology.nodes.find((node) => node.id === edge?.source)}
@@ -721,15 +671,15 @@
     {:else if kind === 'telemetry'}<p>{t("This link sends metrics to the collector and uses one collection slot.")}</p>
     {:else if kind === 'replication'}<p>{t("The read replica subscribes to its primary using this link.")}</p>{/if}
     <div class="row wrap">
-      <button class="btn" disabled={layout !== 'canvas' || (diagram.routes[selectedEdge]?.length ?? 0) >= 24} onclick={addWaypoint}>{t("Add waypoint")}</button>
+      <Button disabled={layout !== 'canvas' || (diagram.routes[selectedEdge]?.length ?? 0) >= 24} onclick={addWaypoint}>{t("Add waypoint")}</Button>
       {#if diagram.routes[selectedEdge]?.length}
-        <button class="btn" onclick={() => updateRoute(selectedEdge, [], true)}>{t("Reset route")}</button>
+        <Button onclick={() => updateRoute(selectedEdge, [], true)}>{t("Reset route")}</Button>
         {#if compact}
-          <button class="btn" onclick={() => updateRoute(selectedEdge, diagram.routes[selectedEdge].slice(0, -1), true)}>{t('Remove last waypoint')}</button>
+          <Button onclick={() => updateRoute(selectedEdge, diagram.routes[selectedEdge].slice(0, -1), true)}>{t('Remove last waypoint')}</Button>
         {/if}
       {/if}
-      <button class="btn" disabled={busy} onclick={openConnect}>{t("Reconnect")}</button>
-      <button class="btn danger" disabled={busy} onclick={remove}>{t("Remove connection")}</button>
+      <Button disabled={busy} onclick={openConnect}>{t("Reconnect")}</Button>
+      <Button variant="danger" disabled={busy} onclick={remove}>{t("Remove connection")}</Button>
     </div>
     </div>
   {:else if selection.length > 1}
@@ -744,25 +694,31 @@
       {#each summary as item}<div><span class="eyebrow">{t(item.label)}</span><strong>{item.value}</strong></div>{/each}
     </div>
   </header>
-  <div class="workspace" class:resizing={Boolean(dragging)} bind:clientWidth={workspaceWidth} style:--inspector-width={`${inspectorWidth}px`}>
-    <aside class="library" bind:offsetWidth={libraryWidth} aria-label={t("Component library")}><h2 class="eyebrow">{t("Component library")}</h2>{@render catalogList()}</aside>
+  <div class="workspace">
     <div class="drawing">
       <div class="canvas-bar row spread wrap" data-tutorial={guideTarget.canvasTools} class:editing={viewingDraft}>
         <div class="row wrap">
-          <span class="badge good"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</span>
+          <Badge tone="success"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</Badge>
         </div>
         <div class="row wrap">
           <div class="request-type">
             <Select label={t('Trace request type')} bind:value={requestType}
               options={[{ value: '', label: t('All traffic') }, ...Object.keys(game.snapshot.demand).map((operation) => ({ value: operation, label: t(catalog.operations[operation]) }))]} />
           </div>
-          {#if layoutFailed}<button class="btn danger" onclick={retryDiagram}>{t("Retry saving layout")}</button>{/if}
-          <button class="btn" aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</button>
-          {#if selection.length > 1}<button class="btn" onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</button>{/if}
-          <button class="btn icon-btn" data-tutorial={guideTarget.list} aria-label={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} title={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} onclick={() => layout = layout === 'canvas' ? 'list' : 'canvas'}>{#if layout === 'canvas'}<List size={16} />{:else}<MousePointer2 size={16} />{/if}</button>
-          <button class="btn" data-tutorial={guideTarget.add} disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; }}><Plus size={14} /> {t("Add node")}</button>
-          <a class="btn" href={guideArticleHref(guideHref, 'topology-editing')}>{t('Guide')}</a>
-          <button class="btn" onclick={() => { helpKind = active?.kind ?? 'api'; dialog = 'reference'; }}>{t("Connection reference")}</button>
+          {#if layoutFailed}<Button variant="danger" onclick={retryDiagram}>{t("Retry saving layout")}</Button>{/if}
+          <Button aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</Button>
+          {#if selection.length > 1}<Button onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</Button>{/if}
+          <Button iconOnly data-tutorial={guideTarget.list} aria-label={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} title={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} onclick={() => layout = layout === 'canvas' ? 'list' : 'canvas'}>{#if layout === 'canvas'}<List size={16} />{:else}<MousePointer2 size={16} />{/if}</Button>
+          {#if layout === 'canvas'}
+            <Button iconOnly aria-label={t('Fit view')} title={t('Fit view')} disabled={!placement} onclick={() => placement?.fit()}><Scan size={16} /></Button>
+          {/if}
+          <Button data-tutorial={guideTarget.add} disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; }}><Plus size={14} /> {t("Add node")}</Button>
+          <Button data-tutorial={active?.id === guideApi ? guideTarget.openInspector : undefined}
+            disabled={!active && !edge && !group && selection.length < 2} onclick={() => dialog = 'inspector'}>
+            {active ? t('Open component') : t('Inspect selection')}
+          </Button>
+          <Button href={guideArticleHref(guideHref, 'topology-editing')}>{t('Guide')}</Button>
+          <Button onclick={() => { helpKind = active?.kind ?? 'api'; referenceReturn = undefined; dialog = 'reference'; }}>{t("Connection reference")}</Button>
         </div>
       </div>
       {#if layout === 'canvas'}
@@ -779,32 +735,32 @@
       {:else}
         <div class="component-list stack">
           {#each visibleGroups as item (item.id)}
-            <button class="btn" aria-pressed={groupSelected === item.id} onclick={() => chooseGroup(item.id)}>
+            <Button aria-pressed={groupSelected === item.id} onclick={() => chooseGroup(item.id)}>
               {item.name} <span class="muted">{item.collapsed ? t('Collapsed') : t('Expanded')}</span>
-            </button>
+            </Button>
           {/each}
           {#each [...topology.nodes, ...removed] as node (node.id)}
             {@const Icon = componentIcon[node.kind]}
-            <button class="btn row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)}>
+            <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)}>
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
-            </button>
+            </Button>
           {/each}
           {#if topology.edges.length}<p class="eyebrow">{t("Connections")}</p>{/if}
           {#each topology.edges as item (edgeKey(item))}
-            <button class="btn" aria-pressed={selectedEdge === edgeKey(item)} onclick={() => selectEdge(edgeKey(item))}>{t(topology.nodes.find((n) => n.id === item.source)?.name ?? '')} → {t(topology.nodes.find((n) => n.id === item.target)?.name ?? '')}</button>
+            <Button aria-pressed={selectedEdge === edgeKey(item)} onclick={() => selectEdge(edgeKey(item))}>{t(topology.nodes.find((n) => n.id === item.source)?.name ?? '')} → {t(topology.nodes.find((n) => n.id === item.target)?.name ?? '')}</Button>
           {/each}
         </div>
       {/if}
       <div class="edit-bar row wrap">
         {#if viewingDraft}
-          <button class="btn" data-tutorial={guideTarget.viewProduction} onclick={() => showProduction = true}>{t('View production')}</button>
-          <button class="btn icon-btn" aria-label={t("Undo draft edit")} title={t("Undo")} disabled={busy || !history.length} onclick={() => undo()}><Undo2 size={16} /></button>
-          <button class="btn icon-btn" aria-label={t("Redo draft edit")} title={t("Redo")} disabled={busy || !future.length} onclick={() => undo(true)}><Redo2 size={16} /></button>
-          <button class="btn" data-tutorial={guideTarget.connect} disabled={busy} onclick={openConnect}>{t("Connect")}</button>
-          <button class="btn" disabled={busy} onclick={() => { review = undefined; dialog = 'discard'; }}>{t("Discard")}</button>
-          <button class="btn primary" data-tutorial={guideTarget.review} disabled={busy} onclick={inspectReview}>{t("Review deployment")} <ArrowRight size={14} /></button>
-        {:else if game.draft}<button class="btn" data-tutorial={guideTarget.returnDraft} onclick={() => showProduction = false}>{t('Return to draft')}</button>
-        {:else}<button class="btn" data-tutorial={guideTarget.createDraft} disabled={busy} onclick={draft}><GitBranch size={15} /> {t("Create draft")}</button>{/if}
+          <Button data-tutorial={guideTarget.viewProduction} onclick={() => showProduction = true}>{t('View production')}</Button>
+          <Button iconOnly aria-label={t("Undo draft edit")} title={t("Undo")} disabled={busy || !history.length} onclick={() => undo()}><Undo2 size={16} /></Button>
+          <Button iconOnly aria-label={t("Redo draft edit")} title={t("Redo")} disabled={busy || !future.length} onclick={() => undo(true)}><Redo2 size={16} /></Button>
+          <Button data-tutorial={guideTarget.connect} disabled={busy} onclick={openConnect}>{t("Connect")}</Button>
+          <Button disabled={busy} onclick={() => { review = undefined; dialog = 'discard'; }}>{t("Discard")}</Button>
+          <Button variant="primary" data-tutorial={guideTarget.review} disabled={busy} onclick={inspectReview}>{t("Review deployment")} <ArrowRight size={14} /></Button>
+        {:else if game.draft}<Button data-tutorial={guideTarget.returnDraft} onclick={() => showProduction = false}>{t('Return to draft')}</Button>
+        {:else}<Button data-tutorial={guideTarget.createDraft} disabled={busy} onclick={draft}><GitBranch size={15} /> {t("Create draft")}</Button>{/if}
       </div>
       <ul class="edge-legend row wrap" aria-label={t('Connection types')}>
         <li style:--edge-color="#c7f46c">{t('Application requests')}</li>
@@ -814,56 +770,29 @@
         <li class="dashed" style:--edge-color="#8cbdf3">{t('Metrics collection')}</li>
       </ul>
     </div>
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (A focusable ARIA separator is an interactive window splitter.) -->
-    <div class="resize-handle" role="separator" tabindex="0"
-      aria-label={t('Resize component inspector')} aria-orientation="vertical" aria-controls="component-inspector"
-      aria-valuemin={minInspector} aria-valuemax={maxInspector} aria-valuenow={inspectorWidth}
-      onpointerdown={resizeStart} onpointermove={resizeMove} onpointerup={resizeEnd}
-      onlostpointercapture={resizeEnd} onpointercancel={resizeEnd} ondblclick={resetInspector} onkeydown={resizeKey}></div>
-    <aside data-tutorial-scroll id="component-inspector" class="inspector" aria-label={t("Component inspector")}>
-      <div class="row spread wrap desktop-only">
-        <p class="eyebrow">{t("Component inspector")}</p>
-        <button class="btn reset-width" disabled={preferredWidth === undefined} onclick={resetInspector}>{t('Reset width')}</button>
-      </div>
-      {@render inspect(!compact)}
-      {#if viewingDraft && !compact}
-        <section class="draft-summary stack">
-          <div><p class="eyebrow accent">{t("Draft summary")}</p><h2>{pendingChanges.length} {t("pending changes")}</h2></div>
-          {#each pendingChanges.slice(0, 3) as item}
-            <div class="panel draft-item"><strong class={item.tone === 'good' ? 'accent' : item.tone === 'bad' ? 'danger' : item.tone === 'warn' ? 'warning' : ''}>{t(item.label)}</strong><small>{t(item.note)}</small></div>
-          {/each}
-          {#if pendingChanges.length > 3}<small>+{pendingChanges.length - 3} {t("more in review")}</small>{/if}
-          <div class="row spread"><span class="eyebrow">{t("Daily cost change")}</span><strong>{delta >= 0 ? '+' : ''}{preciseMoney(delta)}</strong></div>
-        </section>
-      {/if}
-    </aside>
   </div>
-  <footer class="live row spread">
-    <div><p class="eyebrow">{t("Live events")}</p><p>{last ? `${when(last.start, game.start_minute, catalog.minutes_per_tick)} · ${message(last.title)}` : t("No events recorded")}</p></div>
-    <span class="row mono {metrics.availability < .95 ? 'warning' : 'accent'}"><i class="dot" aria-hidden="true"></i> {pct(metrics.availability, 1)} {t("availability")}</span>
-  </footer>
 </section>
 
 {#if context}
   <div class="context panel stack" style:left={`${context.x}px`} style:top={`${context.y}px`}>
-    <button class="btn" onclick={() => { dialog = 'catalog'; context = undefined; }}>{t("Add node")}</button>
-    {#if active && active.kind !== 'source'}<button class="btn" onclick={() => { context = undefined; void configure(); }}>{t("Edit configuration")}</button>{/if}
+    <Button onclick={() => { dialog = 'catalog'; context = undefined; }}>{t("Add node")}</Button>
+    {#if active && active.kind !== 'source'}<Button onclick={() => { context = undefined; void configure(); }}>{t("Edit configuration")}</Button>{/if}
     {#if edge}
-      <button class="btn" onclick={() => { addWaypoint(); context = undefined; }}>{t("Add waypoint")}</button>
-      {#if diagram.routes[selectedEdge]?.length}<button class="btn" onclick={() => { updateRoute(selectedEdge, [], true); context = undefined; }}>{t("Reset route")}</button>{/if}
+      <Button onclick={() => { addWaypoint(); context = undefined; }}>{t("Add waypoint")}</Button>
+      {#if diagram.routes[selectedEdge]?.length}<Button onclick={() => { updateRoute(selectedEdge, [], true); context = undefined; }}>{t("Reset route")}</Button>{/if}
     {/if}
-    {#if viewingDraft && (edge || (active && active.kind !== 'source'))}<button class="btn danger" onclick={remove}>{t("Remove selected")}</button>{/if}
-    <button class="btn" onclick={() => context = undefined}><X size={14} /> {t("Close menu")}</button>
+    {#if viewingDraft && (edge || (active && active.kind !== 'source'))}<Button variant="danger" onclick={remove}>{t("Remove selected")}</Button>{/if}
+    <Button onclick={() => context = undefined}><X size={14} /> {t("Close menu")}</Button>
   </div>
 {/if}
 
 {#if dialog === 'deployed' && deployed?.comparison}
   <Modal title={t("Deployment complete")} close={() => dialog = undefined}>
     <div data-tutorial={guideTarget.compare}><DeploymentComparison comparison={deployed.comparison} /></div>
-    {#snippet footer()}<button class="btn primary" data-tutorial={guideTarget.done} onclick={() => dialog = undefined}>{t("Done")}</button>{/snippet}
+    {#snippet footer()}<Button variant="primary" data-tutorial={guideTarget.done} onclick={() => dialog = undefined}>{t("Done")}</Button>{/snippet}
   </Modal>
 {:else if dialog === 'reference'}
-  <Modal title={t("Connection reference")} close={() => dialog = undefined}>
+  <Modal title={t("Connection reference")} close={() => dialog = referenceReturn}>
     <div class="stack">
       <div class="field"><span>{t("Component type")}</span>
         <Select label={t("Component type")} value={helpKind} onchange={(value) => helpKind = value as Kind}
@@ -884,7 +813,7 @@
   </Modal>
 {:else if dialog === 'group'}
   <Modal title={group ? t("Edit group") : t("Create group")} close={() => dialog = undefined}>
-    <form id="diagram-group" class="stack" onsubmit={(event) => { event.preventDefault(); saveGroup(); }}>
+    <Form id="diagram-group" class="stack" onsubmit={(event) => { event.preventDefault(); saveGroup(); }}>
       <label class="field"><span>{t("Group name")}</span><TextInput bind:value={groupName} maxlength={60} required /></label>
       {#if diagram.groups.length > (group ? 1 : 0)}
         <div class="field"><span>{t('Parent group')}</span><Select label={t('Parent group')} bind:value={groupParent}
@@ -892,29 +821,41 @@
       {/if}
       <fieldset class="stack"><legend>{t("Components")}</legend>
         {#each topology.nodes as node (node.id)}
-          <label class="row"><Toggle checked={groupMembers.includes(node.id)} onchange={(checked) => groupMembers = checked ? [...groupMembers, node.id] : groupMembers.filter((id) => id !== node.id)} />{t(node.name)}</label>
+          <Checkbox label={t(node.name)} checked={groupMembers.includes(node.id)} onchange={({ currentTarget }) => groupMembers = currentTarget.checked ? [...groupMembers, node.id] : groupMembers.filter((id) => id !== node.id)} />
         {/each}
       </fieldset>
-    </form>
-    {#snippet footer()}<button class="btn primary" form="diagram-group" type="submit" disabled={!groupMembers.length}>{t("Save group")}</button>{/snippet}
+    </Form>
+    {#snippet footer()}<Button variant="primary" form="diagram-group" type="submit" disabled={!groupMembers.length}>{t("Save group")}</Button>{/snippet}
   </Modal>
 {:else if dialog === 'catalog'}
-  <Modal title={t("Component library")} subtitle={t("Add a component to the architecture draft.")} close={() => dialog = undefined}>
+  <Modal title={t("Component library")} side="start" subtitle={t("Add a component to the architecture draft.")} close={() => dialog = undefined}>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     {@render catalogList()}
   </Modal>
 {:else if dialog === 'inspector'}
-  <Modal title={t("Component inspector")} fullscreen={compact} close={() => dialog = undefined}>
-    <div class="stack modal-inspector">{@render inspect(true)}</div>
+  <Modal title={t("Component inspector")} side="end" width={inspectorWidth} resize={saveInspectorWidth} footer={compact ? undefined : inspectorFooter} close={() => dialog = undefined}>
+    <div class="stack">
+      {@render inspect()}
+      {#if viewingDraft}
+        <section class="draft-summary stack">
+          <div><p class="eyebrow accent">{t("Draft summary")}</p><h2>{pendingChanges.length} {t("pending changes")}</h2></div>
+          {#each pendingChanges.slice(0, 3) as item}
+            <div class="panel draft-item"><strong class={item.tone === 'good' ? 'accent' : item.tone === 'bad' ? 'danger' : item.tone === 'warn' ? 'warning' : ''}>{t(item.label)}</strong><small>{t(item.note)}</small></div>
+          {/each}
+          {#if pendingChanges.length > 3}<small>+{pendingChanges.length - 3} {t("more in review")}</small>{/if}
+          <div class="row spread"><span class="eyebrow">{t("Daily cost change")}</span><strong>{delta >= 0 ? '+' : ''}{preciseMoney(delta)}</strong></div>
+        </section>
+      {/if}
+    </div>
   </Modal>
 {:else if dialog === 'configuration' && active}
   <Configuration serviceRoles={catalog.service_roles} operationNames={catalog.operations} workloads={game.snapshot.demand} engineering={game.engineering} component={active} daily={(viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0} storage={catalog.database_storage} {guideHref} definition={catalog.components[active.kind]} {busy} error={error || editError}
-    close={() => dialog = compact ? 'inspector' : undefined} apply={updateConfig} onEdited={(changed) => changedConfig = changed}
+    close={() => dialog = configurationReturn} apply={updateConfig} onEdited={(changed) => changedConfig = changed}
     preview={(name, config) => api<Review>(`/${game.id}/draft/review`, 'POST', { revision: game.revision, topology:
       { ...topology, nodes: topology.nodes.map((node) => node.id === selected ? { ...node, name, config } : node) } })} />
 {:else if dialog === 'connect'}
   <Modal title={replacedEdge ? t("Reconnect components") : t("Connect components")} close={() => { dialog = undefined; editError = ''; }}>
-    <form id="connect-components" class="stack" onsubmit={(event) => { event.preventDefault(); if (target) void connect({ source, target }, replacedEdge); }}>
+    <Form id="connect-components" class="stack" onsubmit={(event) => { event.preventDefault(); if (target) void connect({ source, target }, replacedEdge); }}>
       {#if error || editError}<p class="notice error" role="alert">{message(error || editError)}</p>{/if}
       <div class="field"><span>{t("Source component")}</span><Select data-tutorial={guideTarget.source} label={t("Source component")}
         bind:value={source} onchange={() => target = ''} searchable
@@ -927,14 +868,14 @@
         {#if kind === 'cache'}<p>{t("Keep a direct API-to-primary connection for writes. Add API-to-cache for read lookups.")}</p>{/if}
       {/if}
       {#if !targets.length}<p class="muted">{t("There are no new compatible connections from this component.")}</p>{/if}
-    </form>
-    {#snippet footer()}<button class="btn primary block" type="submit" form="connect-components" data-tutorial={guideTarget.saveLink} disabled={busy || !target}>{t("Connect components")}</button>{/snippet}
+    </Form>
+    {#snippet footer()}<Button variant="primary" block type="submit" form="connect-components" data-tutorial={guideTarget.saveLink} disabled={busy || !target}>{t("Connect components")}</Button>{/snippet}
   </Modal>
 {:else if dialog === 'discard'}
   <Modal title={t("Discard draft")} close={() => dialog = undefined}>
     <p>{t("Remove all edits in the current draft?")}</p>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-    {#snippet footer()}<div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn danger" disabled={busy} onclick={() => finish(false)}>{t("Discard draft")}</button></div>{/snippet}
+    {#snippet footer()}<div class="row spread"><Button onclick={() => dialog = undefined}>{t("Cancel")}</Button><Button variant="danger" disabled={busy} onclick={() => finish(false)}>{t("Discard draft")}</Button></div>{/snippet}
   </Modal>
 {:else if dialog === 'review'}
   <Modal title={t("Deployment review")} subtitle={t("Validate the draft and check its impact before deploying.")} wide close={() => dialog = undefined}>
@@ -969,9 +910,9 @@
       {/if}
     </div>
     {#snippet footer()}
-      <div class="row spread wrap"><button class="btn" onclick={() => dialog = undefined}>{t("Back to draft")}</button>
-        <button class="btn primary" data-tutorial={guideTarget.deploy} disabled={busy || !review || review.errors.length > 0 || !Object.values(review.changes).some((items) => items.length)}
-          onclick={() => finish(true)}>{t("Deploy changes")} <ArrowRight size={15} /></button>
+      <div class="row spread wrap"><Button onclick={() => dialog = undefined}>{t("Back to draft")}</Button>
+        <Button variant="primary" data-tutorial={guideTarget.deploy} disabled={busy || !review || review.errors.length > 0 || !Object.values(review.changes).some((items) => items.length)}
+          onclick={() => finish(true)}>{t("Deploy changes")} <ArrowRight size={15} /></Button>
       </div>
     {/snippet}
   </Modal>
@@ -981,32 +922,23 @@
   .edge-legend { margin: 0; padding: 5px 10px 8px; list-style: none; gap: 6px 14px; color: var(--muted); font-size: 11px; }
   .edge-legend li::before { content: ''; display: inline-block; width: 15px; margin: 0 5px 3px 0; border-top: 2px solid var(--edge-color); }
   .edge-legend li.dashed::before { border-top-style: dashed; }
-  .architecture { min-width: 0; display: grid; grid-template-rows: auto minmax(550px, 1fr) auto; min-height: calc(100dvh - 65px); }
+  .architecture { min-width: 0; display: grid; grid-template-rows: auto minmax(550px, 1fr); min-height: calc(100dvh - 65px); }
   .topology-header { display: grid; grid-template-columns: .95fr 1.1fr; align-items: center; gap: 12px; min-height: 91px; background: var(--background); padding: 12px 26px; }
   .topology-header h1 { font-size: 26px; margin-top: 5px; }
   .service-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
   .service-metrics strong { display: block; font-size: clamp(15px, 1.7vw, 25px); overflow-wrap: anywhere; margin-top: 4px; }
   .service-metrics span { font-size: 10px; }
-  .workspace { min-width: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr) 10px var(--inspector-width); border-block: 1px solid var(--border); }
-  .library, .inspector { min-width: 0; background: var(--rail); padding: 22px 20px; }
-  .library { border-right: 1px solid var(--border); padding-bottom: 14px; }
-  .library > h2 { color: var(--text); margin-bottom: 17px; }
-  .inspector { display: grid; align-content: start; gap: 16px; border-left: 1px solid var(--border); }
-  .resize-handle { position: relative; z-index: 1; cursor: col-resize; touch-action: none; background: var(--background); }
-  .resize-handle::after { content: ''; position: absolute; inset: 10px 3px; border-radius: 4px; background: var(--border); }
-  .resize-handle:hover::after, .resize-handle:focus-visible::after, .resizing .resize-handle::after { background: var(--primary); }
-  .resizing { cursor: col-resize; user-select: none; }
-  .reset-width { min-height: 28px; font-size: 11px; }
+  .workspace { min-width: 0; display: grid; border-block: 1px solid var(--border); }
   .inspector-help { color: var(--primary); text-decoration: underline; width: fit-content; font-size: 13px; }
   .resource-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
   .catalog-group { display: grid; gap: 5px; margin: 17px 0 0; }
   .catalog-group h3 { margin-bottom: 2px; }
   .catalog-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: center; }
-  .dependency { display: grid; justify-content: start; text-align: left; overflow-wrap: anywhere; }
-  .dependency small { color: var(--muted); }
-  .catalog-item { min-height: 40px; padding-inline: 8px; gap: 7px; justify-content: flex-start; text-align: left; }
-  .catalog-item :global(svg) { color: var(--primary); flex: 0 0 auto; }
-  .catalog-item span { min-width: 0; overflow-wrap: anywhere; }
+  .stack > :global(.dependency) { display: grid; justify-content: start; text-align: left; overflow-wrap: anywhere; }
+  .stack > :global(.dependency small) { color: var(--muted); }
+  .catalog-row :global(.catalog-item) { min-height: 40px; padding-inline: 8px; gap: 7px; justify-content: flex-start; text-align: left; }
+  .catalog-row :global(.catalog-item svg) { color: var(--primary); flex: 0 0 auto; }
+  .catalog-row :global(.catalog-item span) { min-width: 0; overflow-wrap: anywhere; }
   .search { display: flex; align-items: center; gap: 4px; padding-left: 8px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
   .search :global(input) { border: 0; background: none; min-height: 35px; font-size: 12px; padding-left: 5px; }
   .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: var(--background); }
@@ -1024,36 +956,25 @@
   .canvas-hint { position: absolute; bottom: 10px; left: 52px; font-size: 10px; color: var(--muted); pointer-events: none; }
   .edit-bar { z-index: 1; justify-content: flex-end; padding: 10px 15px; border-top: 1px solid var(--border); }
   .component-list { padding: 16px; align-content: start; overflow: auto; }
-  .component-list button { justify-content: space-between; text-align: left; }
+  .component-list :global(button) { justify-content: space-between; text-align: left; }
   .identity { padding: 13px; }
   .identity > :last-child { min-width: 0; }
   .identity h2 { overflow-wrap: anywhere; }
   .identity p { margin-top: 3px; }
   .component-symbol { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; background: var(--tint); color: var(--primary); }
-  .switch { position: sticky; scroll-margin-top: 8px; top: 0; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; border-radius: 8px; background: var(--surface); }
-  .switch button { border-radius: 8px; min-height: 36px; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
-  .modal-inspector .switch { position: static; }
-  .switch button[aria-pressed="true"] { color: var(--text); background: var(--tint); font-weight: 600; }
-  .instance { margin-top: 5px; justify-content: space-between; }
+  .switch { display: grid; grid-template-columns: 1fr 1fr; border-radius: 8px; background: var(--surface); }
+  .switch :global(button) { border-radius: 8px; min-height: 36px; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
+  .switch :global(button[aria-pressed="true"]) { color: var(--text); background: var(--tint); font-weight: 600; }
+  .stack :global(.instance) { margin-top: 5px; justify-content: space-between; }
   .counter { gap: 7px; padding-inline: 1px; }
-  .counter button { min-height: 32px; }
+  .counter :global(button) { min-height: 32px; }
   .cost { padding-top: 13px; border-top: 1px solid var(--border); }
   .cost strong { font-size: 22px; }
   .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; font-size: 12px; }
   .metrics dd { font-family: var(--mono); }
-  .live { min-height: 76px; padding: 15px 26px; background: var(--background); font-size: 12px; }
-  .live p + p { margin-top: 5px; }
   .context { position: fixed; z-index: 10; width: 175px; padding: 8px; gap: 5px; }
   .mobile-sub, .mobile-heading { display: none; }
-  @media (min-width: 851px) {
-    .inspector { max-height: max(550px, calc(100dvh - 232px)); overflow-y: auto; grid-auto-rows: max-content; }
-  }
-  @media (min-width: 1600px) {
-    .workspace { grid-template-columns: 240px minmax(0, 1fr) 10px var(--inspector-width); }
-  }
   @media (min-width: 851px) and (max-width: 1200px) {
-    .workspace { grid-template-columns: 170px minmax(0, 1fr) 10px var(--inspector-width); }
-    .library, .inspector { padding: 17px 13px; }
     .topology-header { padding-inline: 18px; }
   }
   @media (max-width: 850px) {
@@ -1062,7 +983,7 @@
     .topology-header h1 { margin: 0; }
     .desktop-heading { display: none; }
     .mobile-heading { display: inline; }
-    .topology-header .eyebrow, .service-metrics, .desktop-only, .library, .live, .resize-handle { display: none; }
+    .topology-header .eyebrow, .service-metrics { display: none; }
     .mobile-sub { display: block; font-size: 12px; }
     .workspace { display: flex; flex-direction: column; gap: 13px; border: 0; }
     .drawing { min-height: 0; background: none; display: flex; flex-direction: column; }
@@ -1074,9 +995,6 @@
   .request-type { max-width: 185px; }
   .canvas-bar.editing { background: transparent; }
     .edit-bar { padding-bottom: 0; }
-    .inspector { padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); gap: 7px; }
-    .inspector .identity { padding: 0; border: 0; }
-    .inspector .component-symbol { width: 35px; height: 35px; flex-basis: 35px; }
     .component-list { border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
   }
 </style>

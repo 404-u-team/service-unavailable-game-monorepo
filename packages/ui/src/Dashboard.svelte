@@ -1,6 +1,7 @@
 <script lang="ts">
   import { GripVertical, LayoutGrid, MoveDiagonal2, Pencil, Settings2 } from '@lucide/svelte';
   import { onDestroy, tick, untrack } from 'svelte';
+  import type { Snippet } from 'svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
   import Slideover from './Slideover.svelte';
@@ -12,9 +13,11 @@
     type DashboardWidgetState
   } from './dashboard';
 
-  let { title, widgets, snapshot, onchange, t, columns: requestedColumns = 12, rowHeight = 56,
+  let { title, headingLevel = 2, tools, widgets, snapshot, onchange, t, columns: requestedColumns = 12, rowHeight = 56,
     compactWidth = 720, readonly = false }: {
     title: string;
+    headingLevel?: 1 | 2;
+    tools?: Snippet;
     widgets: readonly DashboardWidgetDefinition[];
     snapshot?: unknown;
     onchange?: (snapshot: DashboardState) => void;
@@ -109,6 +112,10 @@
 
   export function getSnapshot() {
     return parseDashboardState(current)!;
+  }
+
+  export function showWidget(id: string) {
+    visibility(id, true);
   }
 
   async function restoreHandleFocus(handle: HTMLElement) {
@@ -265,16 +272,17 @@
 
 <section aria-labelledby={titleId}>
   <header class="toolbar">
-    <h2 id={titleId}>{title}</h2>
-    {#if !readonly}
-      <div class="actions">
+    <svelte:element this={headingLevel === 1 ? 'h1' : 'h2'} id={titleId} class="heading">{title}</svelte:element>
+    <div class="actions">
+      {@render tools?.()}
+      {#if !readonly}
         {#if editable}<Button onclick={() => manage = true}><LayoutGrid size={16} aria-hidden="true" />{t('Widgets')}</Button>{/if}
         <Button variant={editable ? 'primary' : 'secondary'} onclick={() => editing = !editing}>
           {#if !editable}<Pencil size={16} aria-hidden="true" />{/if}
           {editable ? t('Done editing') : t('Edit layout')}
         </Button>
-      </div>
-    {/if}
+      {/if}
+    </div>
   </header>
   {#if editable}
     <p class="instructions">{compact
@@ -357,7 +365,8 @@
   .toolbar, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sui-space-2); }
   .toolbar { justify-content: space-between; gap: var(--sui-space-3); }
   .actions { justify-content: end; }
-  h2 { margin: 0; font: var(--sui-title); overflow-wrap: anywhere; }
+  .heading { margin: 0; font: var(--sui-title); overflow-wrap: anywhere; }
+  h1.heading { font: var(--sui-display); }
   .instructions { margin: 0; color: var(--sui-muted); }
   .grid { display: grid; grid-template-columns: repeat(var(--columns), minmax(0, 1fr)); grid-auto-rows: var(--row-height); gap: var(--sui-space-3); min-inline-size: 0; }
   .grid.compact { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }

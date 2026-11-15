@@ -12,7 +12,9 @@ services:
     restart: unless-stopped
 
   workbench:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     environment:
       CORE_API_URL: http://core-api:8000
       ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to the public HTTPS origin}

@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test';
 import type { Game } from '../src/lib/types';
 
 async function start(page: Page) {
-  await page.goto('/');
   const response = await page.request.post('/api/games', {
     data: { id: crypto.randomUUID(), name: 'Live workbench', seed: 7, settings: { show_tutorial: false } }
   });
@@ -37,15 +36,19 @@ test('live socket reconnects across tabs without polling and shortcuts respect e
   await expect(other.getByRole('button', { name: 'Fast speed (5×)' })).toHaveAttribute('aria-pressed', 'true');
   const currentTime = await page.locator('.time').textContent();
   await expect(page.locator('.time')).not.toHaveText(currentTime!);
-  const search = page.getByRole('searchbox', { name: 'Search components' });
+  await page.getByRole('button', { name: 'Add node', exact: true }).click();
+  const library = page.getByRole('dialog', { name: 'Component library' });
+  const search = library.getByRole('searchbox', { name: 'Search components' });
   await search.focus();
   await page.keyboard.press('1');
   await expect(search).toHaveValue('1');
+  await page.keyboard.press('Escape');
+  await expect(library).toBeHidden();
   await expect(speed).toHaveAttribute('aria-pressed', 'true');
   expect(dropLive).toBeDefined();
   dropLive?.();
-  await expect(page.getByText('Live connection lost. Reconnecting…')).toBeVisible();
-  await expect(page.getByText('Live connection lost. Reconnecting…')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Notifications' }).getByText('Live connection lost. Reconnecting…')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Notifications' }).getByText('Live connection lost. Reconnecting…')).toHaveCount(0);
   await expect.poll(() => sockets.length).toBeGreaterThan(1);
   await other.getByRole('button', { name: 'Pause simulation' }).click();
   await expect(page.getByRole('button', { name: 'Pause simulation' })).toHaveAttribute('aria-pressed', 'true');
@@ -90,7 +93,7 @@ test('wheel and middle drag navigate the canvas, and newly added nodes stay in v
   expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
   expect(box.y + box.height).toBeLessThanOrEqual(bounds.y + bounds.height + 1);
   await page.keyboard.press('Control+s');
-  await expect(page.getByText('Game saved', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Notifications' }).getByText('Game saved', { exact: true })).toBeVisible();
   const data: Game = await (await page.request.get(`/api/games/${initial.id}`)).json();
   expect(data.diagram.viewports?.wide?.zoom).toBeGreaterThan(initialView.zoom);
   expect(data.production).toEqual(initial.production);
@@ -120,19 +123,18 @@ test('raw utilization values render equal meter fills in English and Russian', a
     socket.send(JSON.stringify({ type: 'snapshot', seq: 1, state: sample }));
   });
 
-  for (const [locale, label] of [['en', 'Metrics'], ['ru', 'Метрики']]) {
+  for (const [locale, open, label] of [['en', 'Open component', 'Metrics'], ['ru', 'Открыть компонент', 'Метрики']]) {
     await page.evaluate((value) => localStorage.setItem('workbench-language', value), locale);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('lang', locale);
+    await page.getByRole('button', { name: open, exact: true }).click();
     await page.getByRole('button', { name: label, exact: true }).click();
     for (const [index, value] of values.entries()) {
       const meter = page.getByRole('meter', { name: `Resource ${index}` });
-      await expect(meter).toHaveAttribute('aria-valuenow', String(value * 100));
-      const width = await meter.evaluate((bar) => {
-        const fill = bar.firstElementChild!.getBoundingClientRect().width;
-        return fill / bar.getBoundingClientRect().width;
-      });
-      expect(width).toBeCloseTo(value, 2);
+      await expect.poll(() => meter.evaluate((element) => {
+        const bar = element as HTMLMeterElement;
+        return (bar.value - bar.min) / (bar.max - bar.min);
+      })).toBeCloseTo(value, 2);
     }
   }
 });

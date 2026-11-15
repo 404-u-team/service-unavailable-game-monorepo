@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Tone } from './types';
 
-  let { label, value, min = 0, max = 100, valueText, tone = 'success' }: {
-    label: string; value: number; min?: number; max?: number; valueText?: string; tone?: Tone;
+  let { label, value, min = 0, max = 100, valueText, tone = 'success', showLabel = true }: {
+    label: string; value: number; min?: number; max?: number; valueText?: string; tone?: Tone; showLabel?: boolean;
   } = $props();
   const id = $props.id();
   const bounded = $derived(Math.min(max, Math.max(min, value)));
@@ -10,8 +10,8 @@
 </script>
 
 <div class="meter" data-sui-tone={tone}>
-  <div><label for={id}>{label}</label><span aria-hidden="true">{displayed}</span></div>
-  <meter {id} {min} {max} value={bounded} aria-valuetext={valueText}></meter>
+  {#if showLabel}<div><label for={id}>{label}</label><span aria-hidden="true">{displayed}</span></div>{/if}
+  <meter {id} {min} {max} value={bounded} aria-label={showLabel ? undefined : label} aria-valuetext={valueText}></meter>
 </div>
 
 <style>

@@ -1,0 +1,6 @@
+{
+  "name": "service-unavailable",
+  "private": true,
+  "workspaces": ["frontend", "packages/ui"],
+  "packageManager": "bun@1.4.2"
+}

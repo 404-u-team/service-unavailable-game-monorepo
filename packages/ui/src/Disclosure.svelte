@@ -2,17 +2,18 @@
   import { ChevronDown } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
 
-  let { label, open = $bindable(false), name, variant = 'inline', children }: {
+  let { label, open = $bindable(false), name, variant = 'inline', summaryAttributes, children }: {
     label: string;
     open?: boolean;
     name?: string;
     variant?: 'inline' | 'panel';
+    summaryAttributes?: Record<`data-${string}`, string | undefined>;
     children: Snippet;
   } = $props();
 </script>
 
 <details {name} bind:open class:panel={variant === 'panel'}>
-  <summary class="sui-focus">
+  <summary {...summaryAttributes} class="sui-focus">
     <ChevronDown size={16} aria-hidden="true" />
     {label}
   </summary>

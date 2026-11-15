@@ -53,7 +53,7 @@ for (const locale of ['en', 'ru'] as const) {
         await expect(preview.getByText(locale === 'en' ? 'Save version' : 'Версия сохранения')).toBeVisible();
         await expect(preview.getByText(locale === 'en' ? 'Export date' : 'Дата экспорта')).toBeVisible();
         await preview.getByRole('button', { name: locale === 'en' ? 'Import as new save' : 'Импортировать как новое сохранение' }).click();
-        await expect(receiving.getByRole('status')).toContainText(locale === 'en' ? 'Save imported successfully.' : 'Сохранение успешно импортировано.');
+        await expect(receiving.getByRole('region', { name: locale === 'en' ? 'Notifications' : 'Уведомления' })).toContainText(locale === 'en' ? 'Save imported successfully.' : 'Сохранение успешно импортировано.');
         const imported = receiving.getByRole('link', { name: locale === 'en' ? 'Open imported save' : 'Открыть импортированное сохранение' });
         const copyId = (await imported.getAttribute('href'))!.split('/')[2].split('?')[0];
         expect(copyId).not.toBe(id);

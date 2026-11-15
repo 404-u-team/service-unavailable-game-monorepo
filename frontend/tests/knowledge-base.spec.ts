@@ -49,7 +49,9 @@ test('desktop inspector resizes without moving draft nodes and restores the loca
   await page.goto(url);
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('button', { name: 'Review deployment' })).toBeVisible();
-  const inspector = page.getByRole('complementary', { name: 'Component inspector' });
+  const open = page.getByRole('button', { name: 'Open component' });
+  await open.click();
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
   const handle = page.getByRole('separator', { name: 'Resize component inspector' });
   const canvas = page.locator('[data-tutorial="topology.canvas"]');
   const width = () => inspector.evaluate((node) => node.getBoundingClientRect().width);
@@ -68,11 +70,12 @@ test('desktop inspector resizes without moving draft nodes and restores the loca
   await page.mouse.move(x - 115, y, { steps: 7 });
   await expect.poll(width).toBe(before + 115);
   await page.mouse.up();
-  expect(await canvasWidth()).toBe(originalCanvas - 115);
+  expect(await canvasWidth()).toBe(originalCanvas);
   expect(await node.evaluate((item) => (item as HTMLElement).style.transform)).toBe(position);
   await expect(inspector.getByRole('button', { name: 'Metrics', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
   await page.reload();
+  await open.click();
   await expect.poll(width).toBe(before + 115);
   await handle.focus();
   await handle.press('End');
@@ -120,7 +123,7 @@ for (const language of ['en', 'ru'] as const) {
         await expect(navigation).toBeHidden();
         await categories.click();
         await expect(navigation).toBeVisible();
-        await categories.click();
+        await page.getByRole('dialog').getByRole('button', { name: ru ? 'Закрыть окно' : 'Close dialog' }).click();
       }
       const fit = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
       expect(await fit()).toBe(true);
@@ -131,12 +134,10 @@ for (const language of ['en', 'ru'] as const) {
       await expect(results.locator('a[href$="article=database"]')).toBeVisible();
       await page.goto(`${base}?view=build&component=db`);
       const inspectorName = ru ? 'Сведения о компоненте' : 'Component inspector';
-      let inspector = page.getByRole('complementary', { name: inspectorName });
+      const inspector = page.getByRole('dialog', { name: inspectorName });
+      await expect(inspector).toBeVisible();
       if (mobile) {
-        await expect(page.getByRole('separator', { name: ru ? 'Изменить ширину панели компонента' : 'Resize component inspector' })).toBeHidden();
-        await inspector.getByRole('button', { name: ru ? 'Открыть компонент' : 'Open component' }).click();
-        inspector = page.getByRole('dialog', { name: inspectorName });
-        await expect(inspector).toBeVisible();
+        await expect(inspector.getByRole('separator')).toBeHidden();
         expect((await inspector.boundingBox())?.width).toBe(390);
       }
       await expect(inspector.getByRole('link', { name: ru ? 'Справка о компоненте' : 'Component guide' })).toBeVisible();

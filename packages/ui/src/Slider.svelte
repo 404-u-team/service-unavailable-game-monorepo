@@ -2,11 +2,12 @@
   import NumberInput from './NumberInput.svelte';
   import type { NumberStepLabels } from './types';
 
-  let { value = $bindable(), min, max, step = 1, id, name, disabled = false, unit, manualLabel, manualStepLabels, ...a11y }: {
+  let { value = $bindable(), min, max, step = 1, allowOffStep = false, id, name, disabled = false, unit, manualLabel, manualStepLabels, ...a11y }: {
     value: number;
     min: number;
     max: number;
     step?: number;
+    allowOffStep?: boolean;
     id?: string;
     name?: string;
     disabled?: boolean;
@@ -24,14 +25,29 @@
   function updateManual(event: Event & { currentTarget: HTMLInputElement }) {
     if (event.currentTarget.validity.valid) value = event.currentTarget.valueAsNumber;
   }
+
+  function setValue(next: number) {
+    const snapped = allowOffStep ? Math.round((min + Math.round((next - min) / step) * step) * 1e8) / 1e8 : next;
+    const bounded = Math.min(max, Math.max(min, snapped));
+    value = manual = bounded;
+    return bounded;
+  }
+
+  function stepKey(event: KeyboardEvent) {
+    if (!allowOffStep) return;
+    const delta = { ArrowLeft: -step, ArrowDown: -step, ArrowRight: step, ArrowUp: step }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    setValue(value + delta);
+  }
 </script>
 
 <div class="slider">
-  <input {...a11y} class="sui-focus" type="range" {id} name={manualLabel ? undefined : name} {min} {max} {step}
-    {disabled} {value} style:--filled={`${filled}%`} oninput={(event) => {
-      value = event.currentTarget.valueAsNumber;
-      manual = value;
-    }} />
+  <input {...a11y} class="sui-focus" type="range" {id} name={manualLabel ? undefined : name} {min} {max} step={allowOffStep ? 'any' : step}
+    {disabled} {value} style:--filled={`${filled}%`} oninput={({ currentTarget }) => {
+      currentTarget.valueAsNumber = setValue(currentTarget.valueAsNumber);
+    }}
+    onkeydown={stepKey} />
   {#if manualLabel && manualStepLabels}
     <NumberInput bind:value={manual} {min} {max} {step} {name} {disabled} {unit} stepLabels={manualStepLabels} required
       aria-label={manualLabel} aria-describedby={a11y['aria-describedby']} oninput={updateManual} />

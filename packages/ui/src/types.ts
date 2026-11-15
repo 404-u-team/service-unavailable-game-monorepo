@@ -14,7 +14,10 @@ export type NumberStepLabels = { decrease: string; increase: string };
 export type SelectOption = { value: string; label: string; disabled?: boolean };
 export type MenuAction = { id: string; label: string; disabled?: boolean; tone?: 'danger'; onSelect: () => void };
 export type TabItem = SelectOption;
-export type NavItem = { href: string; label: string; current?: boolean };
+export type NavItem = {
+  id?: string; href: string; label: string; current?: boolean;
+  attributes?: Record<`data-${string}`, string | undefined>;
+};
 export type AccordionItem = { id: string; title: string };
 
 export type CheckProps = Omit<HTMLInputAttributes, 'type' | 'checked' | 'children' | 'role' | 'indeterminate'> & {
@@ -30,6 +33,8 @@ export type OverlayProps = {
   closeLabel: string;
   dismissible?: boolean;
   returnFocus?: HTMLElement;
+  contentAttributes?: Record<`data-${string}`, string | boolean>;
+  closeAttributes?: Record<`data-${string}`, string | boolean>;
   children: Snippet;
   footer?: Snippet;
 };

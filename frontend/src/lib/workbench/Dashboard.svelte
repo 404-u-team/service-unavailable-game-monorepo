@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { ActionRow, Badge, Button, Disclosure, PageColumns, Pagination, SearchSelect, Stat, Switch, Tabs, type DashboardSettings, type DashboardWidgetState } from '@service-unavailable/ui';
+  import GameDashboard from './GameDashboard.svelte';
   import ServiceTelemetry from './ServiceTelemetry.svelte';
   import Engineering from './Engineering.svelte';
   import { apiMessage, message, t } from '../i18n.svelte';
@@ -6,17 +8,15 @@
   import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { onDestroy } from 'svelte';
-  import { ArrowRight, ArrowUpRight, ChevronRight } from '@lucide/svelte';
+  import { ArrowRight, ArrowUpRight } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import { page } from '$app/state';
-  import Toggle from '../controls/Toggle.svelte';
-  import Choice from '../controls/Choice.svelte';
   import Select from '../controls/Select.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import Meter from '../Meter.svelte';
   import Guide from '../Guide.svelte';
   import TutorialControls from './TutorialControls.svelte';
-  import { nav, target, type TutorialAction } from './onboarding';
+  import { nav, target, type Target, type TutorialAction } from './onboarding';
   import { guideArticleHref } from '../guide';
   import Chart from './Chart.svelte';
   import Finance from './Finance.svelte';
@@ -37,10 +37,27 @@
   let dialog = $state<'campaign' | 'feature' | 'incident' | 'rollback' | 'drill'>();
   let detail = $state('');
   let confirmDisable = $state(false);
-  let featureId = $state('groups');
-  let eventId = $state('');
+  let productTab = $state('features');
+  let eventPage = $state(1);
+  let deploymentPage = $state(1);
+  let linkedEvent = '';
+  const pageSize = 10;
+  const eventFilters = ['all', 'active', 'closed'] as const;
+  const tutorialWidgets: Partial<Record<Target, string>> = {
+    [target.coverage]: 'coverage',
+    [target.finance]: 'revenue',
+    [target.expenses]: 'expenses',
+    [target.growth]: 'readiness'
+  };
+  let board = $state<{ showWidget: (id: string) => void }>();
+
+  export function revealTutorialWidget(key: Target) {
+    const id = tutorialWidgets[key];
+    if (id) board?.showWidget(id);
+    if (key === target.monetization || key === target.premium) productTab = 'features';
+  }
   let eventFilter = $state<'all' | 'active' | 'closed'>('all');
-  let settingsTab = $state<'general' | 'accessibility' | 'storage'>('general');
+  let settingsTab = $state('general');
   let estimate = $state<Forecast>();
   let readiness = $state<Forecast>();
   let targetMarkets = $state(['europe']);
@@ -56,7 +73,22 @@
   let range = $state('24');
   let historyComponent = $state('');
   let historyResource = $state('');
-  let serviceChart = $state('traffic');
+  let serviceChart = $state<string>();
+  const serviceMetrics = $derived([
+    { value: 'traffic', label: t('Request traffic') },
+    { value: 'latency', label: t('Average latency') },
+    { value: 'error', label: t('Error rate') }
+  ]);
+  const historyWindows = $derived([
+    { value: '24', label: t('Last 24 game hours') },
+    { value: '6', label: t('Last 6 game hours') }
+  ]);
+  function historyWindow(settings: DashboardSettings) {
+    return settings.hours === '6' ? '6' : '24';
+  }
+  function preferredMetric(settings: DashboardSettings) {
+    return settings.metric === 'latency' || settings.metric === 'error' ? settings.metric : 'traffic';
+  }
   let forecastToken = 0;
   let lastReadiness = '';
   const metric = $derived(game.snapshot.metrics);
@@ -76,7 +108,6 @@
   const resource = $derived(resourceKeys.includes(historyResource) ? historyResource : '');
   const currentCampaign = $derived(catalog.campaigns[detail]);
   const currentFeature = $derived(game.features.find((item) => item.id === detail));
-  const selectedFeature = $derived(game.features.find((item) => item.id === featureId));
   const activeCampaigns = $derived(game.campaigns.filter((item) => item.remaining > 0));
   const activeMarkets = $derived(game.markets.filter((item) => item.stage === 'developing'));
   const activeLanguages = $derived(game.languages.filter((item) => item.remaining > 0));
@@ -86,7 +117,27 @@
   const incident = $derived(game.incidents.find((item) => item.id === detail));
   const events = $derived(game.incidents.filter((item) => eventFilter === 'all' || (eventFilter === 'active' ? item.active : !item.active)));
   const activeEvents = $derived(game.incidents.filter((item) => item.active));
-  const selectedIncident = $derived(events.find((item) => item.id === (eventId || page.url.searchParams.get('event'))) ?? events[0]);
+  const eventPages = $derived(Math.max(1, Math.ceil(events.length / pageSize)));
+  const deploymentPages = $derived(Math.max(1, Math.ceil(game.deployments.length / pageSize)));
+  const visibleEvents = $derived(events.slice((Math.min(eventPage, eventPages) - 1) * pageSize, Math.min(eventPage, eventPages) * pageSize));
+  const visibleDeployments = $derived(game.deployments.slice((Math.min(deploymentPage, deploymentPages) - 1) * pageSize, Math.min(deploymentPage, deploymentPages) * pageSize));
+
+  $effect(() => {
+    if (section !== 'events') return;
+    const id = page.url.searchParams.get('event') ?? '';
+    if (!id) { linkedEvent = ''; return; }
+    if (id === linkedEvent) return;
+    const index = game.incidents.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    linkedEvent = id;
+    eventFilter = 'all';
+    eventPage = Math.floor(index / pageSize) + 1;
+    openIncident(game.incidents[index]);
+  });
+
+  $effect(() => {
+    if (section === 'product' && page.url.searchParams.get('engineering') === '1') productTab = 'engineering';
+  });
   const deployment = $derived(game.deployments.find((item) => item.id === detail));
   const serviceStats = $derived([
     { label: 'Requests / sec', value: num(metric.rps), detail: t('{0} served', [rps(metric.throughput)]) },
@@ -156,7 +207,7 @@
     dialog = 'feature';
   }
 
-  function openIncident(item: Incident) { eventId = item.id; detail = item.id; dialog = 'incident'; }
+  function openIncident(item: Incident) { detail = item.id; dialog = 'incident'; }
   const settingsTabs = { general: 'General', accessibility: 'Accessibility', storage: 'Storage' } as const;
 
   const statuses = { locked: 'Locked', available: 'Available', developing: 'In development', ready: 'Ready to release' };
@@ -203,25 +254,25 @@
       {/each}
     </ul>
     {#if feature.infrastructure.some((requirement) => !requirement.met)}
-      <a class="btn" href={link('build')}>{t('Open topology')} <ArrowRight size={14} /></a>
+      <Button href={link('build')}>{t('Open topology')} <ArrowRight size={14} /></Button>
     {/if}
   </section>
 {/snippet}
 
 {#snippet statCards()}
-  <div class="cards stats">
-    {#each serviceStats as stat}
-      <article class="panel pad"><p class="eyebrow">{t(stat.label)}</p><strong class="stat">{stat.value}</strong><small>{t(stat.detail)}</small></article>
+  <PageColumns columns={4} minWidth="8rem">
+    {#each serviceStats as stat (stat.label)}
+      <div class="panel pad"><Stat label={t(stat.label)} value={stat.value} detail={t(stat.detail)} /></div>
     {/each}
-  </div>
+  </PageColumns>
 {/snippet}
 
 {#snippet incidentDetails(item: Incident)}
   <div class="stack">
     <div class="row wrap">
-      <span class="badge {item.active ? 'warn' : 'dim'}">{item.active ? t("Active") : t("Closed")}</span>
-      <span class="badge dim">{t(item.severity)}</span>
-      {#if item.acknowledged}<span class="badge good">{t("Acknowledged")}</span>{/if}
+      <Badge tone={item.active ? 'warning' : 'neutral'}>{item.active ? t("Active") : t("Closed")}</Badge>
+      <Badge tone="neutral">{t(item.severity)}</Badge>
+      {#if item.acknowledged}<Badge tone="success">{t("Acknowledged")}</Badge>{/if}
     </div>
     <p>{message(item.symptom)}</p>
     <dl class="breakdown">
@@ -241,93 +292,104 @@
 
 {#snippet incidentActions(item: Incident)}
   <div class="row spread wrap">
-    <a class="btn primary" href={item.target ? link('build', item.target) : link('monitor')} onclick={() => dialog = undefined}>{item.target ? t("Open in topology") : t("Open telemetry")} <ArrowRight size={14} /></a>
-    {#if !item.acknowledged}<button class="btn" disabled={busy} onclick={() => act(`/incidents/${item.id}/acknowledge`)}>{t("Acknowledge")}</button>{/if}
+    <Button variant="primary" href={item.target ? link('build', item.target) : link('monitor')} onclick={() => dialog = undefined}>{item.target ? t("Open in topology") : t("Open telemetry")} <ArrowRight size={14} /></Button>
+    {#if !item.acknowledged}<Button disabled={busy} onclick={() => act(`/incidents/${item.id}/acknowledge`)}>{t("Acknowledge")}</Button>{/if}
   </div>
 {/snippet}
 
-{#snippet timeline()}
+{#snippet timeline(limit = 6)}
   {#if game.incidents.length}
     <ul class="list timeline">
-      {#each game.incidents.slice(0, 6) as item (item.id)}
+      {#each game.incidents.slice(0, limit) as item (item.id)}
         <li><button onclick={() => openIncident(item)}><span class:item-warn={item.severity !== 'info'} class="dot"></span><span class="mono muted">{tickTime(item.start)}</span><span>{message(item.title)}</span></button></li>
       {/each}
     </ul>
   {:else}<p class="muted">{t("No events recorded.")}</p>{/if}
 {/snippet}
 
-<main class="dashboard stack">
-  {#if heading}
-    <header class="dash-header row spread">
-      <div>{#if heading.tag}<p class="eyebrow">{t(heading.tag)}</p>{/if}<h1>{t(heading.title)}</h1>{#if heading.subtitle}<p class="muted">{t(heading.subtitle)}</p>{/if}</div>
-      <div class="row wrap">
-      {#if helpArticles[section]}<a class="btn" href={guideArticleHref(link('guide'), helpArticles[section]!)}>{t('Guide')}</a>{/if}
-      {#if section === 'monitor'}
-        <div class="time-range"><Select label={t("History range")} bind:value={range}
-          options={[24, 6, 1].map((hours) => ({ value: String(hours), label: t("{0}h", [hours]) }))} /></div>
-      {:else if section === 'growth' || section === 'product'}<span class="badge dim">{t("Budget ·")} {money(game.balance)}</span>
-      {:else if section === 'events'}<span class="badge {activeEvents.length ? 'warn' : 'dim'}">{activeEvents.length} {t("active")}</span>{/if}
-      </div>
-    </header>
+{#snippet boardTools()}
+  {#if section === 'monitor'}
+    <div class="time-range"><Select label={t('History range')} bind:value={range}
+      options={[24, 6, 1].map((hours) => ({ value: String(hours), label: t('{0}h', [hours]) }))} /></div>
+  {:else if section === 'growth'}
+    <Badge tone="neutral">{t('Budget ·')} {money(game.balance)}</Badge>
   {/if}
+  <Button href={guideArticleHref(link('guide'), helpArticles[section]!)}>{t('Guide')}</Button>
+{/snippet}
 
-  {#if section === 'home'}
-    <section class="panel pad stack">
-      <div class="row spread"><div><p class="eyebrow">{t(catalog.scenarios[game.scenario]?.name ?? '')} / {gameTime(game.tick)}</p><h2>{game.name}</h2></div><span class="badge {metric.availability >= .95 ? 'good' : 'warn'}"><i class="dot"></i>{metric.availability >= .95 ? t("Operational") : t("Degraded")}</span></div>
-      <div class="overview">
-        <div><p class="eyebrow">{t("Registered users")}</p><strong>{num(game.audience)}</strong></div>
-        <div><p class="eyebrow">{t("Balance")}</p><strong>{money(game.balance)}</strong></div>
-        <div><p class="eyebrow">{t("Satisfaction")}</p><strong>{pct(game.satisfaction)}</strong></div>
+{#snippet requests()}<Stat value={serviceStats[0].value} detail={t(serviceStats[0].detail)} />{/snippet}
+{#snippet latency()}<Stat value={serviceStats[1].value} detail={t(serviceStats[1].detail)} />{/snippet}
+{#snippet errors()}<Stat value={serviceStats[2].value} detail={t(serviceStats[2].detail)} />{/snippet}
+{#snippet availability()}<Stat value={serviceStats[3].value} detail={t(serviceStats[3].detail)} />{/snippet}
+
+{#snippet serviceHistory(widget: DashboardWidgetState)}
+  {@const chart = serviceChart ?? preferredMetric(widget.settings)}
+  <div class="stack">
+    <Select label={t('Service history metric')} value={chart} options={serviceMetrics} onchange={(value) => serviceChart = value} />
+    <Chart title={t(chart === 'latency' ? 'Average latency' : chart === 'error' ? 'Error rate' : 'Request traffic')} primaryTitle={chart === 'traffic' ? t('Incoming requests') : undefined}
+      secondaryTitle={t('Successful requests')} format={chart === 'latency' ? ms : chart === 'error' ? (value) => pct(value, 2) : rps}
+      values={history.map(({ metrics }) => chart === 'latency' ? (metrics.throughput ? metrics.latency : null)
+        : chart === 'error' ? metrics.errors / (metrics.rps || 1) : metrics.rps)}
+      secondary={chart === 'traffic' ? history.map((point) => point.metrics.throughput) : []}
+      ticks={history.map((point) => point.tick)} time={tickTime} sampleTime={gameTime} />
+  </div>
+{/snippet}
+
+{#snippet historySettings(widget: DashboardWidgetState, patch: (patch: DashboardSettings) => void)}
+  <div class="field">
+    <span>{t('Default chart metric')}</span>
+    <Select label={t('Default chart metric')} value={preferredMetric(widget.settings)} options={serviceMetrics}
+      onchange={(metric) => patch({ metric })} />
+  </div>
+{/snippet}
+
+{#snippet audienceSettings(widget: DashboardWidgetState, patch: (patch: DashboardSettings) => void)}
+  <div class="field">
+    <span>{t('Audience history window')}</span>
+    <Select label={t('Audience history window')} value={historyWindow(widget.settings)} options={historyWindows}
+      onchange={(hours) => patch({ hours })} />
+  </div>
+{/snippet}
+
+{#snippet incidentTimeline()}
+  <div class="stack">{@render timeline(3)}<Button href={link('events')}>{t('View events')} <ArrowRight size={14} /></Button></div>
+{/snippet}
+
+{#snippet regional()}
+  {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} markets={game.markets} />
+  {:else}<p class="muted">{t('No regional data available.')}</p>{/if}
+{/snippet}
+
+{#snippet responsibilities()}<ServiceTelemetry {game} {catalog} {link} />{/snippet}
+
+{#snippet coverage()}
+  <div class="stack">
+    <div class="row spread wrap" data-tutorial={target.coverage}><Button href={link('build')}>{t("Edit coverage in topology")}</Button></div>
+
+    {#each Object.entries(game.snapshot.monitors ?? {}) as [id, collector]}
+      {@const name = game.production.nodes.find((node) => node.id === id)?.name}
+      <div class="stack">
+        <a href={link('build', id)}>{t(name ?? '')}</a>
+        <p class="muted">{collector.covered.length} / {collector.capacity - (collector.history ? 2 : 0)} {t("component slots ·")} {collector.history ? t("Service history enabled") : t("Component metrics only")}</p>
+        {#if collector.failed}<p class="notice error">{t("Collection is unavailable. Check the collector for a failure.")}</p>
+        {:else if collector.dropped.length}<p class="notice warn">{t("Collection capacity exceeded. Increase slots or add another collector.")}</p>{/if}
       </div>
-      <a class="btn primary" href={link('build')}>{t("Open topology")} <ArrowRight size={15} /></a>
-    </section>
-    {@render statCards()}
-    <section class="panel pad stack"><h2>{t("Recent events")}</h2>{@render timeline()}</section>
-  {:else if section === 'monitor'}
-    {@render statCards()}
-    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} markets={game.markets} />{/if}
-    <div class="split">
-      <section class="panel pad stack">
-        <div><h2>{t("Traffic / throughput")}</h2><p class="muted">{t("Incoming and successful requests per second")}</p></div>
-        <Select label={t('Service history metric')} bind:value={serviceChart} options={[
-          { value: 'traffic', label: t('Request traffic') }, { value: 'latency', label: t('Average latency') },
-          { value: 'error', label: t('Error rate') }
-        ]} />
-        <Chart title={t(serviceChart === 'latency' ? 'Average latency' : serviceChart === 'error' ? 'Error rate' : 'Request traffic')} primaryTitle={serviceChart === 'traffic' ? t('Incoming requests') : undefined}
-          secondaryTitle={t('Successful requests')} format={serviceChart === 'latency' ? ms : serviceChart === 'error' ? (value) => pct(value, 2) : rps}
-          values={history.map(({ metrics }) => serviceChart === 'latency' ? (metrics.throughput ? metrics.latency : null)
-            : serviceChart === 'error' ? metrics.errors / (metrics.rps || 1) : metrics.rps)}
-          secondary={serviceChart === 'traffic' ? history.map((point) => point.metrics.throughput) : []}
-          ticks={history.map((point) => point.tick)} time={tickTime} sampleTime={gameTime} />
-        {#if history.length}<small><span class="accent">{t("━ Incoming")}</span> &nbsp; <span class="throughput">{t("┄ Successful")}</span></small>{/if}
-      </section>
-      <section class="panel inset pad stack"><h2>{t("Incident timeline")}</h2>{@render timeline()}<a class="btn" href={link('events')}>{t("View events")} <ArrowRight size={14} /></a></section>
-    </div>
-    <ServiceTelemetry {game} {catalog} {link} />
-    <section class="panel pad stack">
-      <div class="row spread wrap"><h2 data-tutorial={target.coverage}>{t("Monitoring coverage")}</h2><a class="btn" href={link('build')}>{t("Edit coverage in topology")}</a></div>
-      {#each Object.entries(game.snapshot.monitors ?? {}) as [id, collector]}
-        {@const name = game.production.nodes.find((node) => node.id === id)?.name}
-        <div class="stack">
-          <a href={link('build', id)}>{t(name ?? '')}</a>
-          <p class="muted">{collector.covered.length} / {collector.capacity - (collector.history ? 2 : 0)} {t("component slots ·")} {collector.history ? t("Service history enabled") : t("Component metrics only")}</p>
-          {#if collector.failed}<p class="notice error">{t("Collection is unavailable. Check the collector for a failure.")}</p>
-          {:else if collector.dropped.length}<p class="notice warn">{t("Collection capacity exceeded. Increase slots or add another collector.")}</p>{/if}
-        </div>
-      {:else}
-        <p class="muted">{t("Add Monitoring in Topology and link components to it to collect detailed metrics.")}</p>
-      {/each}
-      {#each game.production.nodes.filter((node) => !['source', 'monitor'].includes(node.kind)) as node (node.id)}
-        <div class="row spread wrap"><a href={link('build', node.id)}>{t(node.name)}</a>
-          <span class="mono muted">{game.snapshot.components[node.id] ? t("Collecting metrics") :
-            Object.values(game.snapshot.monitors ?? {}).some((collector) => collector.dropped.includes(node.id)) ? t("Linked · No collection slots") : t("Coverage missing")}</span>
-        </div>
-      {/each}
-    </section>
-    {#if inspectedHistory}
-      <section class="panel pad stack">
+    {:else}
+      <p class="muted">{t("Add Monitoring in Topology and link components to it to collect detailed metrics.")}</p>
+    {/each}
+    {#each game.production.nodes.filter((node) => !['source', 'monitor'].includes(node.kind)) as node (node.id)}
+      <div class="row spread wrap"><a href={link('build', node.id)}>{t(node.name)}</a>
+        <span class="mono muted">{game.snapshot.components[node.id] ? t("Collecting metrics") :
+          Object.values(game.snapshot.monitors ?? {}).some((collector) => collector.dropped.includes(node.id)) ? t("Linked · No collection slots") : t("Coverage missing")}</span>
+      </div>
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet resources()}
+  {#if inspectedHistory}
+      <div class="stack">
         <div class="row spread wrap">
-          <h2>{t('Resource load over time')}</h2>
           <div class="field">
             <span>{t('Component')}</span>
             <Select label={t('Component')} value={inspectedHistory.id} onchange={(value) => historyComponent = value}
@@ -342,62 +404,72 @@
             : point.peak_utilization?.[inspectedHistory.id]) ?? null)}
           ticks={history.map((point) => point.tick)} time={tickTime} sampleTime={(tick) => when(tick, game.start_minute, catalog.minutes_per_tick)} format={pct}
           emptyText={t('Resume the simulation to record resource load for this component.')} />
-      </section>
+      </div>
+    {:else}<p class="muted">{t("Connect components to Monitoring to inspect utilization and component health.")}</p>{/if}
+{/snippet}
+
+{#snippet health()}
+  <div class="stack">
+    <p class="muted">{t("Metrics are collected only for components with an available collection slot.")}</p>
+    {#if telemetry.length}
+      {#each telemetry as [id, item]}
+        <div class="stack node-meter"><div class="row spread"><span>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</span><span class="mono muted">{t(statusLabel[item.status])}</span></div>
+          {#if Object.keys(item.utilization).length}<Meter label={t("Peak resource utilization")} value={Math.max(...Object.values(item.utilization))} show={false} />{/if}
+        </div>
+      {/each}
+    {:else}<p class="muted">{t("Connect components to Monitoring to inspect utilization and component health.")}</p>{/if}
+  </div>
+{/snippet}
+
+{#snippet diagnostics()}
+  <div class="stack">
+    {#if pressured.length}
+      {#each pressured as [id, item]}
+        <div class="stack">
+          <p><a class="warning" href={link('build', id)}>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</a> · {t(statusLabel[item.status])}{#if !item.database?.diagnostic && Object.keys(item.utilization).length} · {t(Object.entries(item.utilization).sort((a, b) => b[1] - a[1])[0][0])}{/if}</p>
+          <DatabaseDiagnostics metric={item} guide={link('guide')}
+            configureHref={game.draft?.nodes.every((node) => node.id !== id) ? undefined : `${link('build', id)}&configure=1`} />
+        </div>
+      {/each}
+    {:else}<p class="muted">{telemetry.length ? t("Monitored components are within their limits.") : t("Only service-level symptoms are available.")}</p>{/if}
+    {#if databaseCoverageMissing}
+      <p class="muted">{t('Database causes require deployed Monitoring with a free slot linked from each database.')}
+        <a class="accent" href={guideArticleHref(link('guide'), 'monitoring-setup')}>{t('Monitoring setup')}</a></p>
+      {#if metric.errors > 0}<p>{t('{0} requests per second are failing across the service.', [num(metric.errors)])}</p>{/if}
     {/if}
-    <div class="split equal">
-      <section class="panel pad stack">
-        <h2>{t("Node health")}</h2>
-        <p class="muted">{t("Metrics are collected only for components with an available collection slot.")}</p>
-        {#if telemetry.length}
-          {#each telemetry as [id, item]}
-            <div class="stack node-meter"><div class="row spread"><span>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</span><span class="mono muted">{t(statusLabel[item.status])}</span></div>
-              {#if Object.keys(item.utilization).length}<Meter label={t("Peak resource utilization")} value={Math.max(...Object.values(item.utilization))} show={false} />{/if}
-            </div>
-          {/each}
-        {:else}<p class="muted">{t("Connect components to Monitoring to inspect utilization and component health.")}</p>{/if}
-      </section>
-      <section class="panel pad stack" aria-labelledby="telemetry-diagnostics">
-        <h2 id="telemetry-diagnostics">{t("Diagnostics")}</h2>
-        {#if pressured.length}
-          {#each pressured as [id, item]}
-            <div class="stack">
-              <p><a class="warning" href={link('build', id)}>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</a> · {t(statusLabel[item.status])}{#if !item.database?.diagnostic && Object.keys(item.utilization).length} · {t(Object.entries(item.utilization).sort((a, b) => b[1] - a[1])[0][0])}{/if}</p>
-              <DatabaseDiagnostics metric={item} guide={link('guide')}
-                configureHref={game.draft?.nodes.every((node) => node.id !== id) ? undefined : `${link('build', id)}&configure=1`} />
-            </div>
-          {/each}
-        {:else}<p class="muted">{telemetry.length ? t("Monitored components are within their limits.") : t("Only service-level symptoms are available.")}</p>{/if}
-        {#if databaseCoverageMissing}
-          <p class="muted">{t('Database causes require deployed Monitoring with a free slot linked from each database.')}
-            <a class="accent" href={guideArticleHref(link('guide'), 'monitoring-setup')}>{t('Monitoring setup')}</a></p>
-          {#if metric.errors > 0}<p>{t('{0} requests per second are failing across the service.', [num(metric.errors)])}</p>{/if}
-        {/if}
-        <a class="btn" href={link('build')}>{t("Open topology")} <ArrowRight size={14} /></a>
-      </section>
-    </div>
-  {:else if section === 'growth'}
-    <div class="split growth-summary">
-      <section class="panel pad stack">
-        <div><p class="eyebrow">{t("Registered users")}</p><strong class="big-stat">{num(game.audience)}</strong><p class="muted">{t("Satisfaction ·")} {pct(game.satisfaction, 1)}</p></div>
-        <Chart title={t("Registered users")} values={game.business_history.map((point) => point.audience)} ticks={game.business_history.map((point) => point.tick)} time={tickTime} sampleTime={(tick) => when(tick, game.start_minute, catalog.minutes_per_tick)} />
-      </section>
-      <section class="panel inset pad stack">
-        <h2 data-tutorial={target.growth}>{t("Growth readiness")}</h2><p class="muted">{t("Projected load during a creator campaign")}</p>
-        {#if readiness}
-          <strong class="stat">{t('{0}–{1} RPS', [num(readiness.rps.low), num(readiness.rps.high)])}</strong>
-          <Meter value={readiness.availability.low} label={t("Forecast minimum availability")} tone={readiness.availability.low < .95 ? 'warn' : 'good'} />
-          <span class="badge {readiness.availability.low < .95 ? 'warn' : 'good'}">{readiness.availability.low < .95 ? t("Capacity may be exceeded") : t("Likely within capacity")}</span>
-        {:else}<p class="muted">{t("Open a campaign to request a forecast.")}</p>{/if}
-      </section>
-    </div>
-    {#if game.snapshot.demand_overview}<RegionalDemand demand={game.snapshot.demand_overview} markets={game.markets} />{/if}
-    <MarketProjects {game} {busy} {act} />
-    <MarketProjects {game} {busy} {act} localization />
-    <div><h2>{t("Campaign catalog")}</h2><p class="muted">{t("Compare cost, reach and projected demand.")}</p></div>
-    <div class="cards campaigns">
+    <Button href={link('build')}>{t("Open topology")} <ArrowRight size={14} /></Button>
+  </div>
+{/snippet}
+
+{#snippet audience(widget: DashboardWidgetState)}
+  {@const points = game.business_history.slice(-Number(historyWindow(widget.settings)) * 60 / catalog.minutes_per_tick)}
+  <div class="stack">
+    <Stat value={num(game.audience)} detail={t('Satisfaction ·') + ' ' + pct(game.satisfaction, 1)} />
+
+    <Chart title={t("Registered users")} values={points.map((point) => point.audience)} ticks={points.map((point) => point.tick)} time={tickTime} sampleTime={gameTime} emptyText={t('Run the simulation to record audience history.')} />
+  </div>
+{/snippet}
+
+{#snippet growthReadiness()}
+  <div class="stack">
+    <p class="muted" data-tutorial={target.growth}>{t("Projected load during a creator campaign")}</p>
+    {#if readiness}
+      <strong class="stat">{t('{0}–{1} RPS', [num(readiness.rps.low), num(readiness.rps.high)])}</strong>
+      <Meter value={readiness.availability.low} label={t("Forecast minimum availability")} tone={readiness.availability.low < .95 ? 'warn' : 'good'} />
+      <Badge tone={readiness.availability.low < .95 ? 'warning' : 'success'}>{readiness.availability.low < .95 ? t("Capacity may be exceeded") : t("Likely within capacity")}</Badge>
+    {:else}<p class="muted">{t("Open a campaign to request a forecast.")}</p>{/if}
+  </div>
+{/snippet}
+
+{#snippet markets()}<MarketProjects {game} {busy} {act} />{/snippet}
+{#snippet languages()}<MarketProjects {game} {busy} {act} localization />{/snippet}
+
+{#snippet campaigns()}
+  <PageColumns columns={3} minWidth="12rem" gap="12px" class="campaigns">
+
       {#each Object.entries(catalog.campaigns) as [id, campaign]}
         {@const running = game.campaigns.find((item) => item.id === id)}
-        <article class="panel pad stack" class:emphasis={id === 'creator'}>
+        <article class="panel pad stack campaign-card" class:emphasis={id === 'creator'}>
           <div class="row spread"><p class="eyebrow">{id === 'community' ? t("Small campaign") : id === 'creator' ? t("Medium campaign") : t("Large campaign")}</p><ArrowUpRight size={17} class="accent" /></div>
           <h2>{t(campaign.name)}</h2>
           <div class="row spread"><strong class="stat">{money(campaign.cost)}</strong><span class="mono muted">{duration(campaign.duration)}</span></div>
@@ -405,121 +477,175 @@
           {#if running}
             {#if running.region}<p>{(running.regions?.length ? running.regions : [running.region]).map(marketName).join(', ')} · {money(running.budget ?? 0)}</p>{/if}
             <Meter value={running.progress} label={t("{0} remaining", [duration(running.remaining)])} />
-          {:else}<button class="btn {id === 'creator' ? 'primary' : ''}" onclick={() => plan(id)}>{t("Plan campaign")} <ArrowRight size={14} /></button>{/if}
+          {:else}<Button variant={id === 'creator' ? 'primary' : 'secondary'} onclick={() => plan(id)}>{t("Plan campaign")} <ArrowRight size={14} /></Button>{/if}
         </article>
       {/each}
-    </div>
-    {#if activeCampaigns.length || activeMarkets.length || activeLanguages.length}
-      <section class="panel pad stack">
-        <h2>{t('Active projects and campaigns')}</h2>
-        {#each activeCampaigns as item (item.id)}
-          <div class="row spread wrap"><strong>{t(catalog.campaigns[item.id].name)}</strong><span>{duration(item.remaining)}</span></div>
-        {/each}
-        {#each activeMarkets as item (item.id)}
-          <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
-        {/each}
-        {#each activeLanguages as item (item.name)}
-          <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
-        {/each}
-      </section>
-    {/if}
+  </PageColumns>
+{/snippet}
+
+{#snippet activeProjects()}
+  <div class="stack">
+    {#if !activeCampaigns.length && !activeMarkets.length && !activeLanguages.length}<p class="muted">{t('No active projects or campaigns.')}</p>{/if}
+
+    {#each activeCampaigns as item (item.id)}
+      <div class="row spread wrap"><strong>{t(catalog.campaigns[item.id].name)}</strong><span>{duration(item.remaining)}</span></div>
+    {/each}
+    {#each activeMarkets as item (item.id)}
+      <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
+    {/each}
+    {#each activeLanguages as item (item.name)}
+      <div class="row spread wrap"><strong>{t(item.name)}</strong><span>{duration(item.remaining)}</span></div>
+    {/each}
+  </div>
+{/snippet}
+
+<main class="dashboard stack">
+  {#if heading && !['monitor', 'growth', 'finance'].includes(section)}
+    <header class="dash-header row spread">
+      <div>{#if heading.tag}<p class="eyebrow">{t(heading.tag)}</p>{/if}<h1>{t(heading.title)}</h1>{#if heading.subtitle}<p class="muted">{t(heading.subtitle)}</p>{/if}</div>
+      <div class="row wrap">
+      {#if helpArticles[section]}<Button href={guideArticleHref(link('guide'), helpArticles[section]!)}>{t('Guide')}</Button>{/if}
+      {#if section === 'product'}<Badge tone="neutral">{t("Budget ·")} {money(game.balance)}</Badge>
+      {:else if section === 'events'}<Badge tone={activeEvents.length ? 'warning' : 'neutral'}>{activeEvents.length} {t("active")}</Badge>{/if}
+      </div>
+    </header>
+  {/if}
+
+  {#if section === 'home'}
+    <section class="panel pad stack">
+      <div class="row spread"><div><p class="eyebrow">{t(catalog.scenarios[game.scenario]?.name ?? '')} / {gameTime(game.tick)}</p><h2>{game.name}</h2></div><Badge tone={metric.availability >= .95 ? 'success' : 'warning'}><i class="dot"></i>{metric.availability >= .95 ? t("Operational") : t("Degraded")}</Badge></div>
+      <div class="overview">
+        <div><p class="eyebrow">{t("Registered users")}</p><strong>{num(game.audience)}</strong></div>
+        <div><p class="eyebrow">{t("Balance")}</p><strong>{money(game.balance)}</strong></div>
+        <div><p class="eyebrow">{t("Satisfaction")}</p><strong>{pct(game.satisfaction)}</strong></div>
+      </div>
+      <Button variant="primary" href={link('build')}>{t("Open topology")} <ArrowRight size={15} /></Button>
+    </section>
+    {@render statCards()}
+    <section class="panel pad stack"><h2>{t("Recent events")}</h2>{@render timeline()}</section>
+  {:else if section === 'monitor'}
+    <GameDashboard bind:this={board} gameId={game.id} section="monitor" title={t('System telemetry')} tools={boardTools} widgets={[
+      { id: 'requests', title: t('Requests / sec'), placement: { x: 0, y: 0, width: 3, height: 3 }, content: requests },
+      { id: 'latency', title: t('Average latency'), placement: { x: 3, y: 0, width: 3, height: 3 }, content: latency },
+      { id: 'errors', title: t('Error rate'), placement: { x: 6, y: 0, width: 3, height: 3 }, content: errors },
+      { id: 'availability', title: t('Availability'), placement: { x: 9, y: 0, width: 3, height: 3 }, content: availability },
+      { id: 'traffic-history', title: t('Service history'), placement: { x: 0, y: 3, width: 7, height: 8 }, content: serviceHistory, settings: historySettings },
+      { id: 'timeline', title: t('Incident timeline'), placement: { x: 7, y: 3, width: 5, height: 4 }, content: incidentTimeline },
+      { id: 'diagnostics', title: t('Diagnostics'), placement: { x: 7, y: 7, width: 5, height: 4 }, content: diagnostics },
+      { id: 'coverage', title: t('Monitoring coverage'), placement: { x: 7, y: 11, width: 5, height: 7 }, content: coverage },
+      { id: 'resources', title: t('Resource load over time'), placement: { x: 0, y: 11, width: 7, height: 7 }, content: resources },
+      { id: 'node-health', title: t('Node health'), placement: { x: 0, y: 18, width: 5, height: 6 }, content: health },
+      { id: 'responsibilities', title: t('Service responsibilities'), placement: { x: 5, y: 18, width: 7, height: 6 }, content: responsibilities },
+      { id: 'regional-demand', title: t('Demand by region'), placement: { x: 0, y: 24, width: 12, height: 8 }, content: regional }
+    ]} />
+  {:else if section === 'growth'}
+    <GameDashboard bind:this={board} gameId={game.id} section="growth" title={t('Audience & campaigns')} tools={boardTools} widgets={[
+      { id: 'audience', title: t('Registered users'), placement: { x: 0, y: 0, width: 7, height: 8 }, content: audience, settings: audienceSettings },
+      { id: 'readiness', title: t('Growth readiness'), placement: { x: 7, y: 0, width: 5, height: 4 }, content: growthReadiness },
+      { id: 'active-projects', title: t('Active projects and campaigns'), placement: { x: 7, y: 4, width: 5, height: 4 }, content: activeProjects },
+      { id: 'campaign-catalog', title: t('Campaign catalog'), placement: { x: 0, y: 8, width: 12, height: 6 }, content: campaigns },
+      { id: 'markets', title: t('Market expansion'), placement: { x: 0, y: 14, width: 7, height: 10 }, content: markets },
+      { id: 'localization', title: t('Messenger languages'), placement: { x: 7, y: 14, width: 5, height: 10 }, content: languages },
+      { id: 'regional-demand', title: t('Demand by region'), placement: { x: 0, y: 24, width: 12, height: 8 }, content: regional }
+    ]} />
   {:else if section === 'product'}
-    <Engineering {game} {catalog} {act} {busy} {link} />
-    <div class="cards stats">
+    <PageColumns columns={4} minWidth="9rem">
       {#each [
         { label: 'Active features', value: game.features.filter((item) => item.enabled).length },
         { label: 'Features in progress', value: inDevelopment.length },
         { label: 'Projected additional load', value: `+${pct(inDevelopment.reduce((sum, item) => sum + item.demand_change, 0), 1)}` },
         { label: 'Development spend', value: money(game.economy.development) }
       ] as item}
-        <section class="panel pad"><p class="eyebrow">{t(item.label)}</p><strong class="stat">{item.value}</strong></section>
+        <div class="panel pad"><Stat label={t(item.label)} value={item.value} compact /></div>
       {/each}
-    </div>
-    <div class="split">
-      <section class="panel pad stack">
-        <div><h2>{t("Feature catalog")}</h2><p class="muted">{t("Select a feature to review its status and workload.")}</p></div>
+    </PageColumns>
+    <Tabs label={t('Product sections')} bind:value={productTab} items={[
+      { value: 'features', label: t('Feature catalog') },
+      { value: 'engineering', label: t('Engineering') },
+      { value: 'settings', label: t('Product settings') }
+    ]}>
+      {#snippet children(item)}
+        {#if item.value === 'features'}
+          <section class="stack" aria-label={t('Feature catalog')}>
         {#each game.features as feature (feature.id)}
           {@const definition = catalog.features[feature.id]}
-          <article class="feature-row" data-tutorial={feature.id === 'advertising' ? target.monetization : feature.id === 'premium' ? target.premium : undefined} class:active={feature.id === featureId}>
-            <button class="feature-select" aria-pressed={feature.id === featureId} onclick={() => featureId = feature.id}>
-              <span class="dot {feature.enabled ? 'accent' : feature.state === 'developing' ? 'warning' : 'muted'}"></span>
-              <span><h3>{t(definition.name)}</h3><small>{feature.id === 'premium' ? t('Additional synchronization for subscribers') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger workload")}</small></span>
-              <span class="badge {feature.enabled || feature.can_release ? 'good' : inDevelopment.includes(feature) ? 'warn' : 'dim'}">{feature.state === 'ready' && !feature.can_release ? t('Release blocked') : featureStatus(feature)}</span>
-            </button>
-            <button class="btn icon-btn" aria-label={t("Feature details")} title={t("Feature details")} onclick={() => { featureId = feature.id; openFeature(feature.id); }}><ChevronRight size={16} /></button>
+          <article data-tutorial={feature.id === 'advertising' ? target.monetization : feature.id === 'premium' ? target.premium : undefined}>
+            <ActionRow title={t(definition.name)}
+              description={t(feature.id === 'premium' ? 'Additional synchronization for subscribers'
+                : definition.operation ? catalog.operations[definition.operation] : 'Base messenger workload')}
+              onclick={() => openFeature(feature.id)}>
+              {#snippet status()}
+                <Badge tone={feature.enabled || feature.can_release ? 'success' : inDevelopment.includes(feature) ? 'warning' : 'neutral'}>
+                  {feature.state === 'ready' && !feature.can_release ? t('Release blocked') : featureStatus(feature)}
+                </Badge>
+              {/snippet}
+            </ActionRow>
           </article>
         {/each}
-      </section>
-      {#if selectedFeature}
-        {@const definition = catalog.features[selectedFeature.id]}
-        <aside class="panel pad stack feature-detail">
-          <div><h2>{t(definition.name)}</h2><p class="muted">{t("Development details")}</p></div>
-          <p class:warning={selectedFeature.state === 'ready' && !selectedFeature.can_release}>{featureStatus(selectedFeature)}</p>
-          {#if selectedFeature.state === 'developing'}<Meter value={1 - selectedFeature.remaining / definition.duration} label={t("{0} remaining", [duration(selectedFeature.remaining)])} tone="warn" />{/if}
-          <dl class="breakdown">
-            <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
-            <div><dt>{t("Development time")}</dt><dd>{duration(definition.duration)}</dd></div>
-            {#if selectedFeature.state !== 'released' && selectedFeature.demand_change > 0}<div><dt>{t("Additional request load")}</dt><dd>+{pct(selectedFeature.demand_change, 1)}</dd></div>{/if}
-          </dl>
-          {@render featureRequirements(selectedFeature)}
-          <button class="btn {selectedFeature.state === 'ready' ? 'primary' : ''}" onclick={() => openFeature(selectedFeature!.id)}>{t("Open feature")} <ArrowRight size={14} /></button>
-        </aside>
-      {/if}
-    </div>
-    <ProductSettings {game} {catalog} {busy} {error} save={(product) => act('/product', { product }, 'PUT')} />
+          </section>
+        {:else if item.value === 'engineering'}
+          <Engineering {game} {catalog} {act} {busy} {link} {error} />
+        {:else}
+          <ProductSettings {game} {catalog} {busy} {error} save={(product) => act('/product', { product }, 'PUT')} />
+        {/if}
+      {/snippet}
+    </Tabs>
   {:else if section === 'finance'}
-    <Finance {game} {catalog} />
+    <Finance bind:this={board} {game} {catalog} tools={boardTools} />
   {:else if section === 'events'}
-    <div class="split event-layout">
-      <section class="panel pad stack">
-        <div class="row spread wrap"><h2>{t("Incident history")}</h2><button class="btn" disabled={busy || game.incidents.some((item) => item.title === 'Instance failure drill')} onclick={() => dialog = 'drill'}>{t("Run failure drill")}</button></div>
-        <div class="row wrap" aria-label={t("Filter events")}>
-          {#each ['all', 'active', 'closed'] as filter}
-            <button class="btn" aria-pressed={eventFilter === filter} onclick={() => eventFilter = filter as typeof eventFilter}>{filter === 'all' ? t("All events") : filter === 'active' ? t("Active") : t("Closed")}</button>
-          {/each}
-        </div>
-        {#if !events.length}<p class="muted">{t("No matching events.")}</p>{/if}
-        {#each events as item (item.id)}
-          <button class="event row spread" class:active={selectedIncident?.id === item.id} onclick={() => openIncident(item)}>
-            <span><strong>{message(item.title)}</strong><small>{gameTime(item.start)} · {message(item.symptom)}</small></span>
-            <span class="badge {item.active ? 'warn' : 'dim'}">{item.active ? t("Active") : t("Closed")}</span><ChevronRight size={16} />
-          </button>
+    <section class="panel pad stack">
+      <div class="row spread wrap"><h2>{t("Incident history")}</h2><Button disabled={busy || game.incidents.some((item) => item.title === 'Instance failure drill')} onclick={() => dialog = 'drill'}>{t("Run failure drill")}</Button></div>
+      <div class="row wrap" role="group" aria-label={t("Filter events")}>
+        {#each eventFilters as filter (filter)}
+          <Button aria-pressed={eventFilter === filter} onclick={() => { eventFilter = filter; eventPage = 1; }}>{t(filter === 'all' ? 'All events' : filter === 'active' ? 'Active' : 'Closed')}</Button>
         {/each}
-      </section>
-      <aside class="panel pad stack incident-preview">
-        <div><h2>{t("Incident details")}</h2>{#if selectedIncident}<p class="muted">{message(selectedIncident.title)}</p>{/if}</div>
-        {#if selectedIncident}{@render incidentDetails(selectedIncident)}{@render incidentActions(selectedIncident)}
-        {:else}<p class="muted">{t("Incident details appear here as events are recorded.")}</p>{/if}
-      </aside>
-    </div>
+      </div>
+      <ul class="list">
+        {#each visibleEvents as item (item.id)}
+          <li>
+            <ActionRow title={message(item.title)} description={`${gameTime(item.start)} · ${message(item.symptom)}`} onclick={() => openIncident(item)}>
+              {#snippet status()}<Badge tone={item.active ? 'warning' : 'neutral'}>{t(item.active ? 'Active' : 'Closed')}</Badge>{/snippet}
+            </ActionRow>
+          </li>
+        {:else}<li class="muted">{t("No matching events.")}</li>{/each}
+      </ul>
+      <Pagination page={eventPage} pages={eventPages} label={t('Incident pages')} previousLabel={t('Previous page')} nextLabel={t('Next page')}
+        pageLabel={(current, total) => t('Page {0} of {1}', [current, total])} onchange={(next) => eventPage = next} />
+    </section>
     <section class="panel pad stack">
       <h2>{t("Deployment history")}</h2>
-      {#if !game.deployments.length}<p class="muted">{t("No deployments yet.")}</p>{/if}
-      {#each game.deployments as item (item.id)}
-        <div class="event row spread"><div><strong>{message(item.summary)}</strong><small>{gameTime(item.tick)} · {preciseMoney(item.cost)}</small></div><button class="btn" disabled={busy || Boolean(game.draft)} onclick={() => { detail = item.id; dialog = 'rollback'; }}>{t("Review rollback")}</button></div>
-        {#if item.comparison}<details class="event"><summary data-tutorial={item.id === game.deployments[0]?.id ? target.eventComparison : undefined}>{t("View before and after")}</summary><DeploymentComparison comparison={item.comparison} /></details>{/if}
-      {/each}
+      <ul class="list">
+        {#each visibleDeployments as item (item.id)}
+          <li class="event stack">
+            <div class="row spread wrap"><div><strong>{message(item.summary)}</strong><small>{gameTime(item.tick)} · {preciseMoney(item.cost)}</small></div><Button disabled={busy || Boolean(game.draft)} onclick={() => { detail = item.id; dialog = 'rollback'; }}>{t("Review rollback")}</Button></div>
+            {#if item.comparison}
+              <Disclosure label={t('View before and after')} summaryAttributes={{ 'data-tutorial': item.id === game.deployments[0]?.id ? target.eventComparison : undefined }}>
+                <DeploymentComparison comparison={item.comparison} />
+              </Disclosure>
+            {/if}
+          </li>
+        {:else}<li class="muted">{t("No deployments yet.")}</li>{/each}
+      </ul>
       {#if game.draft && game.deployments.length}<p class="muted">{t("Discard the current draft to roll back.")}</p>{/if}
+      <Pagination page={deploymentPage} pages={deploymentPages} label={t('Deployment pages')} previousLabel={t('Previous page')} nextLabel={t('Next page')}
+        pageLabel={(current, total) => t('Page {0} of {1}', [current, total])} onchange={(next) => deploymentPage = next} />
     </section>
   {:else if section === 'guide'}
     <Guide {catalog} {game} {link} {busy} {tutorialAction} />
   {:else if section === 'settings'}
-    <div class="split settings-layout">
-      <nav class="panel inset pad settings-tabs" aria-label={t("Settings sections")}>
-        {#each Object.entries(settingsTabs) as [key, label]}
-          <button class="btn" aria-pressed={settingsTab === key} onclick={() => settingsTab = key as typeof settingsTab}>{t(label)}</button>
-        {/each}
-      </nav>
-      <section class="panel pad stack settings-panel">
-        {#if settingsTab === 'general'}
+    <Tabs label={t('Settings sections')} bind:value={settingsTab}
+      items={Object.entries(settingsTabs).map(([value, label]) => ({ value, label: t(label) }))}>
+      {#snippet children(item)}
+        <section class="panel pad stack settings-panel">
+        {#if item.value === 'general'}
           <Language />
           <div><h2>{t("Game preferences")}</h2><p class="muted">{t("Settings are saved automatically.")}</p></div>
           <div><p class="eyebrow">{t("Game speed")}</p><div class="row wrap option-row">
             {#each [{ speed: 0, label: 'Paused' }, { speed: 1, label: '1×' }, { speed: 3, label: '3×' }] as option}
-              <button class="btn" aria-pressed={game.speed === option.speed} disabled={busy} onclick={() => act('/clock', { speed: option.speed }, 'PUT')}>{t(option.label)}</button>
+              <Button aria-pressed={game.speed === option.speed} disabled={busy} onclick={() => act('/clock', { speed: option.speed }, 'PUT')}>{t(option.label)}</Button>
             {/each}
           </div></div>
-          <label class="row spread setting"><span><strong>{t("Show onboarding prompts")}</strong><small>{t("Display the current tutorial step in the workbench.")}</small></span><Toggle switchStyle checked={game.settings.show_tutorial} disabled={busy} onchange={(value) => act('/settings', { settings: { ...game.settings, show_tutorial: value } }, 'PUT')} /></label>
+          <Switch label={t("Show onboarding prompts")} description={t("Display the current tutorial step in the workbench.")} checked={game.settings.show_tutorial} disabled={busy} onchange={({ currentTarget }) => act('/settings', { settings: { ...game.settings, show_tutorial: currentTarget.checked } }, 'PUT')} />
           <TutorialControls {game} {busy} change={tutorialAction} />
           <div class="stack"><h3>{t('Keyboard shortcuts')}</h3>
             <dl class="breakdown">
@@ -528,24 +654,26 @@
               {/each}
             </dl>
           </div>
-          <div class="row wrap"><button class="btn" disabled={busy} onclick={() => act('/settings', { settings: { show_tutorial: true, reduced_motion: false } }, 'PUT')}>{t("Restore defaults")}</button><button class="btn primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</button></div>
-        {:else if settingsTab === 'accessibility'}
+          <div class="row wrap"><Button disabled={busy} onclick={() => act('/settings', { settings: { show_tutorial: true, reduced_motion: false } }, 'PUT')}>{t("Restore defaults")}</Button><Button variant="primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</Button></div>
+        {:else if item.value === 'accessibility'}
           <h2>{t("Accessibility")}</h2>
-          <label class="row spread setting"><span><strong>{t("Reduce motion")}</strong><small>{t("Reduce animation and transitions.")}</small></span><Toggle switchStyle checked={game.settings.reduced_motion} disabled={busy} onchange={(value) => act('/settings', { settings: { ...game.settings, reduced_motion: value } }, 'PUT')} /></label>
+          <Switch label={t("Reduce motion")} description={t("Reduce animation and transitions.")} checked={game.settings.reduced_motion} disabled={busy} onchange={({ currentTarget }) => act('/settings', { settings: { ...game.settings, reduced_motion: currentTarget.checked } }, 'PUT')} />
 
         {:else}
           <div><h2>{t("Save management")}</h2><p class="muted">{t("The server saves progress as you play.")}</p></div>
-          <div class="row wrap"><button class="btn primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</button><a class="btn" href="/?view=saves">{t("Saved games")}</a><a class="btn" href="/">{t("Main menu")}</a></div>
+          <div class="row wrap"><Button variant="primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</Button><Button href="/?view=saves">{t("Saved games")}</Button><Button href="/">{t("Main menu")}</Button></div>
         {/if}
-      </section>
-    </div>
+        </section>
+      {/snippet}
+    </Tabs>
   {:else if section === 'more'}
     <div class="stack">
       {#each more as item}
         {@const Icon = sections[item].icon}
-        <a class="event row spread" data-tutorial={nav(item)} href={item === 'saves' ? '/?view=saves' : link(item)}>
-          <Icon size={20} class="accent" /><span class="more-label"><strong>{t(sections[item].name)}</strong><small>{t(sections[item].description)}</small></span><ChevronRight size={17} />
-        </a>
+        <ActionRow title={t(sections[item].name)} description={t(sections[item].description)}
+          href={item === 'saves' ? '/?view=saves' : link(item)} attributes={{ 'data-tutorial': nav(item) }}>
+          {#snippet icon()}<Icon size={20} />{/snippet}
+        </ActionRow>
       {/each}
     </div>
   {/if}
@@ -556,18 +684,18 @@
     <div class="stack">
       <p>{t('Shorter campaigns acquire the same expected number of users faster and can create a sharper traffic peak.')}</p>
       <div class="stack">
-        <div class="field"><span>{t('Target markets')}</span>
-          <Choice label={t('Target markets')} options={marketOptions} selected={targetMarkets} multiple searchable
+        <div class="field">
+          <SearchSelect {t} label={t('Target markets')} options={marketOptions} selected={targetMarkets} multiple searchable
             choose={(regions) => { targetMarkets = regions; updatePlan(); }} />
         </div>
-        <div class="split equal">
+        <div class="split">
           <div class="field"><span>{t('Campaign budget')}</span><NumberInput label={t('Campaign budget')} bind:value={budget} min={10} max={100000} step={50} precision={2} unit="USD" onchange={updatePlan} /></div>
           <div class="field"><span>{t('Duration (game hours)')}</span><NumberInput label={t('Duration (game hours)')} bind:value={campaignHours} min={.16} max={48} precision={2} onchange={updatePlan} /></div>
         </div>
       </div>
       {#if estimate?.plan}
         {@const preview = estimate.plan}
-        <div class="split equal">
+        <div class="split">
           <section class="stack">
             <h3>{t('Regional allocation')}</h3>
             <p class="muted">{t('The total budget is split evenly across selected markets.')}</p>
@@ -603,12 +731,12 @@
       {#if budget != null && game.balance < budget}<p class="notice warn">{t("Insufficient funds.")}</p>{/if}
     </div>
     {#snippet footer()}
-      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn primary" disabled={busy || pending || !estimate?.plan?.acquired || game.balance < (estimate?.plan?.budget ?? Infinity) || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`, { regions: targetMarkets, budget: estimate?.plan?.budget, duration: estimate?.plan?.duration })}>{t("Start campaign")}</button></div>
+      <div class="row spread"><Button onclick={() => dialog = undefined}>{t("Cancel")}</Button><Button variant="primary" disabled={busy || pending || !estimate?.plan?.acquired || game.balance < (estimate?.plan?.budget ?? Infinity) || game.campaigns.some((item) => item.id === detail)} onclick={() => confirm(`/campaigns/${detail}`, { regions: targetMarkets, budget: estimate?.plan?.budget, duration: estimate?.plan?.duration })}>{t("Start campaign")}</Button></div>
     {/snippet}
   </Modal>
 {:else if dialog === 'feature' && currentFeature}
   {@const definition = catalog.features[detail]}
-  <Modal title={t("Feature details")} subtitle={t(definition.name)} close={() => dialog = undefined}>
+  <Modal title={t("Feature details")} side="end" subtitle={t(definition.name)} close={() => dialog = undefined}>
     <div class="stack">
       <p class:warning={currentFeature.state === 'ready' && !currentFeature.can_release}>{featureStatus(currentFeature)}</p>
       <dl class="breakdown">
@@ -632,19 +760,19 @@
       {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     </div>
     {#snippet footer()}
-      <div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Close")}</button>
-        {#if currentFeature.state === 'available'}<button class="btn primary" disabled={busy || game.balance < definition.cost} onclick={() => confirm(`/features/${detail}`, { action: 'develop' })}>{t("Start development")}</button>
-        {:else if currentFeature.state === 'ready'}<button class="btn primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</button>
+      <div class="row spread"><Button onclick={() => dialog = undefined}>{t("Close")}</Button>
+        {#if currentFeature.state === 'available'}<Button variant="primary" disabled={busy || game.balance < definition.cost} onclick={() => confirm(`/features/${detail}`, { action: 'develop' })}>{t("Start development")}</Button>
+        {:else if currentFeature.state === 'ready'}<Button variant="primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</Button>
         {:else if currentFeature.state === 'released' && !currentFeature.enabled}
-          <button class="btn primary" disabled={busy || !currentFeature.can_enable} onclick={() => confirm(`/features/${detail}`, { action: 'enable' })}>{t('Enable feature')}</button>
+          <Button variant="primary" disabled={busy || !currentFeature.can_enable} onclick={() => confirm(`/features/${detail}`, { action: 'enable' })}>{t('Enable feature')}</Button>
         {:else if currentFeature.enabled && currentFeature.can_disable}
-          <button class="btn danger" disabled={busy} onclick={() => confirmDisable ? confirm(`/features/${detail}`, { action: 'disable' }) : confirmDisable = true}>{t(confirmDisable ? 'Confirm disable' : 'Disable feature')}</button>
+          <Button variant="danger" disabled={busy} onclick={() => confirmDisable ? confirm(`/features/${detail}`, { action: 'disable' }) : confirmDisable = true}>{t(confirmDisable ? 'Confirm disable' : 'Disable feature')}</Button>
         {/if}
       </div>
     {/snippet}
   </Modal>
 {:else if dialog === 'incident' && incident}
-  <Modal title={t("Incident details")} subtitle={message(incident.title)} close={() => dialog = undefined}>
+  <Modal title={t("Incident details")} side="end" subtitle={message(incident.title)} close={() => dialog = undefined}>
     {@render incidentDetails(incident)}
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     {#snippet footer()}{@render incidentActions(incident)}{/snippet}
@@ -652,12 +780,12 @@
 {:else if dialog === 'rollback' && deployment}
   <Modal title={t("Review rollback")} close={() => dialog = undefined}>
     <div class="stack"><p>{t("Restore the topology that was in production before “")}{message(deployment.summary)}{t("” on")} {gameTime(deployment.tick)}{t(". The server revalidates the topology and charges any installation cost.")}</p>{#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}</div>
-    {#snippet footer()}<div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn danger" disabled={busy} onclick={() => confirm(`/deployments/${detail}/rollback`, { revision: game.revision })}>{t("Roll back")}</button></div>{/snippet}
+    {#snippet footer()}<div class="row spread"><Button onclick={() => dialog = undefined}>{t("Cancel")}</Button><Button variant="danger" disabled={busy} onclick={() => confirm(`/deployments/${detail}/rollback`, { revision: game.revision })}>{t("Roll back")}</Button></div>{/snippet}
   </Modal>
 {:else if dialog === 'drill'}
   <Modal title={t("Run failure drill")} close={() => dialog = undefined}>
     <div class="stack"><p>{t("Take one API instance offline for two in-game hours to test routing and recovery. The drill affects live traffic.")}</p>{#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}</div>
-    {#snippet footer()}<div class="row spread"><button class="btn" onclick={() => dialog = undefined}>{t("Cancel")}</button><button class="btn danger" disabled={busy} onclick={() => confirm('/incidents/drill')}>{t("Start drill")}</button></div>{/snippet}
+    {#snippet footer()}<div class="row spread"><Button onclick={() => dialog = undefined}>{t("Cancel")}</Button><Button variant="danger" disabled={busy} onclick={() => confirm('/incidents/drill')}>{t("Start drill")}</Button></div>{/snippet}
   </Modal>
 {/if}
 
@@ -669,24 +797,12 @@
   .dash-header h1 { margin: 7px 0 4px; }
   .dash-header p { margin-top: 2px; }
   .time-range { width: 90px; flex: 0 0 auto; }
-  .cards, .split { display: grid; gap: 21px; }
-  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .split { display: grid; gap: 21px; align-items: start; }
   .stat { display: block; font-size: clamp(22px, 2.4vw, 34px); line-height: 1.15; margin: 8px 0 4px; }
-  .big-stat { display: block; font-size: clamp(34px, 4vw, 52px); line-height: 1.1; margin: 10px 0 4px; }
-  .split { grid-template-columns: 2.05fr 1fr; }
-  .growth-summary { align-items: start; }
-  .growth-summary :global(.chart) { max-width: 740px; }
-  .split.equal { grid-template-columns: 1fr 1fr; }
+  .split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .split > .stack { align-content: start; }
-  .campaigns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .campaigns > article { align-content: start; grid-template-rows: auto auto auto 1fr auto; gap: 10px; }
-  .campaigns .emphasis { border-color: var(--primary); }
-  .feature-row { display: flex; gap: 5px; align-items: center; padding-right: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--rail); }
-  .feature-row.active { background: var(--tint); border-color: var(--primary); }
-  .feature-select { flex: 1; display: grid; grid-template-columns: 7px 1fr auto; align-items: center; gap: 13px; border: 0; background: transparent; color: var(--text); min-height: 56px; padding: 9px 12px; text-align: left; }
-  .feature-select h3 { text-transform: uppercase; font-size: 14px; }
-  .feature-select small { display: block; }
-  .feature-detail { align-content: start; }
+  .campaign-card { align-content: start; gap: 10px; }
+  :global(.campaigns) .emphasis { border-color: var(--primary); }
   .dashboard h2 { font-size: 18px; }
   .dashboard h2 + p { margin-top: 4px; font-size: 13px; }
   .timeline { gap: 9px; }
@@ -694,26 +810,14 @@
   .timeline button:hover { color: var(--primary); }
   .timeline .dot { color: var(--primary); margin-top: 6px; }
   .timeline .dot.item-warn { color: var(--warning); }
-  .throughput { color: #77b9ba; }
   .node-meter { gap: 6px; font-size: 12px; }
   .event { text-align: left; padding: 13px; width: 100%; border: 1px solid var(--border); border-radius: 9px; background: var(--rail); color: var(--text); }
-  button.event:hover, a.event:hover { border-color: var(--primary); }
   .event strong { font-size: 15px; }
-  .event.active { background: var(--tint); border-color: var(--warning); }
-  .event-layout { grid-template-columns: .8fr 1.2fr; }
-  .settings-layout { grid-template-columns: minmax(200px, .36fr) 1fr; }
-  .settings-tabs { display: grid; gap: 8px; align-content: start; }
-  .settings-tabs .btn { justify-content: flex-start; min-height: 43px; background: transparent; border-color: transparent; }
-  .settings-tabs .btn[aria-pressed="true"] { background: var(--tint); color: var(--primary); }
   .settings-panel { min-height: 360px; align-content: start; }
-  .setting { border-block: 1px solid var(--border); padding: 15px 0; }
-  .setting small { display: block; }
   .option-row { margin-top: 7px; }
-  .option-row .btn { min-width: 74px; }
+  .option-row :global(.sui-button) { min-width: 74px; }
   .event small { display: block; margin-top: 3px; }
   .event > :first-child { flex: 1 1 auto; }
-  .more-label { flex: 1; }
-  a.event > :first-child { flex: 0 0 auto; }
   .breakdown { margin: 0; display: grid; gap: 8px; }
   .breakdown > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); padding: 6px 0; }
   .breakdown dd { font: 400 12px var(--mono); text-align: right; }
@@ -721,25 +825,19 @@
   .overview strong { font-size: 21px; }
   @media (max-width: 1050px) {
     .dashboard { padding: 24px 20px; }
-    .cards, .split { gap: 12px; }
+    .split { gap: 12px; }
   }
   @media (max-width: 850px) {
     .dashboard { padding: 16px 17px 25px; gap: 15px; }
     .dash-header { min-height: 0; }
     .dash-header h1 { margin-top: 4px; }
-    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .split, .split.equal, .campaigns { grid-template-columns: 1fr; }
-    .campaigns > article { grid-template-rows: none; }
-    .feature-detail, .incident-preview { display: none; }
-    .settings-tabs { display: flex; flex-wrap: wrap; }
-    .settings-tabs .btn { flex: 1; justify-content: center; }
+    .split { grid-template-columns: 1fr; }
     .settings-panel { min-height: 0; }
-    .feature-select { gap: 7px; padding-inline: 8px; }
     .overview { gap: 7px; }
     .overview strong { font-size: 19px; }
   }
   @media (max-width: 400px) {
     .dashboard .pad { padding: 13px; }
-    .dash-header .badge { max-width: 100px; }
+    .dash-header :global(.sui-badge) { max-width: 100px; }
   }
 </style>

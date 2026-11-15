@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { Button, Form, PageColumns, Switch } from '@service-unavailable/ui';
   import Select from '../controls/Select.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
-  import Toggle from '../controls/Toggle.svelte';
   import { message, t } from '../i18n.svelte';
   import { num, pct, preciseMoney } from '../format';
   import type { Catalog, Game, ProductSettings } from '../types';
@@ -22,9 +22,8 @@
   }
 </script>
 
-<form class="panel pad stack" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-  <h2>{t('Product settings')}</h2>
-  <div class="settings-grid">
+<Form class="stack" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+  <PageColumns columns={3} minWidth="17rem">
     {#if ads?.state === 'released'}
       <fieldset class="stack">
         <legend>{t('Advertising')}</legend>
@@ -51,7 +50,7 @@
             value={product.premium_price} onchange={(value) => edits.premium_price = value ?? NaN} unit="USD" />
         </div>
         <p class="muted">{t('Higher prices reduce adoption. Price changes apply to new subscriptions and renewals.')}</p>
-        <label class="row"><Toggle switchStyle checked={product.premium_fast_sync} onchange={(value) => edits.premium_fast_sync = value} /> {t('Offer faster synchronization')}</label>
+        <Switch label={t('Offer faster synchronization')} checked={product.premium_fast_sync} onchange={({ currentTarget }) => edits.premium_fast_sync = currentTarget.checked} />
         <p class="muted">{t('Premium is ad-free. Faster synchronization adds load and makes the plan more attractive. Existing terms retain their benefits.')}</p>
         <p class="muted">{t('Reliability and latency affect renewals.')}</p>
         <dl class="estimate">
@@ -77,18 +76,17 @@
     <fieldset class="stack">
       <legend>{t('Markets')}</legend>
       <p>{t('Europe is the starting market.')}</p>
-      <label class="row"><Toggle switchStyle checked={product.north_america} onchange={(value) => edits.north_america = value} /> {t('Acquire users in North America')}</label>
+      <Switch label={t('Acquire users in North America')} checked={product.north_america} onchange={({ currentTarget }) => edits.north_america = currentTarget.checked} />
       <p class="muted">{t('Campaigns and organic growth can reach this market. Existing users keep access if you stop acquisition.')}</p>
     </fieldset>
     {/if}
-  </div>
+  </PageColumns>
   {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-  <div><button class="btn primary" type="submit" disabled={busy || !Object.keys(edits).length}>{t('Save product settings')}</button></div>
-</form>
+  <div><Button variant="primary" type="submit" disabled={busy || !Object.keys(edits).length}>{t('Save product settings')}</Button></div>
+</Form>
 
 <style>
-  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(235px, 100%), 1fr)); gap: 12px; }
-  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; align-content: start; }
+  fieldset { background: var(--sui-surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; align-content: start; }
   legend { padding-inline: 6px; font-weight: 600; }
   .estimate { margin: 0; font-size: 13px; }
   .estimate div { display: flex; justify-content: space-between; gap: 6px; padding-block: 5px; border-bottom: 1px solid var(--border); }

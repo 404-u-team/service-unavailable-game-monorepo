@@ -13,7 +13,7 @@
 </script>
 
 <div class="regional-demand">
-  <section class="panel pad stack">
+  <section class="stack">
     <div>
       <h2>{t('Expected daily demand')}</h2>
       <p class="muted">{t('Baseline requests per second by UTC hour. Campaigns and events can lift live demand.')}</p>
@@ -24,7 +24,7 @@
     {#if demand.campaign_lift}<p class="muted">{t('Campaign lift {0}', [pct(demand.campaign_lift, 1)])}</p>{/if}
     {#if demand.event_lift}<p class="notice warn">{t('Activity spike {0}', [pct(demand.event_lift, 1)])}</p>{/if}
   </section>
-  <section class="panel inset pad stack">
+  <section class="stack">
     <div class="row spread wrap"><h2>{t('Regional traffic')}</h2><span class="mono" data-testid="game-utc-time">{t('Day {0} / {1}', [demand.day, minuteClock(demand.utc_minute)])} UTC</span></div>
     <div class="sort"><Select label={t('Sort regions')} bind:value={sort} options={[
       { value: 'requests', label: t('Request rate') }, { value: 'audience', label: t('Registered users') }, { value: 'name', label: t('Region name') }
@@ -49,8 +49,9 @@
 </div>
 
 <style>
-  .regional-demand { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; align-items: start; }
-  .regional-demand section { min-width: 0; align-content: start; }
+  .regional-demand { container-type: inline-size; }
+  .regional-demand { display: flex; flex-wrap: wrap; gap: 20px; align-items: start; }
+  .regional-demand section { min-width: 0; flex: 1 1 17rem; align-content: start; }
   .sort { max-width: 190px; }
   .regions { max-height: 280px; overflow-y: auto; overscroll-behavior: contain; }
   details { border-top: 1px solid var(--border); padding: 8px 3px; font-size: 13px; }
@@ -60,5 +61,4 @@
   dl { margin: 6px 0 2px 8px; }
   dl div { display: flex; justify-content: space-between; gap: 10px; padding: 4px 1px; }
   dd { margin: 0; text-align: end; font-family: var(--mono); }
-  @media (max-width: 850px) { .regional-demand { grid-template-columns: 1fr; } }
 </style>

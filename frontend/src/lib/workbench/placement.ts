@@ -1,6 +1,13 @@
 import type { Point } from '../types';
 import type { Rect } from './routing';
 
+export type CanvasTools = {
+  fit: () => void;
+  place: () => Point;
+  reveal: (point: Point) => void;
+  revealNode: (id: string) => void;
+};
+
 const gap = 16;
 
 export function findPlacement(view: Rect, size: Pick<Rect, 'width' | 'height'>, obstacles: Rect[]): Point {

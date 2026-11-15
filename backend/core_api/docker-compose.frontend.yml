@@ -10,7 +10,9 @@ services:
                 condition: service_started
 
     workbench:
-        build: ../../frontend
+        build:
+            context: ../..
+            dockerfile: frontend/Dockerfile
         environment:
             CORE_API_URL: http://core-api:8000
             ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:${FRONTEND_PORT:-3000}}

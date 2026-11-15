@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TextInput from './controls/TextInput.svelte';
+  import { Button, Disclosure, PageColumns, Panel, Slideover, TextInput } from '@service-unavailable/ui';
   import { ArrowRight, ChevronRight, List, Search } from '@lucide/svelte';
   import { page } from '$app/state';
   import { tick } from 'svelte';
@@ -42,6 +42,20 @@
   });
 </script>
 
+{#snippet navigation()}
+  <nav class="guide-nav" aria-label={t('Guide navigation')}>
+      {#each categoriesList as [key, title] (key)}
+        <Disclosure variant="panel" label={t(title)} open={active?.category === key || category === key}>
+          <ul>
+            {#each byCategory(key) as [id, article] (id)}
+              <li><a href={href(id)} onclick={chooseArticle} aria-current={requested === id ? 'page' : undefined}>{t(article.title)}</a></li>
+            {/each}
+          </ul>
+        </Disclosure>
+      {/each}
+    </nav>
+{/snippet}
+
 <div class="guide">
   {#if game && tutorialAction}<TutorialControls {game} {busy} change={tutorialAction} />{/if}
   <div class="guide-header">
@@ -49,22 +63,11 @@
       <Search size={17} /><span class="sr-only">{t('Search the Guide')}</span>
       <TextInput type="search" bind:value={query} placeholder={t('Search articles')} />
     </label>
-    <button class="btn categories-button" aria-expanded={mobileNav} aria-controls="guide-navigation"
-      onclick={() => mobileNav = !mobileNav}><List size={15} /> {t('Categories')}</button>
+    <Button class="categories-button" aria-haspopup="dialog" aria-expanded={mobileNav}
+      onclick={() => mobileNav = true}><List size={15} /> {t('Categories')}</Button>
   </div>
-  <div class="guide-layout">
-    <nav id="guide-navigation" class="guide-nav" class:mobile-expanded={mobileNav} aria-label={t('Guide navigation')}>
-      {#each categoriesList as [key, title] (key)}
-        <details open={active?.category === key || category === key}>
-          <summary>{t(title)}</summary>
-          <ul>
-            {#each byCategory(key) as [id, article] (id)}
-              <li><a href={href(id)} onclick={chooseArticle} aria-current={requested === id ? 'page' : undefined}>{t(article.title)}</a></li>
-            {/each}
-          </ul>
-        </details>
-      {/each}
-    </nav>
+  <div class="guide-layout" class:article-open={active && !query.trim()}>
+    {#if active && !query.trim()}<aside class="guide-sidebar">{@render navigation()}</aside>{/if}
     <div class="guide-content">
       {#if query.trim()}
         <section class="panel pad stack" aria-label={t('Search articles')}>
@@ -141,35 +144,39 @@
           </section>
         </article>
       {:else}
-        <section class="panel pad stack">
+        <section class="stack">
           <h2>{t('Browse articles')}</h2>
-          <div class="category-grid">
+          <PageColumns balanced columns={3} minWidth="15rem">
             {#each categoriesList as [key, title] (key)}
-              <section class="category stack" id={`category-${key}`}>
-                <h3>{t(title)}</h3>
+              <section class="category" id={`category-${key}`}>
+                <Panel inset>
+                  {#snippet header()}<h3>{t(title)}</h3>{/snippet}
                 <ul>
                   {#each byCategory(key) as [id, article] (id)}<li><a href={href(id)}>{t(article.title)}</a></li>{/each}
                 </ul>
+                </Panel>
               </section>
             {/each}
-          </div>
+          </PageColumns>
         </section>
       {/if}
     </div>
   </div>
 </div>
 
+<Slideover bind:open={mobileNav} side="start" title={t('Categories')} closeLabel={t('Close dialog')}>
+  {@render navigation()}
+</Slideover>
+
 <style>
   .guide { display: grid; gap: 15px; min-width: 0; }
   .guide-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: var(--rail); border: 1px solid var(--border); border-radius: 10px; }
-  .categories-button { display: none; }
+  .guide-header :global(.categories-button) { display: none; }
   .search { width: min(100%, 410px); color: var(--muted); }
   .search :global(input) { min-width: 0; width: 100%; }
-  .guide-layout { display: grid; grid-template-columns: minmax(178px, 235px) minmax(0, 1fr); align-items: start; gap: 16px; }
+  .guide-layout.article-open { display: grid; grid-template-columns: minmax(178px, 235px) minmax(0, 1fr); align-items: start; gap: 16px; }
   .guide-nav { display: grid; gap: 6px; }
-  details { border: 1px solid var(--border); background: var(--rail); border-radius: 8px; }
-  summary { cursor: pointer; padding: 10px 12px; font-size: 13px; font-weight: 600; }
-  .guide-nav ul { padding: 0 7px 7px; }
+  .guide-sidebar { position: sticky; top: 78px; max-height: calc(100dvh - 90px); overflow-y: auto; padding: 4px; }
   .guide-nav a { display: block; padding: 6px 8px; border-radius: 5px; font-size: 13px; }
   a:hover { text-decoration: underline; }
   .guide-nav a[aria-current] { background: var(--tint); color: var(--primary); }
@@ -197,16 +204,14 @@
   .result-list { display: grid; gap: 8px; }
   .result-list a { display: grid; gap: 3px; padding: 10px 12px; background: var(--rail); border: 1px solid var(--border); border-radius: 8px; }
   .result-list small { color: var(--muted); }
-  .category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); gap: 12px; }
-  .category { background: var(--rail); border: 1px solid var(--border); border-radius: 8px; padding: 13px; }
+  .category a { display: block; padding-block: 4px; }
   .category li + li { margin-top: 5px; }
   .steps { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
   .steps li { padding: 8px; }
   @media (max-width: 780px) {
-    .guide-layout { grid-template-columns: 1fr; }
-    .guide-nav:not(.mobile-expanded) { display: none; }
-    .categories-button { display: inline-flex; }
-    .guide-nav { grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); align-items: start; }
+    .guide-layout.article-open { grid-template-columns: 1fr; }
+    .guide-sidebar { display: none; }
+    .guide-header :global(.categories-button) { display: inline-flex; }
     .search { width: auto; flex: 1 1 155px; }
   }
   @media (max-width: 450px) {

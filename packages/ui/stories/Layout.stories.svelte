@@ -23,6 +23,15 @@
   </PageColumns>
 </Story>
 
+<Story name="Balanced columns">
+  <PageColumns columns={3} minWidth="12rem" balanced>
+    <Panel><h2>{t('Service capacity')}</h2><p>{t('Service capacity and demand.')}</p></Panel>
+    <Panel><h2>{t('Monitoring coverage')}</h2><p>{t('Recent measurements from monitored servers.')}</p><p>{t('Measurements are available for monitored servers.')}</p></Panel>
+    <Panel><h2>{t('Finance')}</h2><p>{t('Revenue breakdown')}</p></Panel>
+    <Panel><h2>{t('Architecture')}</h2><p>{t('Compare incoming requests with provisioned capacity.')}</p></Panel>
+  </PageColumns>
+</Story>
+
 <Story name="Badges and alerts">
   <div class="statuses">
     <div class="row">

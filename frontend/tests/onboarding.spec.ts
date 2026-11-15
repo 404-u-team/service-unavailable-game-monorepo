@@ -7,7 +7,7 @@ import { choose } from './forms';
 const tutorial = (page: Page) => page.getByRole('complementary', { name: /Guided onboarding|Обучение/ });
 const control = (page: Page, key: string) => {
   const selector = `[data-tutorial="${key}"]:visible`;
-  return page.locator(`dialog[open] ${selector}, body:not(:has(dialog[open])) ${selector}`).first();
+  return page.locator(`.sui-overlay[data-state="open"] ${selector}, body:not(:has(.sui-overlay[data-state="open"])) ${selector}`).first();
 };
 const highlight = (page: Page, key: string) => page.locator(`[data-tutorial-highlight="${key}"]`);
 const button = (within: Page | Locator, name: string | RegExp) => within.getByRole('button', { name, exact: typeof name === 'string' });
@@ -92,7 +92,7 @@ for (const layout of ['desktop', 'compact']) {
     await page.keyboard.press('Enter');
 
     await step(page, 'Open Configuration');
-    if (compact) await clickTarget(page, target.openInspector);
+    await clickTarget(page, target.openInspector);
     await clickTarget(page, target.configuration);
     await step(page, 'Read the capacity settings');
     await visibility(page, target.capacity);
@@ -106,7 +106,7 @@ for (const layout of ['desktop', 'compact']) {
     await clickTarget(page, target.configuration);
 
     await step(page, 'Set up monitoring coverage');
-    if (compact) await clickTarget(page, target.close);
+    await clickTarget(page, target.close);
     await next(page, 'Continue chapter');
     await step(page, 'Add a Monitoring collector');
     await clickTarget(page, target.add);
@@ -148,7 +148,7 @@ for (const layout of ['desktop', 'compact']) {
     await visibility(page, target.coverage);
     await next(page);
     await tutorial(page).getByRole('link', { name: 'Open Topology' }).click();
-    if (compact) await clickTarget(page, target.openInspector);
+    await clickTarget(page, target.openInspector);
     await clickTarget(page, target.metrics);
     await step(page, 'Read live API utilization');
     await visibility(page, target.cpu);
@@ -161,24 +161,22 @@ for (const layout of ['desktop', 'compact']) {
     await visibility(page, target.throughput);
     await next(page);
     await step(page, 'Plan an infrastructure change');
-    if (compact) await clickTarget(page, target.close);
+    await clickTarget(page, target.close);
     await next(page, 'Continue chapter');
     await step(page, 'Create a draft');
     await clickTarget(page, target.createDraft);
     await step(page, 'Open the API settings');
-    if (compact) await clickTarget(page, target.openInspector);
+    await clickTarget(page, target.openInspector);
     await clickTarget(page, target.configuration);
-    await expect.poll(() => control(page, target.edit).evaluate((node) => {
-      const panel = node.closest('dialog, [data-tutorial-scroll]');
-      return panel?.scrollTop ?? 0;
-    })).toBeGreaterThan(0);
+    await expect(control(page, target.edit)).toBeInViewport();
+    await expect.poll(() => page.getByRole('dialog').evaluate((node) => node.scrollLeft)).toBe(0);
     await clickTarget(page, target.edit);
     await step(page, 'Change capacity in the draft');
     await expect(highlight(page, target.instance)).toBeVisible();
     await choose(control(page, target.instance), '2');
     await clickTarget(page, target.save);
     await step(page, 'Open Deployment review');
-    if (compact) await clickTarget(page, target.close);
+    await clickTarget(page, target.close);
     await clickTarget(page, target.review);
     await step(page, 'Read the deployment forecast');
     await visibility(page, target.capacityForecast);

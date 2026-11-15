@@ -24,6 +24,7 @@ for (const width of [390, 768, 1440, 1920]) for (const language of ['en', 'ru'] 
     await page.setViewportSize({ width, height: 1000 });
     const game = await preparedGame(page, true);
     await page.goto(`/game/${game.id}?view=product`);
+    await page.getByRole('tab', { name: tr('Engineering'), exact: true }).click();
     const engineering = page.getByRole('region', { name: tr('Engineering'), exact: true });
     await expect(engineering.getByRole('heading', { name: tr('Service Decomposition'), exact: true })).toBeVisible();
     await expect(engineering.getByText(tr('Completed'), { exact: true })).toHaveCount(5);
@@ -52,8 +53,9 @@ for (const width of [390, 768, 1440, 1920]) for (const language of ['en', 'ru'] 
 test('Engineering starts research, shows prerequisites, locks settings and resumes its walkthrough', async ({ page }) => {
   const game = await preparedGame(page, false);
   await page.goto(`/game/${game.id}?view=product`);
+  await page.getByRole('tab', { name: 'Engineering', exact: true }).click();
   const research = page.getByRole('region', { name: 'Engineering', exact: true });
-  const decomposition = research.locator('article').filter({ has: page.getByRole('heading', { name: 'Service Decomposition', exact: true }) });
+  const decomposition = research.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Service Decomposition', exact: true }) });
   await decomposition.getByRole('button', { name: 'Start research' }).click();
   await expect(decomposition.getByText('In development', { exact: true })).toBeVisible();
   await expect(research.getByText('Unavailable', { exact: true })).toHaveCount(3);
@@ -102,7 +104,7 @@ test('covered services expose operation, domain and cost telemetry', async ({ pa
   const summary = await imported.json();
   await page.goto(`/game/${summary.id}?view=monitor`);
   await expect(page.getByRole('heading', { name: 'Service responsibilities', exact: true })).toBeVisible();
-  const telemetry = page.getByRole('heading', { name: 'Service responsibilities', exact: true }).locator('..').locator('..');
+  const telemetry = page.getByRole('article', { name: 'Service responsibilities', exact: true });
   await expect(telemetry).toContainText('Chat history');
   await expect(telemetry).toContainText('Shared');
   await expect(telemetry).toContainText('per day');

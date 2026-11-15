@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '@service-unavailable/ui';
   import { untrack } from 'svelte';
   import { Focus } from '@lucide/svelte';
   import { t } from '../i18n.svelte';
@@ -27,9 +28,10 @@
   let content = $state<HTMLDivElement>();
   let hole = $state.raw<ReturnType<typeof visibleTarget>>();
   let bounds = $state.raw({ left: 0, right: 0, top: 0, bottom: 0 });
+  let origin = $state.raw({ x: 0, y: 0 });
   let position = $state.raw({ x: 10, y: 10, maxHeight: 360 });
   let tooltipWidth = $state(330);
-  let modal = $state<HTMLDialogElement>();
+  let modal = $state<HTMLElement>();
   let modalTarget = $state(false);
   let visible = $state(false);
   let reposition: (() => void) | undefined;
@@ -69,7 +71,7 @@
     let lastKey: Target | undefined;
     let lastNode: HTMLElement | undefined;
     let lastStep = '';
-    let lastDialog: HTMLDialogElement | undefined;
+    let lastDialog: HTMLElement | undefined;
     let scroll = true;
     let lastViewport = '';
     let attemptedReveal = false;
@@ -128,8 +130,11 @@
         }
       }
       hole = highlight;
-      bounds = dialog ? intersection(viewBox, dialog.getBoundingClientRect()) : viewBox;
-      const preferred = dialog && bounds.right - bounds.left >= 280 && bounds.bottom - bounds.top >= 250 ? bounds : viewBox;
+      const dialogBox = dialog?.getBoundingClientRect();
+      bounds = dialogBox ? intersection(viewBox, dialogBox) : viewBox;
+      // Bits UI contains layout inside the dialog, so its tutorial layer has a local origin.
+      origin = dialog && dialogBox ? { x: dialogBox.left + dialog.clientLeft, y: dialogBox.top + dialog.clientTop } : { x: 0, y: 0 };
+      const preferred = bounds;
       const width = Math.min(360, Math.max(0, preferred.right - preferred.left - 20));
       tooltipWidth = width;
       const footer = dialog?.querySelector(':scope > footer')?.getBoundingClientRect();
@@ -147,7 +152,8 @@
       if (records.some(({ target: element }) => element instanceof Element && !root.contains(element))) schedule();
     });
     observer.observe(document.body, { subtree: true, childList: true, attributes: true,
-      attributeFilter: ['open', 'class', 'style', 'data-tutorial', 'data-tutorial-obstruction'] });
+      attributeFilter: ['data-state', 'class', 'style', 'data-starting-style', 'data-tutorial', 'data-tutorial-obstruction'] });
+    document.addEventListener('transitionend', schedule, true);
     window.addEventListener('scroll', schedule, true);
     window.addEventListener('resize', schedule);
     window.visualViewport?.addEventListener('scroll', schedule);
@@ -159,6 +165,7 @@
       window.removeEventListener('resize', schedule);
       window.visualViewport?.removeEventListener('scroll', schedule);
       window.visualViewport?.removeEventListener('resize', schedule);
+      document.removeEventListener('transitionend', schedule, true);
       cancelAnimationFrame(frame);
       observer.disconnect();
       resize.disconnect();
@@ -178,17 +185,17 @@
   }
 </script>
 
-<div class="tutorial-layer" data-spotlight-ui bind:this={layer}>
+<div class="tutorial-layer" class:in-dialog={!!modal} data-spotlight-ui bind:this={layer}>
   {#if hole}
     <div class="mask" aria-hidden="true"
-      style:left="{bounds.left}px" style:top="{bounds.top}px" style:width="{bounds.right - bounds.left}px" style:height="{bounds.bottom - bounds.top}px">
+      style:left="{bounds.left - origin.x}px" style:top="{bounds.top - origin.y}px" style:width="{bounds.right - bounds.left}px" style:height="{bounds.bottom - bounds.top}px">
       <div class="spotlight" data-tutorial-highlight={modal && !modalTarget ? target.close : view.target}
         style:left="{hole.left - bounds.left}px" style:top="{hole.top - bounds.top}px"
         style:width="{hole.right - hole.left}px" style:height="{hole.bottom - hole.top}px"></div>
     </div>
   {/if}
   <aside class="panel tutorial" bind:this={tooltip} tabindex="-1" aria-label={t('Guided onboarding')}
-    style:left="{position.x}px" style:top="{position.y}px" style:max-height="{position.maxHeight}px" style:width="{tooltipWidth}px">
+    style:left="{position.x - origin.x}px" style:top="{position.y - origin.y}px" style:max-height="{position.maxHeight}px" style:width="{tooltipWidth}px">
     <div class="tutorial-content" bind:this={content}>
       {#if step}
         <header>
@@ -212,25 +219,25 @@
           {/if}
         </div>
         <div class="row wrap tutorial-actions">
-          {#if index > 0}<button class="btn" disabled={busy} onclick={() => act('back')}>{t('Back')}</button>{/if}
+          {#if index > 0}<Button disabled={busy} onclick={() => act('back')}>{t('Back')}</Button>{/if}
           {#if view.open && !modal && !visible}
-            <a class="btn primary" href={link(view.open)}>{t('Open {0}', [t(sections[view.open].name)])}</a>
+            <Button variant="primary" href={link(view.open)}>{t('Open {0}', [t(sections[view.open].name)])}</Button>
           {:else if view.retry}
-            <button class="btn primary" disabled={busy} onclick={showTarget}>{t('Retry')}</button>
+            <Button variant="primary" disabled={busy} onclick={showTarget}>{t('Retry')}</Button>
           {:else if (replay || (view.allowed && visible) || (view.allowed && !view.target)) && (!modal || modalTarget)}
-            <button class="btn primary" disabled={busy} onclick={() => act('next')}>
+            <Button variant="primary" disabled={busy} onclick={() => act('next')}>
               {t(index === onboarding.length - 1 ? 'Finish' : firstInChapter ? 'Continue chapter' : 'Next')}
-            </button>
+            </Button>
           {:else if (view.target || modal) && !waiting}
-            <button class="btn" disabled={busy} onclick={focusTarget}><Focus size={14} />{t(visible ? 'Focus target' : 'Show target')}</button>
+            <Button disabled={busy} onclick={focusTarget}><Focus size={14} />{t(visible ? 'Focus target' : 'Show target')}</Button>
           {/if}
-          <button class="btn ghost" disabled={busy} onclick={() => act('skip-step')}>{t('Skip step')}</button>
-          <button class="btn ghost" disabled={busy} onclick={() => act('skip')}>{t(firstInChapter ? 'Pause tutorial' : 'Skip tutorial')}</button>
+          <Button variant="ghost" disabled={busy} onclick={() => act('skip-step')}>{t('Skip step')}</Button>
+          <Button variant="ghost" disabled={busy} onclick={() => act('skip')}>{t(firstInChapter ? 'Pause tutorial' : 'Skip tutorial')}</Button>
         </div>
       {:else}
         <h2>{t('Tutorial complete')}</h2>
         <p>{t('You can revisit the chapters from the Guide or restart the tutorial in Settings.')}</p>
-        <button class="btn primary" onclick={complete}>{t('Done')}</button>
+        <Button variant="primary" onclick={complete}>{t('Done')}</Button>
       {/if}
     </div>
   </aside>
@@ -238,9 +245,10 @@
 
 <style>
   .tutorial-layer { position: fixed; inset: 0; z-index: var(--layer-tutorial); pointer-events: none; }
-  .mask { position: fixed; overflow: hidden; pointer-events: none; }
+  .tutorial-layer.in-dialog { position: absolute; overflow: clip; }
+  .mask { position: absolute; overflow: hidden; pointer-events: none; }
   .spotlight { position: absolute; border-radius: 8px; color: #d9ff8c; box-shadow: inset 0 0 0 2px currentColor, 0 0 0 2px #11190e, 0 0 0 160vmax #06090bbf; }
-  .tutorial { position: fixed; pointer-events: auto; background: var(--raised); border-color: #839d59; padding: 10px; overflow: auto;
+  .tutorial { position: absolute; pointer-events: auto; background: var(--raised); border-color: #839d59; padding: 10px; overflow: auto;
     overscroll-behavior: contain; scrollbar-width: thin; box-shadow: 0 10px 35px #000c; }
   .tutorial-content { display: grid; gap: 7px; overflow-wrap: anywhere; }
   header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1px 8px; color: var(--muted); }
@@ -254,6 +262,6 @@
   p { font-size: 13px; }
   .status { color: var(--primary); font-size: 11px; }
   .tutorial-actions { gap: 1px 4px; }
-  .tutorial .btn { min-height: 32px; padding-inline: 7px; font-size: 12px; }
-  .tutorial .ghost { color: var(--muted); }
+  .tutorial :global(.sui-button) { min-height: 32px; padding-inline: 7px; font-size: 12px; }
+  .tutorial :global([data-variant='ghost']) { color: var(--muted); }
 </style>

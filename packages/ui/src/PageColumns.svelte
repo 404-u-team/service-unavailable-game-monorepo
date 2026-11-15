@@ -2,11 +2,11 @@
   import type { Snippet } from 'svelte';
   import type { HTMLAttributes } from 'svelte/elements';
 
-  let { children, columns = 3, minWidth = '15rem', gap = 'var(--sui-space-4)', class: className, ...attrs }:
-    HTMLAttributes<HTMLDivElement> & { children: Snippet; columns?: 2 | 3 | 4; minWidth?: string; gap?: string } = $props();
+  let { children, columns = 3, minWidth = '15rem', gap = 'var(--sui-space-4)', balanced = false, class: className, ...attrs }:
+    HTMLAttributes<HTMLDivElement> & { children: Snippet; columns?: 2 | 3 | 4; minWidth?: string; gap?: string; balanced?: boolean } = $props();
 </script>
 
-<div {...attrs} class={['columns', className]} style:--columns={columns} style:--min-width={minWidth} style:--gap={gap}>
+<div {...attrs} class={['columns', className]} class:balanced style:--columns={columns} style:--min-width={minWidth} style:--gap={gap}>
   {@render children()}
 </div>
 
@@ -17,4 +17,6 @@
     grid-template-columns: repeat(auto-fit, minmax(min(100%, max(var(--min-width), var(--column-width))), 1fr));
   }
   .columns > :global(*) { min-inline-size: 0; }
+  .balanced { display: block; columns: var(--columns) var(--min-width); column-gap: var(--gap); }
+  .balanced > :global(*) { break-inside: avoid; margin-block-end: var(--gap); }
 </style>

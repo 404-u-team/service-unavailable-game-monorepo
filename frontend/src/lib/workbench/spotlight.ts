@@ -22,10 +22,10 @@ function scrollBox(element: HTMLElement): Box {
 }
 
 export function openDialog() {
-  return [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].at(-1);
+  return [...document.querySelectorAll<HTMLElement>('.sui-overlay[data-state="open"]')].at(-1);
 }
 
-export function findTarget(key: string | undefined, dialog?: HTMLDialogElement) {
+export function findTarget(key: string | undefined, dialog?: HTMLElement) {
   if (!key) return;
   const root = dialog ?? document;
   return [...root.querySelectorAll<HTMLElement>(`[data-tutorial="${key}"]`)]
@@ -36,8 +36,8 @@ function obstructions(node: HTMLElement, area: Box, scope?: HTMLElement): Box {
   let { top, bottom } = area;
   const root = scope ?? document;
   for (const item of root.querySelectorAll<HTMLElement>('[data-tutorial-obstruction]')) {
-    if (item.contains(node) || (scope ? item.closest('dialog, [data-tutorial-scroll]') !== scope
-      : item.closest('dialog, [data-tutorial-scroll]'))) continue;
+    if (item.contains(node) || (scope ? item.closest('[data-tutorial-scroll]') !== scope
+      : item.closest('[data-tutorial-scroll]'))) continue;
     const box = item.getBoundingClientRect();
     if (!box.width || !box.height || box.left >= area.right || box.right <= area.left) continue;
     if (item.dataset.tutorialObstruction === 'top' && box.top <= area.top + 2 && box.bottom > top) top = box.bottom;
@@ -46,7 +46,7 @@ function obstructions(node: HTMLElement, area: Box, scope?: HTMLElement): Box {
   return { ...area, top, bottom };
 }
 
-function ancestors(node: HTMLElement, dialog?: HTMLDialogElement) {
+function ancestors(node: HTMLElement, dialog?: HTMLElement) {
   if (node === dialog) return [];
   const result: { element: HTMLElement; clipX: boolean; clipY: boolean; scrollX: boolean; scrollY: boolean }[] = [];
   for (let parent = node.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
@@ -67,7 +67,7 @@ function scrollOffset(start: number, end: number, min: number, max: number) {
   return (start + end - min - max) / 2;
 }
 
-export function revealTarget(node: HTMLElement, dialog?: HTMLDialogElement) {
+export function revealTarget(node: HTMLElement, dialog?: HTMLElement) {
   const view = viewport();
   for (const { element, scrollX, scrollY } of ancestors(node, dialog)) {
     if ((!scrollX && !scrollY) || element === document.scrollingElement) continue;
@@ -94,7 +94,7 @@ export function spotlightBounds(rect: Box, clip: Box, padding = 5): Box | undefi
   });
 }
 
-export function visibleTarget(node: HTMLElement, dialog?: HTMLDialogElement): Box | undefined {
+export function visibleTarget(node: HTMLElement, dialog?: HTMLElement): Box | undefined {
   let box = dialog ? viewport() : obstructions(node, viewport());
   for (const { element, clipX, clipY } of ancestors(node, dialog)) {
     if (element === document.scrollingElement) continue;

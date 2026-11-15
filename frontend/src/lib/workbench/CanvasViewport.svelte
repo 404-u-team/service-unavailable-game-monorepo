@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useSvelteFlow } from '@xyflow/svelte';
-  import { findPlacement } from './placement';
+  import { findPlacement, type CanvasTools } from './placement';
   import type { Point } from '../types';
   import type { Rect } from './routing';
 
@@ -8,9 +8,9 @@
     nodePosition: (id: string) => Point | undefined;
     transientMove: (moving: boolean) => void;
     container: HTMLElement; size: Pick<Rect, 'width' | 'height'>; obstacles: Rect[];
-    bindPlacement: (tools?: { place: () => Point; reveal: (point: Point) => void; revealNode: (id: string) => void }) => void;
+    bindPlacement: (tools?: CanvasTools) => void;
   } = $props();
-  const { screenToFlowPosition, getViewport, setCenter } = useSvelteFlow();
+  const { fitView, screenToFlowPosition, getViewport, setCenter } = useSvelteFlow();
 
   function view(): Rect {
     const bounds = container.getBoundingClientRect();
@@ -32,6 +32,7 @@
 
   $effect(() => {
     bindPlacement({
+      fit: () => { void fitView(); },
       place: () => findPlacement(view(), size, obstacles),
       reveal,
       revealNode: (id) => {

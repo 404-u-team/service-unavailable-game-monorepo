@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '@service-unavailable/ui';
   import { t } from '../i18n.svelte';
   import { ms, num, pct, preciseMoney, rps } from '../format';
   import { guideArticleHref } from '../guide';
@@ -11,8 +12,8 @@
 </script>
 
 {#if services.length || databases.length}
-  <section class="panel pad stack">
-    <div class="row spread wrap"><h2>{t('Service responsibilities')}</h2><a class="btn" href={guideArticleHref(link('guide'), 'service-routing')}>{t('Engineering Guide')}</a></div>
+  <section class="stack">
+    <div class="row spread wrap"><Button href={guideArticleHref(link('guide'), 'service-routing')}>{t('Engineering Guide')}</Button></div>
     <p class="muted">{t('These readings include only components covered by monitoring.')}</p>
     <div class="service-grid">
       {#each services as node (node.id)}
@@ -36,9 +37,9 @@
       <p>{t('Observed shard imbalance')}: {t(domain)} · {pct(Math.max(...shares) / (shares.reduce((a, b) => a + b, 0) / shares.length) - 1, 1)} {t('above observed mean')}</p>
     {/each}
   </section>
-{/if}
+{:else}<p class="muted">{t('No monitored services or databases.')}</p>{/if}
 
 <style>
-  .service-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+  .service-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; align-items: start; }
   .service { padding: 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
 </style>

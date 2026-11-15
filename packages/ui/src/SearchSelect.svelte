@@ -5,11 +5,13 @@
 <script lang="ts">
   import Popover from './Popover.svelte';
   import { Check, ChevronDown, Search, X } from '@lucide/svelte';
-  import { t } from '../i18n.svelte';
+  import Button from './Button.svelte';
+  import TextInput from './TextInput.svelte';
+  import type { DashboardTranslate } from './dashboard';
   import type { HTMLButtonAttributes } from 'svelte/elements';
 
-  let { options, selected, choose, label, multiple = false, searchable = false, ...attributes }: HTMLButtonAttributes & {
-    options: Option[]; selected: string[]; choose: (values: string[]) => void; label: string;
+  let { options, selected, choose, label, t, multiple = false, searchable = false, ...attributes }: HTMLButtonAttributes & {
+    t: DashboardTranslate; options: readonly Option[]; selected: string[]; choose: (values: string[]) => void; label: string;
     multiple?: boolean; searchable?: boolean;
   } = $props();
   const uid = $props.id();
@@ -66,13 +68,13 @@
   }
 </script>
 
-<button {...attributes} bind:this={anchor} type="button" class="choice" role="combobox" aria-label={label}
+<button {...attributes} bind:this={anchor} type="button" class="choice sui-control" role="combobox" aria-label={label}
   aria-expanded={open} aria-controls={uid} onclick={toggle}
   onkeydown={(event) => { if (!open && ['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); reveal(); } }}>
   <span>{chosen.length ? (multiple ? t('{0} selected', [chosen.length]) : chosen[0].label) : t('Select…')}</span><ChevronDown size={15} />
 </button>
 {#if multiple && chosen.length}
-  <div class="row wrap chips">
+  <div class="chips">
     {#each chosen as item (item.value)}
       <button type="button" class="chip" aria-label={t('Remove {0}', [item.label])} onclick={() => pick(item.value)}>{item.label}<X size={12} /></button>
     {/each}
@@ -81,7 +83,7 @@
 <Popover {anchor} bind:element={menu}
   ontoggle={(event) => { open = event.newState === 'open'; if (!open) query = ''; }} onkeydown={keys}>
   {#if searchable}
-    <div class="search"><Search size={14} /><input bind:this={search} type="search" aria-label={t('Search options')} placeholder={t('Search options')} bind:value={query} /></div>
+    <div class="search"><Search size={14} /><TextInput bind:element={search} type="search" aria-label={t('Search options')} placeholder={t('Search options')} bind:value={query} /></div>
   {/if}
   <div class="options" id={uid} role="listbox" aria-label={open ? label : undefined} aria-multiselectable={multiple || undefined}>
     {#each visible as option (option.value)}
@@ -93,22 +95,22 @@
     {:else}<p class="muted">{t('No matching options')}</p>
     {/each}
   </div>
-  {#if multiple && selected.length}<button type="button" class="btn clear" onclick={() => choose([])}>{t('Clear selection')}</button>{/if}
+  {#if multiple && selected.length}<Button class="clear" onclick={() => choose([])}>{t('Clear selection')}</Button>{/if}
 </Popover>
 
 <style>
-  .choice, .chip { display: flex; align-items: center; justify-content: space-between; gap: 7px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 7px; text-align: start; }
-  .choice { min-height: 38px; width: 100%; padding: 5px 10px; font-size: 13px; }
+  .choice, .chip { display: flex; align-items: center; justify-content: space-between; gap: 7px; color: var(--sui-text); background: var(--sui-raised); border: 1px solid var(--sui-control-border); border-radius: 7px; text-align: start; }
+  .choice { min-height: var(--sui-target); width: 100%; padding: 5px 10px; font-size: 13px; }
   .choice span { min-width: 0; overflow-wrap: anywhere; }
   .choice :global(svg), .chip :global(svg) { flex: none; }
-  .chips { margin-top: 5px; }
+  .chips { display: flex; flex-wrap: wrap; gap: var(--sui-space-1); margin-top: 5px; }
   .chip { font-size: 11px; padding: 4px 7px; }
-  .option { padding: 8px; min-height: 34px; display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 6px; border: 0; border-radius: 5px; text-align: start; background: transparent; color: var(--text); font-size: 13px; }
+  .option { padding: 8px; min-height: var(--sui-target); display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 6px; border: 0; border-radius: 5px; text-align: start; background: transparent; color: var(--sui-text); font-size: 13px; }
   .option:disabled { opacity: .65; }
-  .option:is(:focus-visible, :hover):not(:disabled), .option[aria-selected='true'] { background: var(--tint); }
-  .option small { display: block; color: var(--muted); }
+  .option:is(:focus-visible, :hover):not(:disabled), .option[aria-selected='true'] { background: var(--sui-tint); }
+  .option small { display: block; color: var(--sui-muted); }
   .search { display: flex; align-items: center; gap: 6px; padding: 4px; }
-  .search input { width: 100%; min-width: 0; }
-  .clear { margin: 4px; }
-  .options p { padding: 8px; }
+  .search :global(input) { width: 100%; min-width: 0; }
+  :global(.clear.sui-button) { margin: 4px; }
+  .options p { padding: 8px; margin: 0; color: var(--sui-muted); }
 </style>

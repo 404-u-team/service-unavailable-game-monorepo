@@ -1,9 +1,10 @@
 <script lang="ts">
   import { chartDomain, chartValue, lineSegments, type ChartSeries } from './chart';
 
-  let { title, labels, series, kind = 'line', emptyLabel, missingLabel, sampleLabel, format = String }: {
+  let { title, labels, sampleLabels, series, kind = 'line', emptyLabel, missingLabel, sampleLabel, format = String }: {
     title: string;
     labels: readonly string[];
+    sampleLabels?: readonly string[];
     series: readonly ChartSeries[];
     kind?: 'line' | 'bar';
     emptyLabel: string;
@@ -100,7 +101,7 @@
         {#if activeIndex >= 0}
           <div id={tooltipId} class="sui-tooltip sample" role="tooltip"
             style:--point={`${x(activeIndex) / 10}%`} class:before={x(activeIndex) > 500}>
-            <strong>{labels[activeIndex]}</strong>
+            <strong>{sampleLabels?.[activeIndex] ?? labels[activeIndex]}</strong>
             <dl>
               {#each series as item, index (item.id)}
                 <div><dt><span style:background={color(index)} aria-hidden="true"></span>{item.label}</dt><dd>{display(item.values[activeIndex])}</dd></div>

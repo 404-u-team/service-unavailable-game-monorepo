@@ -92,10 +92,11 @@
   text-align: center;
   overflow-wrap: anywhere;
 }
-.sui-button:hover:enabled { background: var(--sui-tint); }
+.sui-button:is(:hover:not(:disabled), [aria-pressed="true"]) { background: var(--sui-tint); }
+a.sui-button { text-decoration: none; }
 .sui-button:disabled { cursor: default; }
 .sui-button[data-variant="primary"] { background: var(--sui-primary); border-color: var(--sui-primary); color: var(--sui-on-primary); font-weight: 700; }
-.sui-button[data-variant="primary"]:hover:enabled { background: var(--sui-primary-hover); }
+.sui-button[data-variant="primary"]:hover:not(:disabled) { background: var(--sui-primary-hover); }
 .sui-button[data-variant="danger"] { background: var(--sui-danger-surface); border-color: var(--sui-danger); color: var(--sui-danger); }
 .sui-button[data-variant="ghost"] { background: transparent; border-color: transparent; }
 .sui-button[data-icon-only] { min-inline-size: var(--sui-target); padding-inline: var(--sui-space-2); }

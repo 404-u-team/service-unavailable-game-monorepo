@@ -13,6 +13,7 @@
   import '@fontsource/ibm-plex-mono/cyrillic-400.css';
   import '@fontsource/ibm-plex-mono/latin-600.css';
   import '@fontsource/ibm-plex-mono/cyrillic-600.css';
+  import '@service-unavailable/ui/theme.css';
   import '#lib/theme.css';
   import { onMount } from 'svelte';
   import { setLanguage, t } from '#lib/i18n.svelte.ts';

@@ -4,13 +4,11 @@
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
   import Slider from '../controls/Slider.svelte';
-  import TextInput from '../controls/TextInput.svelte';
-  import Toggle from '../controls/Toggle.svelte';
+  import { Button, Checkbox, Form, FormField, TextInput, Tooltip } from '@service-unavailable/ui';
   import { target } from './onboarding';
   import Forecast from './Forecast.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
   import { fieldArticle, guideArticleHref } from '../guide';
-  import Help from './Help.svelte';
   import { fieldNotes } from './details';
   import { num, pct, preciseMoney, rps } from '../format';
   import type { Catalog, Component, Definition, Review, Setting } from '../types';
@@ -78,10 +76,12 @@
 
 <Modal title={t("Component configuration")} subtitle={t(component.name)} {close} wide>
   <div class="configuration-grid">
-  <form id="configure-component" class="stack" oninput={resetPreview}
+  <Form id="configure-component" class="stack" oninput={resetPreview}
     onsubmit={(event) => { event.preventDefault(); if (valid) apply(name, nextValues()); }}>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-    <label class="field"><span>{t("Component name")}</span><TextInput bind:value={name} maxlength={60} required /></label>
+    <FormField label={t('Component name')}>
+      {#snippet children(field)}<TextInput {...field} bind:value={name} maxlength={60} required />{/snippet}
+    </FormField>
     {#if presets.length}
       {@const label = t(component.kind === 'api' ? 'Instance size' : 'Preset')}
       <div class="field"><span>{label}</span>
@@ -104,7 +104,7 @@
     <div class="form-grid">
       {#each Object.entries(definition.fields).filter(([key]) => !['min_instances', 'max_instances', 'target_utilization'].includes(key) || values.autoscale === 'Enabled') as [key, field] (key)}
         <div class="field">
-          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label>{#if fieldNotes[key]}<Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}</div>
+          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label>{#if fieldNotes[key]}<Tooltip label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}</div>
           {#if !unlocked(key)}
             <p class="muted">{t('Unlock this setting through Engineering in Product.')}</p>
             <a href={guideArticleHref(guideHref, key === 'role' ? 'service-decomposition' : key === 'domain' ? 'data-domains' : key === 'partition' ? 'database-sharding' : key === 'query_plan' ? 'query-optimization' : 'api-autoscaling')} target="_blank" rel="noreferrer">{t('Engineering Guide')}</a>
@@ -127,15 +127,15 @@
         </div>
       {/each}
     </div>
-    {#if Object.keys(legacy).length}<label class="row"><Toggle bind:checked={includeLegacy} onchange={resetPreview} /> {t("Keep throughput throttles from this save")}</label>{/if}
-  </form>
+    {#if Object.keys(legacy).length}<Checkbox bind:checked={includeLegacy} onchange={resetPreview} label={t("Keep throughput throttles from this save")} />{/if}
+  </Form>
   <aside class="preview stack">
     <h3>{t('Cost and capacity')}</h3>
     <p class="muted">{t("Settings take effect after deployment.")}</p>
     <p>{t('Configured daily cost: {0}', [preciseMoney(daily)])}</p>
-    <button type="button" class="btn" disabled={estimating || busy || !valid} onclick={getPreview}>
+    <Button type="button"  disabled={estimating || busy || !valid} onclick={getPreview}>
       {estimating ? t("Estimating…") : t("Preview cost and capacity")}
-    </button>
+    </Button>
     {#if previewError}<p class="notice error" role="alert">{message(previewError)}</p>{/if}
     {#if estimate}
       {@const dailyChange = estimate.daily_after - estimate.daily_before}
@@ -158,8 +158,8 @@
   </div>
   {#snippet footer()}
     <div class="row spread">
-      <button class="btn" onclick={close}>{t("Cancel")}</button>
-      <button type="submit" form="configure-component" data-tutorial={target.save} class="btn primary" disabled={busy || !valid}>{t("Save to draft")}</button>
+      <Button onclick={close}>{t("Cancel")}</Button>
+      <Button type="submit" form="configure-component" data-tutorial={target.save} variant="primary" disabled={busy || !valid}>{t("Save to draft")}</Button>
     </div>
   {/snippet}
 </Modal>

@@ -196,3 +196,6 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python
 # SvelteKit application source
 !frontend/src/lib/
+
+# Bun workspaces
+/node_modules/

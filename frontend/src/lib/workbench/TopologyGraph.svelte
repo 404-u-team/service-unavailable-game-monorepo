@@ -5,6 +5,7 @@
   import '@xyflow/svelte/dist/style.css';
   import { onDestroy, untrack } from 'svelte';
   import { target } from './onboarding';
+  import type { CanvasTools } from './placement';
   import CanvasViewport from './CanvasViewport.svelte';
   import FlowNode, { type WorkbenchNode } from './FlowNode.svelte';
   import GroupNode, { type GroupFlowNode } from './GroupNode.svelte';
@@ -25,7 +26,7 @@
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
     menu: (event: MouseEvent, id?: string) => void; clear: () => void; cluster: boolean; container: HTMLElement;
-    bindPlacement: (tools?: { place: () => Point; reveal: (point: Point) => void; revealNode: (id: string) => void }) => void;
+    bindPlacement: (tools?: CanvasTools) => void;
     saveViewport: (viewport: Viewport) => void;
   } = $props();
 
@@ -371,7 +372,6 @@
     'controls.ariaLabel': t('Canvas controls'),
     'controls.zoomIn.ariaLabel': t('Zoom in'),
     'controls.zoomOut.ariaLabel': t('Zoom out'),
-    'controls.fitView.ariaLabel': t('Fit view'),
     'minimap.ariaLabel': t('Minimap'),
     'handle.ariaLabel': t('Connection port'),
     'node.a11yDescription.default': t('Use arrow keys to move the selected node.'),
@@ -422,7 +422,7 @@
   panOnDrag={[0, 1]} panOnScroll zoomOnScroll={false} zoomActivationKey="Control" zoomOnPinch>
   <CanvasViewport nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
-  <Controls position="bottom-left" showLock={false} />
+  <Controls position={compact ? "top-left" : "bottom-left"} showFitView={false} showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}
 </SvelteFlow>
 </div>

@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import { Accordion, Dropdown, NavTabs, Tabs } from '@service-unavailable/ui';
+  import { Accordion, ActionRow, Badge, Dropdown, NavTabs, Pagination, Tabs } from '@service-unavailable/ui';
   import { t } from './copy.svelte';
 
   const { Story } = defineMeta({ title: 'Navigation/Navigation' });
@@ -9,6 +9,7 @@
 <script lang="ts">
   let selected = $state('overview');
   let action = $state('');
+  let page = $state(1);
 </script>
 
 <Story name="Tabs">
@@ -21,6 +22,22 @@
       {item.value === 'overview' ? t('Service capacity and demand.') : t('Recent measurements from monitored servers.')}
     {/snippet}
   </Tabs>
+</Story>
+
+<Story name="Pagination">
+  <Pagination {page} pages={5} label={t('Pagination')} previousLabel={t('Previous page')}
+    nextLabel={t('Next page')} pageLabel={(page, pages) => t('Page {0} of {1}', [page, pages])}
+    onchange={(next) => page = next} />
+</Story>
+
+<Story name="Action row">
+  <div class="list">
+    <ActionRow title={t('Monitoring coverage')} description={t('Measurements are available for monitored servers.')} href="#coverage">
+      {#snippet status()}<Badge tone="success">{t('Monitored')}</Badge>{/snippet}
+    </ActionRow>
+    <ActionRow title={t('Server settings')} onclick={() => action = 'Settings saved'} />
+    <output>{t(action)}</output>
+  </div>
 </Story>
 
 <Story name="Route navigation">

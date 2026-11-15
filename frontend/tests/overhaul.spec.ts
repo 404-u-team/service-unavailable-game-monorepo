@@ -44,9 +44,9 @@ for (const [width, language] of [[390, 'ru'], [768, 'en'], [1440, 'ru'], [1920, 
     const chart = page.getByRole('button', { name: new RegExp(tr('Expected daily demand')) });
     await chart.focus();
     await chart.press('Home');
-    await expect(page.locator('.regional-demand output')).toContainText('00:00');
+    await expect(page.locator('.regional-demand').getByRole('tooltip')).toContainText('00:00');
     await chart.press('ArrowRight');
-    await expect(page.locator('.regional-demand output')).toContainText('01:00');
+    await expect(page.locator('.regional-demand').getByRole('tooltip')).toContainText('01:00');
     await chart.press('Escape');
     if (browserName === 'chromium' && visualDir) {
       await page.evaluate(() => scrollTo(0, 0));
@@ -114,6 +114,7 @@ test('Russian configuration and deployment use localized controls, actual costs 
     await page.screenshot({ path: `${visualDir}/overhaul-configuration-ru.png` });
   }
   await modal.getByRole('button', { name: russian['Save to draft'] }).click();
+  await page.getByRole('dialog', { name: russian['Component inspector'] }).getByRole('button', { name: russian['Close dialog'] }).click();
   await page.getByRole('button', { name: russian['Review deployment'] }).click();
   const review = page.getByRole('dialog', { name: russian['Deployment review'] });
   await review.getByRole('button', { name: russian['Deploy changes'] }).click();

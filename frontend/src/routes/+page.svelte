@@ -1,7 +1,6 @@
 <script lang="ts">
   import NumberInput from '#lib/controls/NumberInput.svelte';
-  import TextInput from '#lib/controls/TextInput.svelte';
-  import Toggle from '#lib/controls/Toggle.svelte';
+  import { Button, Checkbox, Form, FormField, Switch, TextInput, Toaster, createToasts } from '@service-unavailable/ui';
   import { apiMessage, locale, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
@@ -25,7 +24,7 @@
   let importFile = $state<File>();
   let preview = $state<SavePreview>();
   let importing = $state(false);
-  let imported = $state<Save>();
+  const toasts = createToasts();
   let name = $state('Pulse Messenger');
   let difficulty = $state<Difficulty>('beginner');
   let seed = $state<number>();
@@ -75,7 +74,6 @@
     input.value = '';
     if (!selected) return;
     importing = true;
-    imported = undefined;
     transferError = undefined;
     try {
       preview = await previewSave(selected);
@@ -96,8 +94,12 @@
     importing = true;
     transferError = undefined;
     try {
-      imported = await importSave(importFile);
+      const imported = await importSave(importFile);
       saves = [imported, ...saves];
+      toasts.add({
+        title: t('Save imported successfully.'), tone: 'success', duration: 0,
+        action: { label: t('Open imported save'), href: `/game/${imported.id}?view=build` }
+      });
       preview = undefined;
       importFile = undefined;
     } catch (reason) { transferError = reason; }
@@ -129,11 +131,12 @@
     {:else}<a class="row menu-back eyebrow" href="/"><ArrowLeft size={15} /> {t("Main menu")}</a>{/if}
     <span class="eyebrow">{t(screens[current] ?? screens.menu)}</span>
   </header>
+  <Toaster {toasts} placement="top-end" label={t('Notifications')} dismissLabel={(title) => t('Dismiss {0}', [title])} />
   <main>
-    {#if error}<div class="notice error row spread" role="alert">{message(error)}<button class="btn" onclick={load}>{t("Retry connection")}</button></div>{/if}
+    {#if error}<div class="notice error row spread" role="alert">{message(error)}<Button onclick={load}>{t("Retry connection")}</Button></div>{/if}
     {#if current === 'new'}
       <div class="intro setup-title"><h1>{t("New game")}</h1><p class="muted">{t("Choose a product and its starting configuration.")}</p></div>
-      <form class="stack setup" onsubmit={start}>
+      <Form class="stack setup" onsubmit={start}>
         <fieldset class="scenario-grid">
           <legend class="eyebrow">{t("Product scenario")}</legend>
           {#each Object.entries(catalog?.scenarios ?? {}) as [id, scenario]}
@@ -146,11 +149,13 @@
           {/each}
         </fieldset>
         <div class="setup-grid">
-          <label class="field"><span>{t("Service name")}</span><TextInput bind:value={name} maxlength={60} required /></label>
+          <FormField label={t('Service name')}>
+            {#snippet children(field)}<TextInput {...field} bind:value={name} maxlength={60} required />{/snippet}
+          </FormField>
           <fieldset class="difficulty">
             <legend class="eyebrow">{t("Difficulty")}</legend>
             {#each Object.entries(catalog?.difficulties ?? {}) as [id, option]}
-              <label class="btn"><input type="radio" name="difficulty" value={id} bind:group={difficulty} /> {t(option.name)}</label>
+              <label class="sui-button"><input type="radio" name="difficulty" value={id} bind:group={difficulty} /> {t(option.name)}</label>
             {/each}
           </fieldset>
         </div>
@@ -160,30 +165,25 @@
           </section>
         {/if}
         <div class="row wrap seed">
-          <label class="row"><Toggle bind:checked={showSeed} /> {t("Specify a simulation seed")}</label>
+          <Checkbox label={t("Specify a simulation seed")} bind:checked={showSeed} />
           {#if showSeed}<div class="field seed-field"><span>{t("Simulation seed")}</span><NumberInput label={t("Simulation seed")} min={0} max={4294967295} bind:value={seed} /></div>{/if}
         </div>
-        <div class="row setup-actions"><a href="/" class="btn large">{t("Cancel")}</a><button class="btn primary large" disabled={busy || loading || !starting}>{busy ? t("Creating game…") : t("Create game")} <ArrowRight size={15} /></button></div>
-      </form>
+        <div class="row setup-actions"><Button href="/" class="large">{t("Cancel")}</Button><Button type="submit" variant="primary" class="large" disabled={busy || loading || !starting}>{busy ? t("Creating game…") : t("Create game")} <ArrowRight size={15} /></Button></div>
+      </Form>
     {:else if current === 'saves'}
       <div class="intro row spread wrap">
         <div><h1>{t("Saved games")}</h1><p class="muted">{t("Use save files to move a game between browsers or devices.")}</p></div>
-        <label class="btn primary import-file">
+        <label class="sui-button import-file" data-variant="primary">
           <Upload size={15} /> {importing && !preview ? t('Checking save…') : t('Import save')}
           <input type="file" accept=".json,application/json" aria-label={t('Select a save file')}
             disabled={loading || importing} onchange={selectSaveFile} />
         </label>
       </div>
       {#if transferError && !preview}<p class="notice error" role="alert">{apiMessage(transferError)}</p>{/if}
-      {#if imported}
-        <div class="notice row spread wrap" role="status">
-          <span>{t('Save imported successfully.')}</span>
-          <a class="btn" href={`/game/${imported.id}?view=build`}>{t('Open imported save')}</a>
-        </div>
-      {/if}
+
       <section class="panel pad stack">
         {#if loading}<p class="muted">{t("Loading saved games…")}</p>
-        {:else if !saves.length}<p class="muted">{t("No saved games.")}</p><a href="/?view=new" class="btn primary">{t("New game")}</a>
+        {:else if !saves.length}<p class="muted">{t("No saved games.")}</p><Button href="/?view=new" variant="primary">{t("New game")}</Button>
         {:else}
           {#each saves as save (save.id)}
             <div class="save-row">
@@ -192,10 +192,10 @@
                 <ChevronRight size={17} />
               </a>
               <div><span class="mono">{num(save.audience)} {t("users")}</span><small>{money(save.balance)} {t("balance")}</small></div>
-              <button class="btn" type="button" disabled={Boolean(exportId)} onclick={() => exportGame(save.id)}
+              <Button type="button" disabled={Boolean(exportId)} onclick={() => exportGame(save.id)}
                 aria-label={t('Export {0}', [save.name])}>
                 <Download size={15} /> {exportId === save.id ? t('Exporting…') : t('Export')}
-              </button>
+              </Button>
             </div>
           {/each}
         {/if}
@@ -219,8 +219,8 @@
           </div>
           {#snippet footer()}
             <div class="row spread wrap">
-              <button class="btn" disabled={importing} onclick={closeImport}>{t('Cancel')}</button>
-              <button class="btn primary" disabled={importing} onclick={confirmImport}>{t('Import as new save')}</button>
+              <Button disabled={importing} onclick={closeImport}>{t('Cancel')}</Button>
+              <Button variant="primary" disabled={importing} onclick={confirmImport}>{t('Import as new save')}</Button>
             </div>
           {/snippet}
         </Modal>
@@ -231,8 +231,8 @@
     {:else if current === 'settings'}
       <div class="intro"><h1>{t("Settings")}</h1><p class="muted">{t("Defaults for new games on this browser.")}</p></div>
       <div class="panel pad stack form">
-        <label class="row spread">{t("Show onboarding prompts")} <Toggle bind:checked={preferences.show_tutorial} onchange={remember} /></label>
-        <label class="row spread">{t("Reduce motion")} <Toggle bind:checked={preferences.reduced_motion} onchange={remember} /></label>
+        <Switch label={t("Show onboarding prompts")} bind:checked={preferences.show_tutorial} onchange={remember} />
+        <Switch label={t("Reduce motion")} bind:checked={preferences.reduced_motion} onchange={remember} />
         <Language />
       </div>
     {:else}
@@ -253,7 +253,7 @@
               <div><dt class="eyebrow">{t("Balance")}</dt><dd>{money(latest.balance)}</dd></div>
             </dl>
           {:else}<p class="muted">{loading ? t("Checking for saved games…") : t("Build and operate a messenger service. Track request load, manage expenses and deploy infrastructure changes.")}</p>{/if}
-          <a class="btn primary large block" href={latest ? `/game/${latest.id}?view=build` : '/?view=new'}>{latest ? t("Continue") : t("Create a service")} <ArrowRight size={15} /></a>
+          <Button variant="primary" block class="large" href={latest ? `/game/${latest.id}?view=build` : '/?view=new'}>{latest ? t("Continue") : t("Create a service")} <ArrowRight size={15} /></Button>
         </section>
         <section class="panel options">
           <h2>{t("Game options")}</h2>
@@ -267,7 +267,7 @@
 </div>
 
 <style>
-  .menu { min-height: 100dvh; }
+  .menu { --sui-toast-top: 74px; min-height: 100dvh; }
   .menu-header { min-height: 88px; padding: 20px clamp(18px, 4vw, 58px); display: flex; align-items: center; justify-content: space-between; background: var(--background); border-bottom: 1px solid var(--border); }
   .menu-header :global(.brand) { font-size: 22px; }
   .menu-header :global(.brand-mark) { width: 44px; height: 44px; font-size: 29px; border-radius: 12px; }
@@ -277,7 +277,7 @@
   .menu-title { margin-bottom: 48px; }
   .menu-title h1 { font-size: clamp(35px, 4vw, 54px); }
   .menu-title p { font-size: 16px; }
-  .menu-grid { display: grid; grid-template-columns: 1.95fr 1fr; gap: 26px; }
+  .menu-grid { display: grid; align-items: start; grid-template-columns: 1.95fr 1fr; gap: 26px; }
   .continue, .options { display: grid; align-content: start; padding: 16px 19px 22px; gap: 19px; }
   .continue { grid-template-rows: auto auto minmax(65px, 1fr) auto; min-height: 465px; }
   h2 { font-size: 18px; }
@@ -297,9 +297,9 @@
   .form { max-width: 710px; }
   .menu-back:hover { color: var(--primary); }
   .setup-title h1 { font-size: clamp(33px, 4vw, 45px); }
-  .setup { gap: 28px; }
-  .setup .scenario-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
-  .setup .scenario-grid legend { margin-bottom: 12px; }
+  .menu :global(form.setup) { gap: 28px; }
+  .scenario-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+  .scenario-grid legend { margin-bottom: 12px; }
   .scenario-grid .scenario { min-height: 115px; padding: 15px; background: var(--surface); gap: 15px; }
   .scenario-grid .scenario.available { background: var(--tint); }
   .scenario strong { text-transform: uppercase; font-size: 17px; }
@@ -309,13 +309,13 @@
   .scenario:not(.available) input { visibility: hidden; }
   .setup-grid { display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: 24px; }
   .difficulty { grid-template-columns: repeat(3, 1fr); }
-  .difficulty .btn { position: relative; min-height: 40px; cursor: pointer; }
-  .difficulty .btn:has(input:checked) { border-color: var(--primary); background: var(--tint); color: var(--primary); }
+  .difficulty .sui-button { position: relative; min-height: 40px; cursor: pointer; }
+  .difficulty .sui-button:has(input:checked) { border-color: var(--primary); background: var(--tint); color: var(--primary); }
   .difficulty input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-  .difficulty .btn:has(:focus-visible) { outline: 2px solid var(--primary); outline-offset: 3px; }
+  .difficulty .sui-button:has(:focus-visible) { outline: 2px solid var(--primary); outline-offset: 3px; }
   .starting .row { gap: 10px 22px; margin-top: 7px; }
   .setup-actions { justify-content: flex-end; }
-  .setup-actions .btn { min-width: 170px; text-transform: uppercase; }
+  .setup-actions :global(.sui-button) { min-width: 170px; text-transform: uppercase; }
   .seed { font-size: 12px; }
   .seed-field { max-width: 155px; }
   .notice { margin-bottom: 16px; }
@@ -333,7 +333,7 @@
   @media (max-width: 530px) {
     .save-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     .save-row > a { grid-column: 1 / -1; }
-    .save-row > button { grid-row: 2; grid-column: 2; }
+    .save-row > :global(button) { grid-row: 2; grid-column: 2; }
   }
   fieldset { min-width: 0; display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
   legend { margin-bottom: 6px; }
@@ -355,13 +355,13 @@
     .options { border: 0; background: none; padding: 5px 0 0; }
     .options h2, .options small, .options a :global(svg) { display: none; }
     .options a { min-height: 50px; justify-content: center; }
-    .setup, .setup-grid { gap: 16px; }
-    .setup .scenario-grid, .setup-grid { grid-template-columns: 1fr; }
+    .menu :global(form.setup), .setup-grid { gap: 16px; }
+    .scenario-grid, .setup-grid { grid-template-columns: 1fr; }
     .scenario-grid .scenario { min-height: 76px; padding: 10px 13px; gap: 10px; }
     .scenario-icon { width: 43px; height: 43px; }
     .scenario strong { font-size: 14px; }
     .scenario-status { margin-top: 3px; }
     .setup-actions { display: grid; grid-template-columns: 1fr 1.5fr; }
-    .setup-actions .btn { min-width: 0; }
+    .setup-actions :global(.sui-button) { min-width: 0; }
   }
 </style>

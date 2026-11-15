@@ -1,6 +1,6 @@
 # Service Unavailable UI
 
-A private Svelte 5 design system and Storybook for the Service Unavailable workbench. The package has its own Bun lockfile. It can run without the game API or database.
+A private Svelte 5 design system and Storybook for the Service Unavailable workbench. Bun links the package into the frontend workspace. Storybook can run without the game API or database.
 
 ## Run and verify
 
@@ -26,7 +26,7 @@ The static catalog is built in `storybook-static/`.
 
 ## Use in a Svelte project
 
-The package exposes its Svelte source and CSS. To adopt it later, add a local dependency on `@service-unavailable/ui` pointing to this directory. Import the theme once in the application entry point and import components by name. Tokens live on `:root` so they also reach overlays mounted on the document body.
+The package exposes its Svelte source and CSS. Within this monorepo, depend on `@service-unavailable/ui` using `workspace:*`. Import the theme once in the application entry point and import components by name. Tokens live on `:root` so they also reach overlays mounted on the document body.
 
 ```svelte
 <script lang="ts">
@@ -50,7 +50,7 @@ The package exposes its Svelte source and CSS. To adopt it later, add a local de
 
 Bring the host application’s `t()` function into the script. Inputs preserve native attributes such as `name`, `required`, `min`, `max`, and `step` where applicable. Numeric controls use native validation and keyboard input with custom step buttons. Provide localized `stepLabels` for `NumberInput`. The `unit` appears beside the number within the field border and is included in the accessible description. Give `Select` a `name` to submit its value and apply required validation. Supply a finite value aligned to the step for a slider. When manual entry is enabled, only the numeric field has a form name, and invalid entries stay in the field for correction.
 
-`Slideover` accepts a localized `resizeLabel` to enable resizing. Bind `width` to keep the preferred pixel width in the host. The panel fills narrow screens. Toasts count down for six seconds by default. Set `duration` in milliseconds or use `0` to keep an item available until dismissed. The countdown pauses while the toast is hovered or contains keyboard focus and when the document is hidden.
+`Slideover` accepts a localized `resizeLabel` to enable resizing. Bind `width` for live updates, or use `onWidthChange` to capture the width after a resize. The panel fills narrow screens. `Toaster` accepts `placement="top-end"` and reads `--sui-toast-top` for the offset. Toasts count down for six seconds by default. Set `duration` in milliseconds or use `0` to keep an item available until dismissed. The countdown pauses while the toast is hovered or contains keyboard focus and when the document is hidden.
 
 ## Frontend audit
 
@@ -62,7 +62,7 @@ Bring the host application’s `t()` function into the script. Inputs preserve n
 | Server banners and architecture event feedback | `Alert`, `Toaster` and `createToasts()` |
 | `workbench/Chart.svelte`, `Meter.svelte`, dashboard and finance cards | `Chart` (line and bar), `Meter`, `Badge`, `Panel`, `PageColumns` |
 
-The current package covers presentation and interaction. Topology editing, onboarding, simulation data, domain-specific diagnoses, and server actions belong to the game. The game still uses its existing components.
+The package covers presentation and interaction. Topology editing, onboarding, simulation data, domain-specific diagnoses, and server actions belong to the game.
 
 The [Nuxt UI component catalog](https://ui.nuxt.com/llms.txt) and [repository](https://github.com/nuxt/ui) informed the component inventory. The workbench’s existing theme informed the visuals.
 

@@ -3,6 +3,8 @@ import translations from '../../../frontend/src/lib/ru.json';
 const dictionary: Record<string, string> = translations;
 let language = $state<'en' | 'ru'>('en');
 
+export const locale = () => language;
+
 export function setLocale(locale: unknown) {
   language = locale === 'ru' ? 'ru' : 'en';
   document.documentElement.lang = language;

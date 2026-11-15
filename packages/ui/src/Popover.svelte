@@ -22,7 +22,7 @@
   }
 </script>
 
-<svelte:window onresize={() => { if (open) position(); }} />
+<svelte:window onresize={() => { if (open) position(); }} onscrollcapture={() => { if (open) position(); }} />
 
 <div {...attributes} popover="auto" bind:this={element} class="popover" role="presentation" tabindex="-1"
   onbeforetoggle={(event) => { if (event.newState === 'open') position(); }}
@@ -31,5 +31,5 @@
 </div>
 
 <style>
-  .popover { position: fixed; margin: 0; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px #0009; overflow: auto; }
+  .popover { position: fixed; margin: 0; padding: 5px; border: 1px solid var(--sui-border); border-radius: 9px; background: var(--sui-surface); color: var(--sui-text); box-shadow: var(--sui-shadow); overflow: auto; }
 </style>

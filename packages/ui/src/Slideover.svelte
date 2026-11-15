@@ -3,18 +3,19 @@
   import type { OverlayProps } from './types';
 
   let { open = $bindable(false), width = $bindable(448), side = 'end',
-    minWidth = 320, maxWidth = 800, resizeLabel, ...props }: OverlayProps & {
+    minWidth = 320, maxWidth = 800, resizeLabel, onWidthChange, ...props }: OverlayProps & {
     side?: 'start' | 'end';
     width?: number;
     minWidth?: number;
     maxWidth?: number;
     resizeLabel?: string;
+    onWidthChange?: (width: number) => void;
   } = $props();
 
   const panelId = $props.id();
   let viewport = $state(0);
   let dragging: { pointer: number; x: number; width: number; direction: number } | undefined;
-  const compact = $derived(viewport > 0 && viewport < minWidth + 72);
+  const compact = $derived(viewport > 0 && viewport <= minWidth + 72);
   const min = $derived(Math.min(minWidth, viewport || minWidth));
   const max = $derived(Math.max(min, Math.min(maxWidth, viewport ? viewport - 24 : maxWidth)));
   const panelWidth = $derived(Math.round(Math.min(max, Math.max(min, width))));
@@ -42,7 +43,9 @@
   }
 
   function endDrag(event: PointerEvent) {
-    if (dragging?.pointer === event.pointerId) dragging = undefined;
+    if (dragging?.pointer !== event.pointerId) return;
+    dragging = undefined;
+    onWidthChange?.(width);
   }
 
   function resizeKey(event: KeyboardEvent & { currentTarget: HTMLElement }) {
@@ -51,6 +54,7 @@
     if (next === undefined) return;
     event.preventDefault();
     resize(next);
+    onWidthChange?.(width);
   }
 </script>
 

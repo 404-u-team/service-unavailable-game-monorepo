@@ -1,14 +1,17 @@
 <script module lang="ts">
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import { CircleHelp } from '@lucide/svelte';
-  import { Button, Checkbox, Form, FormField, NumberInput, Select, Slider, Switch, Textarea, TextInput } from '@service-unavailable/ui';
-  import { stepLabels, t } from './copy.svelte';
+  import { Button, Checkbox, Form, FormField, LocalizedNumberInput, NumberInput, SearchSelect, Select, Slider, Switch, Textarea, TextInput } from '@service-unavailable/ui';
+  import { locale, stepLabels, t } from './copy.svelte';
+  import { parseNumber } from '../../../frontend/src/lib/controls/numeric';
 
   const { Story } = defineMeta({ title: 'Inputs/Controls' });
 </script>
 
 <script lang="ts">
   let capacity = $state(240);
+  let amount = $state<number | undefined>(1500.25);
+  let markets = $state(['europe']);
   let selected = $state('');
   let regionSaved = $state(false);
   let traffic = $state(45);
@@ -16,6 +19,25 @@
   let saved = $state('');
   let mixed = $state(true);
 </script>
+
+<Story name="Localized number">
+  <div class="fields">
+    <LocalizedNumberInput label={t('Campaign budget')} bind:value={amount} locale={locale()} min={10} max={100000} step={50} precision={2} unit="USD"
+      parse={(text) => parseNumber(text, locale())} stepLabels={stepLabels(t('Campaign budget'))}
+      invalidMessage={t('Enter an amount between {0} and {1}.', [10, 100000])} required />
+  </div>
+</Story>
+
+<Story name="Searchable selection">
+  <div class="fields">
+    <SearchSelect label={t('Target markets')} {t} multiple searchable selected={markets} choose={(values) => markets = values}
+      options={[
+        { value: 'europe', label: t('Europe') },
+        { value: 'asia', label: t('Asia') },
+        { value: 'oceania', label: t('Oceania'), disabled: true, reason: t('Launch the market to target it.') }
+      ]} />
+  </div>
+</Story>
 
 <Story name="Buttons">
   <div class="row">

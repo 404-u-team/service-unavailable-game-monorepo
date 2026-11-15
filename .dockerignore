@@ -1,0 +1,16 @@
+**
+!package.json
+!bun.lock
+!frontend/
+!frontend/**
+!packages/
+!packages/ui/
+!packages/ui/package.json
+!packages/ui/src/
+!packages/ui/src/**
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+frontend/test-results
+frontend/playwright-report
+frontend/.env*

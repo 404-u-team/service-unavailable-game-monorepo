@@ -57,6 +57,14 @@
   <Toaster {toasts} label={t('Notifications')} dismissLabel={(title) => t('Dismiss {0}', [title])} />
 </Story>
 
+<Story name="Top-right notifications">
+  <Button onclick={() => toasts.add({
+    title: t('Settings saved'), tone: 'success', duration: 0,
+    action: { label: t('Example link'), href: '#settings' }
+  })}>{t('Show success')}</Button>
+  <Toaster {toasts} placement="top-end" label={t('Notifications')} dismissLabel={(title) => t('Dismiss {0}', [title])} />
+</Story>
+
 <style>
   .row { display: flex; flex-wrap: wrap; gap: var(--sui-space-2); }
   .fields { display: grid; gap: var(--sui-space-4); }

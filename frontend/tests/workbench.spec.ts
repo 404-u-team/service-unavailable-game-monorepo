@@ -55,6 +55,25 @@ async function connect(page: Page, from: string, to: string) {
   await expect(dialog).toBeHidden();
 }
 
+async function openInspector(page: Page, label = 'Open component') {
+  await page.getByRole('button', { name: label, exact: true }).click();
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+  await expect(inspector).toBeVisible();
+  return inspector;
+}
+
+async function closeInspector(page: Page) {
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+  await inspector.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(inspector).toBeHidden();
+}
+
+async function addWaypoint(page: Page) {
+  const inspector = await openInspector(page, 'Inspect selection');
+  await inspector.getByRole('button', { name: 'Add waypoint', exact: true }).click();
+  await closeInspector(page);
+}
+
 async function deploy(page: Page) {
   await page.getByRole('button', { name: 'Review deployment' }).click();
   const review = page.getByRole('dialog', { name: 'Deployment review' });
@@ -72,14 +91,15 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   const first = await state(page, id);
   expect(first.tick).toBe(0);
   expect(first.snapshot.metrics.rps).toBeGreaterThan(100);
-  await expect(page.getByRole('complementary', { name: 'Component inspector' }).getByText('Messenger API')).toBeVisible();
+  await expect((await openInspector(page)).getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+  await closeInspector(page);
   if (visualDir) await page.screenshot({ path: `${visualDir}/topology-1440.png` });
 
   await fast(page);
   await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(2);
   await pause(page);
   await page.getByRole('button', { name: 'Save game' }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Game saved' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Notifications' }).getByText('Game saved', { exact: true })).toBeVisible();
   const saved = await state(page, id);
   await page.getByRole('link', { name: 'Service Unavailable main menu' }).click();
   await page.getByRole('link', { name: /Saved games/ }).click();
@@ -92,13 +112,15 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   await connect(page, 'Messenger API', 'Monitoring');
   await connect(page, 'Primary database', 'Monitoring');
   await page.locator('.svelte-flow__node[aria-label="Monitoring"]').click();
+  await openInspector(page);
   await page.getByRole('button', { name: 'Edit configuration' }).click();
   await choose(page.getByRole('combobox', { name: 'Collection scope', exact: true }), 'Service history');
   await page.getByRole('button', { name: 'Save to draft' }).click();
+  await closeInspector(page);
   await deploy(page);
 
   await navigate(page, 'Growth');
-  await page.getByRole('article').filter({ hasText: 'Community campaign' }).getByRole('button', { name: 'Plan campaign' }).click();
+  await page.getByRole('heading', { name: 'Community campaign', exact: true }).locator('..').getByRole('button', { name: 'Plan campaign' }).click();
   await page.getByRole('button', { name: 'Start campaign' }).click();
   await fast(page);
   await expect.poll(async () => (await state(page, id)).audience, { timeout: 18_000 }).toBeGreaterThan(10_000);
@@ -108,9 +130,11 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
 
   await navigate(page, 'Topology');
   await page.locator('.svelte-flow__node[aria-label="Messenger API"]').click();
+  await openInspector(page);
   await page.getByRole('button', { name: 'Edit configuration' }).click();
   await choose(page.getByRole('combobox', { name: 'Instance size', exact: true }), { label: 'Performance P4 · 4 vCPU / 8 GB' });
   await page.getByRole('button', { name: 'Save to draft' }).click();
+  await closeInspector(page);
   await expect(page.getByRole('button', { name: 'Undo draft edit' })).toBeEnabled();
   await page.getByRole('button', { name: 'Undo draft edit' }).click();
   await expect(page.getByRole('button', { name: 'Redo draft edit' })).toBeEnabled();
@@ -130,10 +154,10 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
   expect(after.deployments).toHaveLength(2);
   await navigate(page, 'Telemetry');
   await expect(page.getByRole('heading', { name: 'System telemetry' })).toBeVisible();
-  await expect(page.getByRole('img', { name: /Request traffic/ })).toBeVisible();
-  await expect(page.getByRole('img', { name: /Peak resource load for Messenger API/ })).toBeVisible();
+  await expect(page.getByRole('figure', { name: /Request traffic/ })).toBeVisible();
+  await expect(page.getByRole('figure', { name: /Peak resource load for Messenger API/ })).toBeVisible();
   await choose(page.getByRole('combobox', { name: 'Component', exact: true }), 'db');
-  await expect(page.getByRole('img', { name: /Peak resource load for Primary database/ })).toBeVisible();
+  await expect(page.getByRole('figure', { name: /Peak resource load for Primary database/ })).toBeVisible();
   if (visualDir) await page.screenshot({ path: `${visualDir}/telemetry-1440.png` });
 });
 
@@ -142,7 +166,7 @@ test('C and D · campaign and product release change workload and finances', asy
   const id = await create(page, false, false);
   await navigate(page, 'Growth');
   if (visualDir) await page.screenshot({ path: `${visualDir}/growth-1440.png` });
-  await page.getByRole('article').filter({ hasText: 'Community campaign' }).getByRole('button', { name: 'Plan campaign' }).click();
+  await page.getByRole('heading', { name: 'Community campaign', exact: true }).locator('..').getByRole('button', { name: 'Plan campaign' }).click();
   const plan = page.getByRole('dialog', { name: 'Campaign planning' });
   await expect(plan.getByRole('heading', { name: 'Capacity forecast' })).toBeVisible();
   await plan.getByRole('button', { name: 'Start campaign' }).click();
@@ -150,8 +174,8 @@ test('C and D · campaign and product release change workload and finances', asy
   expect((await state(page, id)).economy.marketing).toBe(420);
 
   await navigate(page, 'Product');
-  const groups = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Group chats' }) });
-  await groups.getByRole('button', { name: 'Feature details' }).click();
+  const groups = page.getByRole('article').filter({ has: page.getByText('Group chats', { exact: true }) });
+  await groups.getByRole('button', { name: /Group chats/ }).click();
   await page.getByRole('button', { name: 'Start development' }).click();
   await fast(page);
   await expect(groups.getByText('Ready to release')).toBeVisible({ timeout: 16_000 });
@@ -162,7 +186,7 @@ test('C and D · campaign and product release change workload and finances', asy
   expect(before.economy.operating).toBeGreaterThan(0);
   expect(before.economy.development).toBe(650);
   if (visualDir) await page.screenshot({ path: `${visualDir}/product-1440.png` });
-  await groups.getByRole('button', { name: 'Feature details' }).click();
+  await groups.getByRole('button', { name: /Group chats/ }).click();
   await page.getByRole('button', { name: 'Release feature' }).click();
   await expect(groups.getByText('Released and enabled', { exact: true })).toBeVisible();
   const released = await state(page, id);
@@ -186,6 +210,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   await config.getByLabel('Database vCPU', { exact: true }).fill('1');
   await config.getByRole('button', { name: 'Save to draft' }).click();
   await expect(config).toBeHidden();
+  await closeInspector(page);
   await page.getByRole('button', { name: 'Add node' }).click();
   await page.getByRole('dialog', { name: 'Component library' }).getByRole('button', { name: 'Monitoring', exact: true }).click();
   await connect(page, 'Primary database', 'Monitoring');
@@ -195,7 +220,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   expect(constrained.snapshot.components.api).toBeUndefined();
 
   await page.goto(`/game/${id}?view=monitor`);
-  const diagnosis = page.getByRole('region', { name: 'Diagnostics' });
+  const diagnosis = page.getByRole('article', { name: 'Diagnostics' });
   await expect(diagnosis.getByText('Database write capacity exceeded')).toBeVisible();
   await expect(diagnosis.getByText('Sustainable writes at current read load')).toBeVisible();
   const diskHelp = diagnosis.getByRole('link', { name: 'Help with Disk I/O' });
@@ -249,6 +274,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   await choose(config.getByRole('combobox', { name: 'Storage type', exact: true }), 'NVMe');
   await config.getByRole('button', { name: 'Save to draft' }).click();
   await expect(config).toBeHidden();
+  await closeInspector(page);
   await deploy(page);
   const upgraded = await state(page, id);
   expect(upgraded.snapshot.metrics.throughput).toBeGreaterThan(pool.snapshot.metrics.throughput);
@@ -281,7 +307,8 @@ test('E · failed instance reduces availability and redundancy restores service'
   await expect(page.getByText('Failed', { exact: true })).toBeVisible();
 
   await navigate(page, 'Topology');
-  await page.getByRole('button', { name: 'Add replica' }).click();
+  await (await openInspector(page)).getByRole('button', { name: 'Add replica' }).click();
+  await closeInspector(page);
   await deploy(page);
   expect((await state(page, id)).snapshot.metrics.availability).toBeGreaterThan(.98);
   await fast(page);
@@ -347,7 +374,7 @@ test.describe('Mobile workbench', () => {
     await page.getByRole('link', { name: /Settings/ }).tap();
     await expect(page.getByRole('heading', { name: 'Game preferences' })).toBeVisible();
     await page.getByRole('main').getByRole('button', { name: 'Save game' }).tap();
-    await expect(page.getByRole('status').filter({ hasText: 'Game saved' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Notifications' }).getByText('Game saved', { exact: true })).toBeVisible();
   });
 
   test('touch players can use component help, group cards, and typed connections', async ({ page }) => {
@@ -359,6 +386,7 @@ test.describe('Mobile workbench', () => {
     await expect(reference.getByText('Input connections')).toBeVisible();
     await expect(reference.getByText(/Worker · Metrics collection/)).toBeVisible();
     await reference.getByRole('button', { name: 'Close dialog' }).tap();
+    await library.getByRole('button', { name: 'Close dialog' }).tap();
 
     await page.getByRole('button', { name: 'Show component list' }).tap();
     await page.getByRole('button', { name: 'Select multiple' }).tap();
@@ -370,11 +398,13 @@ test.describe('Mobile workbench', () => {
     const group = page.getByRole('dialog', { name: 'Create group' });
     await group.getByLabel('Group name').fill('Data path');
     await group.getByRole('button', { name: 'Save group' }).tap();
+    await openInspector(page, 'Inspect selection');
     await page.getByRole('button', { name: 'Collapse group', exact: true }).tap();
     await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(true);
     expect((await state(page, id)).draft).toBeNull();
     await page.getByRole('button', { name: 'Expand group', exact: true }).tap();
     await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(false);
+    await closeInspector(page);
 
     await page.getByRole('button', { name: 'Add node' }).tap();
     await library.getByRole('button', { name: 'Monitoring', exact: true }).tap();
@@ -486,7 +516,7 @@ test('layout edits persist without Draft and preserve production', async ({ page
   const dbBox = (await db.boundingBox())!;
   await page.mouse.click((apiBox.x + apiBox.width + dbBox.x) / 2, apiBox.y + apiBox.height / 2);
 
-  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  await addWaypoint(page);
   const handle = page.getByRole('button', { name: 'Waypoint 1' });
   await expect(handle).toBeVisible();
   await expect.poll(async () => (await state(page, id)).diagram.routes['api:db']?.length).toBe(1);
@@ -606,12 +636,11 @@ test('Russian Monitoring and feature requirements render on desktop and mobile',
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.goto(`/game/${id}?view=monitor`);
     await expect(page.getByRole('heading', { name: 'Мониторинг системы' })).toBeVisible();
-    await expect(page.getByRole('img', { name: /пиковая загрузка/i })).toBeVisible();
+    await expect(page.getByRole('figure', { name: /пиковая загрузка/i })).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     if (visualDir) await page.screenshot({ path: `${visualDir}/russian-monitoring-${width}.png`, fullPage: true });
     await page.goto(`/game/${id}?view=product`);
-    const voice = page.locator('.feature-row').filter({ has: page.getByRole('heading', { name: 'Голосовые сообщения' }) });
-    await voice.getByRole('button', { name: 'Сведения о функции' }).click();
+    await page.getByRole('button', { name: /Голосовые сообщения/ }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Рабочая инфраструктура');
     await expect(dialog).toContainText('хотя бы один воркер');
@@ -629,6 +658,7 @@ test('Russian is persisted across menus, editor, settings, and game screens', as
   await page.getByLabel('Имя сервиса').fill('Мессенджер');
   await page.getByRole('button', { name: 'Создать игру' }).click();
   await expect(page.getByRole('heading', { name: 'Топология инфраструктуры' })).toBeVisible();
+  await page.getByRole('button', { name: 'Пропустить обучение', exact: true }).click();
   const base = new URL(page.url()).pathname;
   for (const [view, title] of [['monitor', 'Мониторинг системы'], ['product', 'Функции продукта'], ['growth', 'Аудитория и кампании'],
       ['finance', 'Финансы'], ['events', 'События и инциденты'], ['guide', 'Справка'], ['settings', 'Настройки']]) {
@@ -823,7 +853,7 @@ test('port guidance rejects incompatible links and reconnects endpoints in Draft
   await page.getByRole('button', { name: 'Show component list' }).click();
   await page.getByRole('button', { name: 'Incoming traffic → Messenger API' }).click();
   await page.getByRole('button', { name: 'Show topology canvas' }).click();
-  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  await addWaypoint(page);
   await expect.poll(async () => (await state(page, id)).diagram.routes['traffic:api']?.length).toBe(1);
   const routeBeforeDeploy = (await state(page, id)).diagram.routes['traffic:api'];
   await deploy(page);
@@ -852,7 +882,7 @@ test('a new API server in a reopened save keeps its links and route through depl
   await page.getByRole('button', { name: 'Show component list' }).click();
   await page.getByRole('button', { name: 'API server → Primary database', exact: true }).click();
   await page.getByRole('button', { name: 'Show topology canvas' }).click();
-  await page.getByRole('button', { name: 'Add waypoint' }).click();
+  await addWaypoint(page);
   const routeKey = `${added.id}:db`;
   await expect.poll(async () => (await state(page, id)).diagram.routes[routeKey]?.length).toBe(1);
   const waypoint = page.getByRole('button', { name: 'Waypoint 1' });
@@ -874,7 +904,7 @@ test('a new API server in a reopened save keeps its links and route through depl
 test('inspector keeps both tabs through live updates and preserves draft values', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 720 });
   const id = await create(page, false, false);
-  const inspector = page.getByRole('complementary', { name: 'Component inspector' });
+  const inspector = await openInspector(page);
   const config = inspector.getByRole('button', { name: 'Configuration', exact: true });
   const metrics = inspector.getByRole('button', { name: 'Metrics', exact: true });
   await inspector.getByRole('button', { name: 'Add replica' }).click();
@@ -885,15 +915,18 @@ test('inspector keeps both tabs through live updates and preserves draft values'
   await expect(inspector.getByText('Component metrics require a linked Monitoring collector.')).toBeVisible();
   await expect(inspector.getByRole('button', { name: 'Add replica' })).toHaveCount(0);
   const tick = (await state(page, id)).tick;
-  await fast(page);
+  const setSpeed = (speed: number) => page.request.put(`/api/games/${id}/clock`, { data: { request_id: crypto.randomUUID(), speed } });
+  expect((await setSpeed(3)).ok()).toBeTruthy();
   await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(tick + 2);
-  await pause(page);
+  expect((await setSpeed(0)).ok()).toBeTruthy();
   await expect(metrics).toHaveAttribute('aria-pressed', 'true');
   await config.click();
   await expect(config).toHaveAttribute('aria-pressed', 'true');
   await expect(inspector.getByText('2', { exact: true })).toBeVisible();
+  await closeInspector(page);
   await page.getByRole('button', { name: 'Show component list' }).click();
   await page.getByRole('button', { name: 'Primary database Database' }).click();
+  await openInspector(page);
   await expect(inspector.getByRole('heading', { name: 'Primary database' })).toBeVisible();
   await expect(config).toHaveAttribute('aria-pressed', 'true');
 });
@@ -903,9 +936,9 @@ test('monetization controls, revenue history and server time render in both lang
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = await create(page, false, false);
   await navigate(page, 'Product');
-  const ads = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Advertising', exact: true }) });
-  const premium = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Premium subscriptions', exact: true }) });
-  const open = (item: typeof ads) => item.getByRole('button', { name: 'Feature details' }).click();
+  const ads = page.getByRole('article').filter({ has: page.getByText('Advertising', { exact: true }) });
+  const premium = page.getByRole('article').filter({ has: page.getByText('Premium subscriptions', { exact: true }) });
+  const open = (item: typeof ads) => item.getByRole('button').click();
   for (const item of [ads, premium]) {
     await open(item);
     await page.getByRole('button', { name: 'Start development' }).click();
@@ -919,14 +952,15 @@ test('monetization controls, revenue history and server time render in both lang
     await expect(item.getByText('Released and enabled')).toBeVisible();
   }
   await navigate(page, 'Growth');
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'North America', exact: true }) })
+  await page.getByRole('heading', { name: 'North America', exact: true }).locator('xpath=../..')
     .getByRole('button', { name: 'Start preparation' }).click();
   const update = await page.request.put(`/api/games/${id}/clock`, { data: { request_id: crypto.randomUUID(), speed: 5 } });
   expect(update.ok()).toBeTruthy();
-  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'North America', exact: true }) })
+  await page.getByRole('heading', { name: 'North America', exact: true }).locator('xpath=../..')
     .getByRole('button', { name: 'Launch market' }).click({ timeout: 20_000 });
   await pause(page);
   await navigate(page, 'Product');
+  await page.getByRole('tab', { name: 'Product settings' }).click();
   await choose(page.getByRole('combobox', { name: 'Ad intensity', exact: true }), 'high');
   await page.getByLabel('Price per game month (USD)', { exact: true }).fill('5.50');
   await page.getByLabel('Offer faster synchronization').uncheck();
@@ -934,12 +968,13 @@ test('monetization controls, revenue history and server time render in both lang
   await expect.poll(async () => (await state(page, id)).product).toMatchObject({
     ad_intensity: 'high', premium_price: 5.5, premium_fast_sync: false,
   });
-  if (visualDir) await page.getByRole('heading', { name: 'Product settings' }).scrollIntoViewIfNeeded();
+  if (visualDir) await page.getByRole('tab', { name: 'Product settings' }).scrollIntoViewIfNeeded();
   if (visualDir) await page.screenshot({ path: `${visualDir}/monetization-1440.png` });
 
   await fast(page);
   await expect.poll(async () => (await state(page, id)).economy.revenue_sources.advertising).toBeGreaterThan(0);
   await pause(page);
+  await page.getByRole('tab', { name: 'Feature catalog' }).click();
   await open(ads);
   await page.getByRole('button', { name: 'Disable feature', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm disable' }).click();
@@ -952,11 +987,10 @@ test('monetization controls, revenue history and server time render in both lang
   await navigate(page, 'Finance');
   await expect(page.getByRole('heading', { name: 'Revenue breakdown' })).toBeVisible();
   await choose(page.getByRole('combobox', { name: 'Revenue history', exact: true }), 'advertising');
-  await expect(page.getByRole('img', { name: /Revenue per simulation step/ })).toBeVisible();
+  await expect(page.getByRole('figure', { name: /Revenue per simulation step/ })).toBeVisible();
   const final = await state(page, id);
   expect(final.economy.revenue_sources.advertising).toBeCloseTo(final.economy.revenue);
   expect(final.economy.daily_total_expenses).toBeCloseTo(final.economy.daily_operating + 1420);
-  await page.getByRole('button', { name: 'Dismiss notification' }).click();
   if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-finance-1440.png`, fullPage: true });
   await navigate(page, 'Telemetry');
   const clock = final.snapshot.demand_overview!;
@@ -970,7 +1004,12 @@ test('monetization controls, revenue history and server time render in both lang
   await page.setViewportSize({ width: 390, height: 844 });
   for (const [section, heading] of [['finance', 'Структура выручки'], ['product', 'Настройки продукта'], ['monitor', 'Трафик по регионам']]) {
     await page.goto(`/game/${id}?view=${section}`);
-    await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+    if (section === 'product') {
+      await page.getByRole('tab', { name: heading, exact: true }).click();
+      await expect(page.getByRole('combobox', { name: 'Интенсивность рекламы' })).toBeVisible();
+    } else {
+      await expect(page.getByRole('heading', { name: heading })).toBeVisible();
+    }
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-${section}-ru-390.png`, fullPage: true });
   }

@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import { Chart, Meter } from '@service-unavailable/ui';
+  import { Chart, Meter, PageColumns, Stat } from '@service-unavailable/ui';
   import { formatNumber, t } from './copy.svelte';
 
   const { Story } = defineMeta({ title: 'Data/Visualization' });
@@ -22,6 +22,13 @@
       { id: 'capacity', label: t('Capacity'), values: [165, 165, 180, 210, 210, 235, 265] }
     ]} />
   </div>
+</Story>
+
+<Story name="Statistic">
+  <PageColumns columns={2}>
+    <Stat label={t('Availability')} value="99.95%" tone="success" />
+    <Stat label={t('Operating profit')} value="−$125.00" tone="danger" compact />
+  </PageColumns>
 </Story>
 
 <Story name="Bar chart">

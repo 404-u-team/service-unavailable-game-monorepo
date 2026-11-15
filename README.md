@@ -71,6 +71,8 @@ bun --bun run build
 
 Set `TEST_BASE_URL` to use a different frontend URL. Set `CHROMIUM_PATH` to use an installed Chromium. Set `VISUAL_OUTPUT_DIR` to save screenshots while running browser tests. For Firefox graph coverage, run `TEST_BROWSER=firefox bun --bun run test -g 'wheel and middle drag|canvas drag|production node dragging|inspector keeps'` with the Firefox build for your Playwright version.
 
+The frontend consumes `@service-unavailable/ui` directly from the Bun workspace in `packages/ui`. To work on shared components, run `bun run storybook` in `packages/ui`. Telemetry, Growth, and Finance save each game's dashboard layout in the current browser.
+
 For production, run `bun --bun run build` then `bun --bun run start` in `frontend`. Set `CORE_API_URL` to the API origin if the services are on separate hosts. Set the SvelteKit `ORIGIN` to the public HTTPS origin when deploying behind a proxy. Route `/api/games/{id}/live` upgrades to FastAPI with the original Host and Origin headers. Route ordinary requests to Bun. The stand includes this routing. Run FastAPI with the PostgreSQL connection string, a stable private `JWT_SECRET`, and `GAME_COOKIE_SECURE=true` for HTTPS.
 
 ## Self-hosted stand
