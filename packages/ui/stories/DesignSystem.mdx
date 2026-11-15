@@ -1,0 +1,47 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Design system/Guide" />
+
+# Service Unavailable UI
+
+A Svelte 5 component library for the workbench. The palette comes from the game’s dark theme. Use the Controls, Navigation, Overlays, Data and Layout stories to preview individual components. **Patterns / Workbench** shows them together in a capacity dashboard.
+
+## Foundations
+
+| Role | Token | Use |
+| --- | --- | --- |
+| Canvas and page | `--sui-background`, `--sui-page` | Diagram canvas and page background |
+| Panels and overlays | `--sui-surface`, `--sui-raised`, `--sui-inset` | Cards, floating content, and quiet nested surfaces |
+| Boundaries | `--sui-border`, `--sui-control-border` | Panel separators and interactive control outlines |
+| Text | `--sui-text`, `--sui-muted` | Main copy and secondary labels |
+| Action and status | `--sui-primary`, `--sui-info`, `--sui-warning`, `--sui-danger` | Primary actions, positive states, information, warnings, and errors |
+| Typography | `--sui-display`, `--sui-title`, `--sui-body`, `--sui-caption` | Space Grotesk for headings, Inter for body copy, IBM Plex Mono for readings and units |
+| Spacing | `--sui-space-1` through `--sui-space-6` | 4, 8, 12, 16, 20, and 24 px on a 16 px root |
+| Curves | `--sui-radius-sm`, `--sui-radius`, `--sui-radius-panel` | 6 px for small markers, 8 px for controls, 14 px for panels |
+| Interaction | `--sui-target`, `--sui-focus`, `--sui-motion` | 44 px control height, visible focus ring, and motion that follows the OS preference |
+
+Include text with status colors. Reserve the lime fill for the primary action in a group and use a danger button for destructive changes.
+
+## Patterns
+
+| Task | Components and behavior |
+| --- | --- |
+| Edit settings | Use `FormField` to connect a visible label, hint, and error. Spread its snippet argument onto the input. `Form` supports native validation and returns `FormData` via `ondata`. |
+| Choose a value | Use `Select` for a short list of values, `NumberInput` for exact numeric entries, and `Slider` for a bounded value. Pass `manualLabel` and `manualStepLabels` to add a synchronized numeric input with localized step buttons. |
+| Toggle a setting | Use `Checkbox` for selections and `Switch` for a binary setting. The visible label should communicate what will be selected or enabled. |
+| Navigate | Use `NavTabs` for links that change the current page and `Tabs` for panels on a single page. Use `Disclosure` for a single expandable section, `Accordion` for a group and `Dropdown` for actions. |
+| Open a secondary task | Use `Modal` for a focused decision and `Slideover` for extended reading or editing. Pass `resizeLabel` to enable resizing by pointer or keyboard. Keep the close control visible. Set `dismissible={false}` to require an explicit action. |
+| Give feedback | Use `Alert` for messages tied to a location and `Toaster` to report the outcome of an action. Toasts show the remaining time along the bottom edge and pause while focused or hovered. Use a persistent toast with `duration: 0` and an assertive announcement for urgent failures. |
+| Explain a control | Use `Tooltip` for supplemental help available to keyboard, mouse, and touch users. Keep instructions needed to complete a task in the visible form. |
+| Show readings | Use `Chart` for series and `Meter` for a reading against known bounds. Provide units and meaningful labels. A tooltip shows the selected sample. The legend sits below the plot. |
+| Lay out a page | Use `PageColumns` to arrange independent panels. Columns collapse as their container narrows and preserve source order. |
+
+## Data and localization
+
+Pass precomputed presentation data into graphs. Use `null` for missing measurements, keep series aligned to their labels, and use equal time intervals for time series. A line breaks at missing measurements. Bar charts include zero and support negative values. Keep demand, capacity, cash receipts, and expenses labelled as separate series where applicable.
+
+Supply visible names, units, errors, empty states, close labels, and notification text as localized props or snippets. The Storybook toolbar previews English and Russian component copy.
+
+## Editable dashboards
+
+Use `Dashboard` for a grid that the user can arrange. Give widgets stable IDs and default footprints based on their content. In edit mode the frame exposes move and resize handles, a numeric settings form, and visibility controls. The dashboard emits a complete snapshot when the user commits a change so the application can persist it with the user’s preferences. On a narrow screen, prefer a single column with a reorderable list.

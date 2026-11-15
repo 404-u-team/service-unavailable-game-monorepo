@@ -44,6 +44,10 @@ poetry run uvicorn src.main:app --reload
 
 Set `DATABASE_URL` to your PostgreSQL connection string before running those commands. The API applies its additive game tables on startup. The Compose setup retains the existing `postgres_data` volume and user tables.
 
+### Design system
+
+See [the UI package](packages/ui/README.md) to run the standalone Storybook and browse the workbench components and design tokens.
+
 ### Tests and production build
 
 With the API running:

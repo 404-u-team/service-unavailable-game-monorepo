@@ -1,0 +1,2 @@
+body { background: var(--sui-page); color: var(--sui-text); font: var(--sui-body); color-scheme: dark; }
+.sb-show-main.sb-main-padded { padding: clamp(14px, 4vw, 40px); }
