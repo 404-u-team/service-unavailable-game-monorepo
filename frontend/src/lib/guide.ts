@@ -1,4 +1,5 @@
 import type { Catalog, Kind } from './types';
+import { engineeringArticles } from './engineering-guide';
 import { componentNotes } from './workbench/details';
 
 export const categories = {
@@ -84,6 +85,7 @@ export const componentArticles: Record<Kind, Article> = {
 };
 
 export const articles: Record<string, Article> = {
+  ...engineeringArticles,
   "game-basics": { category: "start", title: "Game basics",
     sections: [
       { id: "messenger", title: "Messenger", body: ["Run a messaging service. Traffic includes sending messages, reading history, listing conversations, authenticating and keeping connections open. The starting topology already serves text messaging."] },
@@ -280,6 +282,8 @@ export function guideArticleHref(base: string, article: string | readonly [strin
 }
 
 export function fieldArticle(kind: Kind, field: string) {
+  const engineering: Record<string, string> = { role: 'universal-specialized', domain: 'data-domains', partition: 'database-sharding', query_plan: 'query-optimization', autoscale: 'api-autoscaling', min_instances: 'api-autoscaling', max_instances: 'api-autoscaling', target_utilization: 'api-autoscaling', instances: 'api-instances' };
+  if (engineering[field]) return [engineering[field], 'configuration'] as const;
   if (kind === 'database' || kind === 'replica') {
     if (field === 'disk') return ['database-io', 'io'] as const;
     if (field === 'storage') return ['database-io', 'space'] as const;

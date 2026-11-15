@@ -133,6 +133,18 @@ A database starts at 155 read and 62 write compute units per simulated second on
 Press **Ctrl/Cmd + S** to flush layout changes and save, **Space** to pause or resume, and **1**, **2**, or **3** to select 1×, 3×, or 5×. Press **Escape** to close the current dialog or clear a canvas selection.
 
 
+## Engineering research
+
+Product includes five engineering projects: Service Decomposition, Domain Data
+Separation, Database Query Optimization, Database Sharding and API Autoscaling.
+Research unlocks settings; players still configure and finance infrastructure in
+Draft → Review → Deploy. Universal APIs remain the default. Domain moves and
+shard-count changes use paid, clock-driven preparation while production stays live.
+The English/Russian Guide includes contextual help and an optional resumable
+engineering walkthrough. See [Engineering mechanics and balance](backend/core_api/ENGINEERING.md)
+for operation routing, migration assumptions, save compatibility and measured
+one/two/four-primary write-scaling results.
+
 ## Portable saves
 
 In **Saved games**, select **Export** to download a JSON file. In another browser or on another device, open **Saved games**, select **Import save**, choose the file, and check the preview. **Import as new save** creates a new copy each time. The file limit is 8 MB. A running save resumes from its exported simulation time when imported. To freeze the game at that point, pause before exporting.

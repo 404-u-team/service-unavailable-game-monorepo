@@ -67,7 +67,7 @@ def inspect_graph(topology: Topology) -> Graph:
                     isinstance(value, (float, int))
                     and field["min"] <= value <= field["max"]
                 )
-                if key in {"instances", "slots"}:
+                if key in {"instances", "slots", "min_instances", "max_instances"}:
                     valid = valid and int(value) == value
             if not valid:
                 raise RuleError(
@@ -89,6 +89,13 @@ def inspect_graph(topology: Topology) -> Graph:
                 f"{source.name} cannot connect to {target.name}.",
                 code="incompatible_connection",
                 values=(source.name, target.name),
+            )
+        if relationship == "identity" and (
+            config(source)["role"] in {"Universal", "Accounts"}
+            or config(target)["role"] != "Accounts"
+        ):
+            raise RuleError(
+                "Identity dependencies must connect a specialized service to an Accounts API."
             )
         if edge.target in targets[edge.source]:
             raise RuleError(
@@ -188,7 +195,14 @@ def deployment_warnings(graph: Graph) -> list[str]:
             warnings.append(
                 f"{node.name} has no write path. Route traffic to an API with a direct connection to a primary database."
             )
-        elif node.kind == "api" and len(graph.primaries(node.id)) > 1:
+        elif (
+            node.kind == "api"
+            and len(graph.primaries(node.id)) > 1
+            and all(
+                config(graph.nodes[p])["domain"] == "Shared"
+                for p in graph.primaries(node.id)
+            )
+        ):
             warnings.append(
                 f"{node.name} has multiple primary links. Only the first by component ID serves its dataset."
             )
@@ -224,6 +238,9 @@ def daily_cost(node: Node) -> float:
             "window",
             "burst",
             "retention",
+            "min_instances",
+            "max_instances",
+            "target_utilization",
         }
         and (key != "connections" or node.kind == "balancer")
     )

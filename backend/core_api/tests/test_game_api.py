@@ -65,6 +65,37 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 201, self.game)
         self.path = f"/{self.game['id']}"
 
+    def test_engineering_projects_are_idempotent_persist_and_export(self):
+        catalog = call(self.client, "/catalog")[1]
+        self.assertEqual(len(catalog["engineering"]), 5)
+        self.assertEqual(
+            call(self.client, self.path + "/engineering/domains", "POST", action())[0],
+            422,
+        )
+        request = action(action="develop")
+        status, started = call(
+            self.client, self.path + "/engineering/decomposition", "POST", request
+        )
+        self.assertEqual(status, 200, started)
+        self.assertEqual(started["economy"]["development"], 1800)
+        replayed = call(
+            self.client, self.path + "/engineering/decomposition", "POST", request
+        )[1]
+        self.assertEqual(started, replayed)
+        self.assertEqual(
+            call(self.client, self.path)[1]["engineering"], started["engineering"]
+        )
+        updated = call(
+            self.client, self.path + "/engineering-lesson", "PUT", action(step=3)
+        )[1]
+        self.assertEqual(updated["engineering_lesson"], 3)
+        status, _, raw = file_request(self.client, self.path + "/export")
+        self.assertEqual(status, 200)
+        exported = json.loads(raw)
+        self.assertIn("decomposition", exported["game"]["engineering"])
+        self.assertEqual(exported["game"]["engineering_lesson"], 3)
+        self.assertEqual(exported["game"]["production"], self.game["production"])
+
     def test_diagram_mutation_is_independent_from_deployment(self):
         diagram = {
             "positions": {"api": {"x": 600, "y": 300}},

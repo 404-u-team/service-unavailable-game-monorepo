@@ -6,6 +6,7 @@ from pydantic import Field
 
 from src.simulation.models import (
     AdIntensity,
+    ArchitectureMigration,
     CampaignAllocation,
     DeploymentComparison,
     Diagram,
@@ -94,6 +95,35 @@ class PatchDiagram(Action):
 
 class SettingsAction(Action):
     settings: GameSettings
+
+
+ResearchId = Literal["decomposition", "domains", "queries", "sharding", "autoscaling"]
+
+
+class ResearchAction(Action):
+    action: Literal["develop"] = "develop"
+
+
+class EngineeringLessonAction(Action):
+    step: int = Field(ge=0, le=6)
+
+
+class ResearchDefinition(Model):
+    name: str
+    cost: float
+    duration: int
+    prereq: list[str]
+    description: str
+    unlocks: str
+    advantages: str
+    tradeoffs: str
+    guide: str
+
+
+class ResearchView(Model):
+    id: str
+    state: Literal["unavailable", "available", "developing", "completed"]
+    remaining: int = 0
 
 
 class FeatureAction(Action):
@@ -211,6 +241,8 @@ class Modification(Model):
 
 
 class DraftReview(Model):
+    migration_ticks: int = 0
+    migration_cost: float = 0
     revision: int
     errors: list[str]
     warnings: list[str]
@@ -365,6 +397,9 @@ class GameView(SaveSummary):
     economy: Economy
     component_costs: dict[str, float]
     draft_costs: dict[str, float]
+    engineering: list[ResearchView]
+    migration: ArchitectureMigration | None = None
+    engineering_lesson: int = 0
     features: list[FeatureView]
     product: ProductSettings
     advertising_estimates: dict[AdIntensity, AdvertisingEstimate]
@@ -438,11 +473,14 @@ class StorageTier(Model):
 
 
 class Catalog(Model):
+    service_roles: dict[str, list[str]]
+    operation_domains: dict[str, str]
     diagram_layout: Literal[True] = True
     components: dict[str, ComponentDefinition]
     database_storage: dict[str, StorageTier]
     scenarios: dict[str, ScenarioDefinition]
     difficulties: dict[Difficulty, DifficultyDefinition]
+    engineering: dict[str, ResearchDefinition]
     features: dict[str, FeatureDefinition]
     campaigns: dict[str, CampaignDefinition]
     operations: dict[str, str]

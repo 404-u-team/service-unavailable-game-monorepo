@@ -6,15 +6,16 @@
   import { chapters, onboarding, stepId, target, type Target, type TutorialAction, type TutorialProgress } from './onboarding';
   import { findTarget, intersection, openDialog, placeTooltip, revealTarget, viewport, visibleTarget } from './spotlight';
 
-  let { progress, view, busy, waiting, link, change, recover, complete }: {
+  let { progress, view, busy, waiting, link, change, recover, complete, lesson }: {
+    lesson?: { title: string; text: string; index: number };
     progress: TutorialProgress;
     view: { target?: Target; instruction?: string; args?: string[]; open?: Section; allowed?: boolean; retry?: boolean };
     busy: boolean; waiting: boolean; link: (section: Section) => string;
     change: (action: TutorialAction) => void; recover: (key?: Target) => void; complete?: () => void;
   } = $props();
 
-  const index = $derived(onboarding.findIndex((item) => item.id === stepId(progress)));
-  const step = $derived(onboarding[index]);
+  const index = $derived(lesson ? lesson.index : onboarding.findIndex((item) => item.id === stepId(progress)));
+  const step = $derived(lesson ? { id: `engineering-${lesson.index}`, chapter: 0, title: lesson.title, text: lesson.text } : onboarding[index]);
   const chapterSteps = $derived(onboarding.filter((item) => item.chapter === step?.chapter));
   const chapterIndex = $derived(chapterSteps.findIndex((item) => item.id === step?.id));
   const firstInChapter = $derived(chapterIndex === 0 && index > 0);
@@ -191,8 +192,8 @@
     <div class="tutorial-content" bind:this={content}>
       {#if step}
         <header>
-          <small>{t('Chapter {0} of {1} · {2}', [step.chapter + 1, chapters.length, t(chapters[step.chapter])])}</small>
-          <small>{t('Step {0} of {1}', [chapterIndex + 1, chapterSteps.length])}</small>
+          <small>{lesson ? t('Engineering walkthrough') : t('Chapter {0} of {1} · {2}', [step.chapter + 1, chapters.length, t(chapters[step.chapter])])}</small>
+          <small>{t('Step {0} of {1}', [lesson ? lesson.index + 1 : chapterIndex + 1, lesson ? 6 : chapterSteps.length])}</small>
         </header>
         <div class="progress" aria-hidden="true">
           {#each chapters as chapter, i (chapter)}<span class:past={i < step.chapter} class:current={i === step.chapter}></span>{/each}

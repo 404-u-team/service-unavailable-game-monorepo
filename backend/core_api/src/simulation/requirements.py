@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from src.simulation.catalog import topic_accepts
+from src.simulation.engineering import data_targets, supports
 from src.simulation.models import Game, Kind, Node
 from src.simulation.topology import Graph, config
 
@@ -54,7 +55,9 @@ def requirement_met(
     apis = [
         node
         for node in graph.nodes.values()
-        if node.kind == "api" and node.id in graph.reachable
+        if node.kind == "api"
+        and node.id in graph.reachable
+        and (operation is None or supports(node, operation))
     ]
     for api in apis:
         candidates = {api.id}
@@ -63,7 +66,11 @@ def requirement_met(
                 target
                 for source in candidates
                 for target in (
-                    graph.primaries(source)[:1]
+                    (
+                        data_targets(graph, source, operation)
+                        if operation
+                        else graph.primaries(source)[:1]
+                    )
                     if kind == "database" and graph.nodes[source].kind == "api"
                     else graph.targets[source]
                 )
@@ -74,6 +81,11 @@ def requirement_met(
                     or topic_accepts(config(graph.nodes[target])["topic"], operation)
                 )
             }
+        if rule.path == ("database",) and (
+            not candidates
+            or any(not rule.qualifies(graph.nodes[p], game) for p in candidates)
+        ):
+            return False
         if (
             sum(
                 config(node).get("instances", 1)

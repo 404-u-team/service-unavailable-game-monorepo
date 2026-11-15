@@ -2,6 +2,7 @@ from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+
 from src.simulation.onboarding import TUTORIAL_STEPS, TutorialStep
 
 Kind = Literal[
@@ -146,6 +147,15 @@ class ComponentMetrics(Model):
     throughput: float
     latency: float
     utilization: dict[str, float]
+    completed_operations: dict[str, float] = Field(default_factory=dict)
+    service_errors: float | None = None
+    service_latency: float | None = None
+    operations: dict[str, float] = Field(default_factory=dict)
+    service_role: str | None = None
+    data_domain: str | None = None
+    partition_share: float | None = None
+    daily_cost: float = 0
+    autoscaling: str | None = None
     cache_hit: float | None = None
     backlog: float | None = None
     queue_wait_minutes: float | None = None
@@ -359,6 +369,20 @@ class RegionalCampaign(Model):
         return list(self.allocations) or [self.region]
 
 
+class ArchitectureMigration(Model):
+    request_id: UUID
+    ready_at: int = Field(ge=0)
+    topology: Topology
+    cost: float = Field(default=0, ge=0)
+
+
+class AutoscaleState(Model):
+    instances: int = Field(ge=1, le=24)
+    changed_at: int = Field(ge=0)
+    direction: int = Field(default=0, ge=-1, le=1)
+    pressure_ticks: int = Field(default=0, ge=0, le=2)
+
+
 class Game(Model):
     id: UUID
     name: Name
@@ -401,6 +425,10 @@ class Game(Model):
     regional_campaigns: dict[str, RegionalCampaign] = Field(default_factory=dict)
     premium_quality: float = 0.98
     subscriptions: list[SubscriptionTerm] = Field(default_factory=list)
+    engineering: dict[str, int] = Field(default_factory=dict)
+    autoscaling: dict[NodeId, AutoscaleState] = Field(default_factory=dict)
+    migration: ArchitectureMigration | None = None
+    engineering_lesson: int = Field(default=0, ge=0, le=6)
     development: dict[str, int] = Field(default_factory=dict)
     campaigns: dict[str, int] = Field(default_factory=dict)
     event_sequence: int = 0

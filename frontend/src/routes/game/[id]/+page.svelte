@@ -7,6 +7,7 @@
   import Brand from '#lib/Brand.svelte';
   import Architecture from '#lib/workbench/Architecture.svelte';
   import Onboarding from '#lib/workbench/Onboarding.svelte';
+  import { engineeringLessons } from '#lib/workbench/engineering-lesson.ts';
   import Dashboard from '#lib/workbench/Dashboard.svelte';
   import { ApiError, gameAction, loadCatalog, loadGame } from '#lib/api.ts';
   import { desktop, mobile, sections, type Section } from '#lib/labels.ts';
@@ -19,6 +20,17 @@
   import type { Catalog, Diagram, Game, Speed } from '#lib/types.ts';
 
   let game = $state.raw<Game>();
+  let engineeringWalkthrough = $state(false);
+  $effect(() => { if (page.url.searchParams.get('engineering') === '1') engineeringWalkthrough = true; });
+  const engineeringStep = $derived(game ? engineeringLessons[game.engineering_lesson ?? 0] : undefined);
+  async function changeEngineering(action: TutorialAction) {
+    if (!game) return;
+    if (action === 'skip') { engineeringWalkthrough = false; return; }
+    const next = Math.min(6, Math.max(0, (game.engineering_lesson ?? 0) + (action === 'back' ? -1 : 1)));
+    await act('/engineering-lesson', { step: next }, 'PUT');
+    if (next === 6) engineeringWalkthrough = false;
+  }
+
   let pendingDiagram = $state.raw<Diagram>();
   let layout: ReturnType<typeof syncLayout> | undefined;
   let live: ReturnType<typeof subscribeGame> | undefined;
@@ -320,6 +332,7 @@
         <div class="server-message notice error row spread" role="alert"><span>{message(connection || error)}</span><button class="btn" onclick={() => { if (connection) live?.reconnect(); else error = ''; }}>{connection ? t("Reconnect") : t("Dismiss")}</button></div>
       {/if}
       {#if saved}<span class="save-feedback badge good" role="status">{t("Game saved")}</span>{/if}
+      {#if game.migration}<p class="notice warn" role="status">{t('Architecture migration')} · {t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])}</p>{/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture bind:this={architecture} {game} {catalog} {act} {busy} {error} tutorial={tutorialEnabled} tutorialSelect={currentView.target === target.api}
@@ -337,7 +350,11 @@
           <button class="btn icon-btn" aria-label={t('Dismiss notification')} onclick={() => recentEvent = undefined}><X size={14} /></button>
         </aside>
       {/if}
-      {#if tutorialVisible || completion}
+      {#if engineeringWalkthrough && engineeringStep}
+        <Onboarding progress={game.onboarding} lesson={{ ...engineeringStep, index: game.engineering_lesson ?? 0 }}
+          view={{ target: engineeringStep.target, open: engineeringStep.open, allowed: true }} {link} {busy} waiting={false}
+          change={changeEngineering} recover={() => {}} />
+      {:else if tutorialVisible || completion}
         <Onboarding progress={game.onboarding} view={rejected === tutorialStep
           ? { ...currentView, retry: true, instruction: 'Progress could not be saved. Retry this step or skip it.' } : currentView}
           {link} {busy} waiting={tutorialWaiting} change={(action) => void guide(action)} recover={recoverTutorial}

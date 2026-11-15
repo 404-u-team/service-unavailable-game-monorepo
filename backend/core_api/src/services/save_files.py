@@ -18,6 +18,7 @@ from src.simulation.catalog import (
     SCENARIOS,
 )
 from src.simulation.demand import MINUTES_PER_DAY, game_minute
+from src.simulation.engineering import RESEARCH, architecture_errors, researched
 from src.simulation.models import (
     DeploymentComparison,
     FinanceSample,
@@ -97,7 +98,14 @@ def validate_scalars(value: object, depth: int = 0) -> None:
 def require_complete(value: object) -> None:
     if isinstance(value, Model):
         allowed_omissions = set()
-        if isinstance(value, FinanceSample):
+        if isinstance(value, Game):
+            allowed_omissions = {
+                "engineering",
+                "autoscaling",
+                "migration",
+                "engineering_lesson",
+            }
+        elif isinstance(value, FinanceSample):
             allowed_omissions = {"regional_ads"}
         elif isinstance(value, Onboarding):
             allowed_omissions = {"step_id", "furthest_id"}
@@ -138,10 +146,44 @@ def validate_game(game: Game) -> None:
     ):
         raise ValueError("Invalid simulation state")
 
+    if not game.engineering.keys() <= RESEARCH.keys() or any(
+        t < 0 for t in game.engineering.values()
+    ):
+        raise ValueError("Unknown engineering state")
+    for key in game.engineering:
+        if any(not researched(game, p) for p in RESEARCH[key]["prereq"]):
+            raise ValueError("Invalid engineering prerequisites")
     graph = inspect_graph(game.production)
+    if architecture_errors(game, graph, partial=True):
+        raise ValueError("Unsupported architecture settings")
+    if game.migration:
+        if (
+            game.migration.ready_at <= game.tick
+            or game.migration.topology != game.draft
+            or any(d.id == game.migration.request_id for d in game.deployments)
+        ):
+            raise ValueError("Invalid pending migration")
+        if architecture_errors(game, inspect_graph(game.migration.topology)):
+            raise ValueError("Invalid migration topology")
+    if any(
+        n.config.get("role", "Universal") != "Universal"
+        or n.config.get("domain", "Shared") != "Shared"
+        or n.config.get("partition", "Independent") != "Independent"
+        for n in game.production.nodes
+    ) and architecture_errors(game, graph):
+        raise ValueError("Inconsistent data ownership")
+    for node_id, state in game.autoscaling.items():
+        if (
+            node_id not in graph.nodes
+            or graph.nodes[node_id].kind != "api"
+            or state.changed_at > game.tick
+        ):
+            raise ValueError("Invalid autoscaling state")
     deployment_warnings(graph)
     if game.draft is not None:
         draft = inspect_graph(game.draft)
+        if architecture_errors(game, draft, partial=True):
+            raise ValueError("Unsupported draft settings")
         if any(
             node_id in graph.nodes and node.kind != graph.nodes[node_id].kind
             for node_id, node in draft.nodes.items()

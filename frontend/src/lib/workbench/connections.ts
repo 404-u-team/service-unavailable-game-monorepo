@@ -1,6 +1,7 @@
 import type { Catalog, Connection, Kind, Topology } from '../types';
 
 export const connectionLabels = {
+  identity: 'Identity service calls',
   request: 'Application requests',
   queries: 'Read and write queries',
   reads: 'Read queries',
@@ -28,9 +29,9 @@ export function connectionError(topology: Topology, catalog: Catalog, candidate:
   }
   const remaining = topology.edges.filter((edge) => `${edge.source}:${edge.target}` !== replaces);
   if (remaining.some((edge) => edge.source === source.id && edge.target === target.id)) return 'A connection already exists between these components.';
-  if (source.kind === 'api' && target.kind === 'database' && remaining.some((edge) =>
-    edge.source === source.id && topology.nodes.some((node) => node.id === edge.target && node.kind === 'database'))) {
-    return 'An API can use one primary database for its dataset.';
+  if (source.kind === 'api' && target.kind === 'api' &&
+      (['Universal', 'Accounts'].includes(String(source.config.role ?? 'Universal')) || target.config.role !== 'Accounts')) {
+    return 'Identity dependencies must connect a specialized service to an Accounts API.';
   }
   if (source.kind === 'replica' && target.kind === 'database' && remaining.some((edge) =>
     edge.source === source.id && topology.nodes.some((node) => node.id === edge.target && node.kind === 'database'))) {

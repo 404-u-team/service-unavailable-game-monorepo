@@ -22,7 +22,11 @@ export type DatabaseTelemetry = {
     resources: string[]; limiting?: string[]; upgrades: DatabaseUpgrade[]; read_options: boolean;
   } | null;
 };
+export type Research = { id: string; state: 'unavailable' | 'available' | 'developing' | 'completed'; remaining: number };
+export type ResearchDefinition = { name: string; cost: number; duration: number; prereq: string[]; description: string; unlocks: string; advantages: string; tradeoffs: string; guide: string };
 export type ComponentMetrics = {
+  completed_operations?: Record<string, number>; service_errors?: number | null; service_latency?: number | null;
+  operations?: Record<string, number>; service_role?: string | null; data_domain?: string | null; partition_share?: number | null; daily_cost?: number; autoscaling?: string | null;
   status: 'healthy' | 'warning' | 'overloaded' | 'failed' | 'idle';
   rps: number; throughput: number; latency: number; utilization: Record<string, number>;
   cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null; replication_lag: number | null;
@@ -86,6 +90,8 @@ export type Deployment = { id: string; tick: number; summary: string; cost: numb
   pressure_before?: ResourcePressure | null; pressure_after?: ResourcePressure | null;
 } | null };
 export type Game = Save & {
+  engineering: Research[]; engineering_lesson: number;
+  migration: { request_id: string; ready_at: number; topology: Topology; cost: number } | null;
   start_minute: number; speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
   diagram: Diagram;
   snapshot: Snapshot; history: History[]; business_history: Pick<History, 'tick' | 'audience' | 'balance'>[]; economy: Economy; component_costs: Record<string, number>; draft_costs: Record<string, number>; features: Feature[]; campaigns: Campaign[]; markets: Market[]; languages: ProductLanguage[];
@@ -98,6 +104,8 @@ export type Scenario = { name: string; available: boolean; description: string }
 export type FeatureDefinition = { name: string; cost: number; duration: number; appeal: number; operation: string | null; prereq: string[]; requires: Kind[]; infrastructure: string[] };
 export type CampaignDefinition = { name: string; cost: number; duration: number; audience: number; spike: number; description: string };
 export type Catalog = {
+  service_roles: Record<string, string[]>; operation_domains: Record<string, string>;
+  engineering: Record<string, ResearchDefinition>;
   diagram_layout: true;
   database_storage: Record<string, { read_capacity: number; write_capacity: number; base_cost_surcharge: number }>;
   components: Record<Kind, Definition>; scenarios: Record<string, Scenario>;
@@ -115,6 +123,7 @@ export type DatabaseForecast = {
 };
 export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high'; plan?: CampaignPlan | null; databases?: Record<string, DatabaseForecast> };
 export type Review = {
+  migration_ticks?: number; migration_cost?: number;
   revision: number; errors: string[]; warnings: string[]; changes: Record<string, string[]>;
   details: { component: string; field: string; before: Setting; after: Setting }[];
   daily_before: number; daily_after: number; install: number; forecast: Forecast | null;

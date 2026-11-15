@@ -29,6 +29,7 @@ from src.simulation.demand import (
 from src.simulation.economy import book_tick, update_subscriptions
 from src.simulation.engine import evaluate
 from src.simulation.models import (
+    AutoscaleState,
     Difficulty,
     FinanceSample,
     Game,
@@ -38,7 +39,7 @@ from src.simulation.models import (
     OneTimeCosts,
     Snapshot,
 )
-from src.simulation.topology import RuleError, config, starter_topology
+from src.simulation.topology import RuleError, config, daily_cost, starter_topology
 
 SECONDS_PER_STEP = MINUTES_PER_TICK * 60
 EVENT_LIMIT = 100
@@ -178,6 +179,19 @@ def advance(game: Game, steps: int) -> None:
     product = product_settings(game)
     for _ in range(steps):
         game.tick += 1
+        if game.migration and game.tick >= game.migration.ready_at:
+            from src.services.games import deploy
+
+            pending = game.migration
+            game.migration = None
+            game.draft = pending.topology
+            deploy(
+                game,
+                game.revision,
+                pending.request_id,
+                prepared=True,
+                prepaid_cost=pending.cost,
+            )
         for event in game.incidents:
             if (
                 event.kind != "capacity"
@@ -331,6 +345,7 @@ def advance(game: Game, steps: int) -> None:
         )
         cash = update_subscriptions(game, premium_quality, result.daily_active_users)
         finance = book_tick(game, result, cash)
+        update_autoscaling(game, result.snapshot)
         game.history.append(history_point(game, result.snapshot, finance, churned))
         game.history = game.history[-HISTORY_LIMIT:]
         game.recent_purchases.pop(game.tick - TICKS_PER_DAY, None)
@@ -452,3 +467,61 @@ def roll_event(game: Game) -> None:
                 "network": "Network degradation",
             }[kind],
         )
+
+
+def update_autoscaling(game: Game, snapshot: Snapshot) -> None:
+    live = {
+        n.id
+        for n in game.production.nodes
+        if n.kind == "api" and config(n)["autoscale"] == "Enabled"
+    }
+    game.autoscaling = {
+        key: state for key, state in game.autoscaling.items() if key in live
+    }
+    for node in game.production.nodes:
+        if node.id not in live:
+            continue
+        cfg = config(node)
+        state = game.autoscaling.setdefault(
+            node.id,
+            AutoscaleState(instances=int(cfg["min_instances"]), changed_at=game.tick),
+        )
+        state.instances = int(
+            min(cfg["max_instances"], max(cfg["min_instances"], state.instances))
+        )
+        metric = snapshot.components.get(node.id)
+        if metric is None:
+            state.pressure_ticks = 0
+            continue
+        pressure = max(metric.utilization.values(), default=0)
+        target = cfg["target_utilization"] / 100
+        direction = 1 if pressure > target else -1 if pressure < target * 0.5 else 0
+        state.pressure_ticks = (
+            min(2, state.pressure_ticks + 1)
+            if direction and direction == state.direction
+            else int(direction != 0)
+        )
+        state.direction = direction
+        if state.pressure_ticks < 2 or game.tick - state.changed_at < 3:
+            continue
+        count = int(
+            min(
+                cfg["max_instances"],
+                max(cfg["min_instances"], state.instances + direction),
+            )
+        )
+        if direction > 0 and game.balance < daily_cost(node) / cfg["instances"] * count:
+            continue
+        if count != state.instances:
+            state.instances = count
+            state.changed_at = game.tick
+            state.pressure_ticks = 0
+            add_event(
+                game,
+                "autoscaling",
+                "API autoscaling changed instances",
+                "Demand changed the active instance count within configured limits.",
+                "info",
+                0,
+                node.id,
+            )

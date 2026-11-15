@@ -12,10 +12,12 @@
   import { fieldArticle, guideArticleHref } from '../guide';
   import Help from './Help.svelte';
   import { fieldNotes } from './details';
-  import { num, pct, preciseMoney } from '../format';
+  import { num, pct, preciseMoney, rps } from '../format';
   import type { Catalog, Component, Definition, Review, Setting } from '../types';
 
-  let { component, definition, busy, error, close, apply, preview, guideHref, onEdited, daily, storage }: {
+  let { component, definition, busy, error, close, apply, preview, guideHref, onEdited, daily, storage, engineering = [], serviceRoles = {}, operationNames = {}, workloads = {} }: {
+    serviceRoles?: Record<string, string[]>; operationNames?: Record<string, string>; workloads?: Record<string, number>;
+    engineering?: import('../types').Research[];
     component: Component; definition: Definition; daily: number; storage: Catalog["database_storage"]; guideHref: string; busy: boolean; error: string;
     onEdited?: (changed: boolean) => void; close: () => void; preview: (name: string, settings: Record<string, Setting>) => Promise<Review>; apply: (name: string, settings: Record<string, Setting>) => void;
   } = $props();
@@ -58,6 +60,10 @@
       if (version === previewVersion) estimating = false;
     }
   }
+  const unlocks: Record<string, string> = { role: 'decomposition', domain: 'domains', partition: 'sharding', query_plan: 'queries', autoscale: 'autoscaling', min_instances: 'autoscaling', max_instances: 'autoscaling', target_utilization: 'autoscaling' };
+  const unlocked = (key: string) => !unlocks[key] || engineering.some((r) => r.id === unlocks[key] && r.state === 'completed');
+  const supported = $derived(serviceRoles[String(values.role ?? 'Universal')] ?? []);
+  const eligibleDemand = $derived(supported.reduce((sum, op) => sum + (workloads[op] ?? 0), 0));
   const presets = $derived(Object.entries(definition.presets ?? {}));
   const activePreset = $derived(presets.findIndex(([, entries]) => Object.entries(entries).every(([key, value]) => values[key] === value)));
   const sliderFields = new Set(['cpu', 'memory', 'connections', 'network', 'concurrency', 'slots', 'capacity', 'limit']);
@@ -87,11 +93,22 @@
           }} />
       </div>
     {/if}
+    {#if component.kind === 'api'}
+      <p class="notice">{t('Instances share one role and all dependencies. Separate API nodes can have different roles, resources and routes.')}</p>
+      <p>{t('Supported operations')}: {supported.map((op) => t(operationNames[op] ?? op)).join(', ')} · <a href={guideArticleHref(guideHref, 'service-routing')} target="_blank" rel="noreferrer">{t('Routing and dependencies')}</a></p>
+      <p>{t('Eligible demand before routing')}: {rps(eligibleDemand)}</p>
+      {#if values.role === 'Media'}<p>{t('Media needs released image, voice or file features to receive their traffic.')}</p>{/if}
+      {#if values.role === 'Search'}<p>{t('Search needs the Message search feature and an indexed primary.')}</p>{/if}
+      {#if !['Universal', 'Accounts'].includes(String(values.role ?? 'Universal'))}<p class="notice warn">{t('Connect this service to an Accounts API for identity checks and to its data domain.')}</p>{/if}
+    {/if}
     <div class="form-grid">
-      {#each Object.entries(definition.fields) as [key, field] (key)}
+      {#each Object.entries(definition.fields).filter(([key]) => !['min_instances', 'max_instances', 'target_utilization'].includes(key) || values.autoscale === 'Enabled') as [key, field] (key)}
         <div class="field">
           <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label>{#if fieldNotes[key]}<Help label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}</div>
-          {#if field.options}
+          {#if !unlocked(key)}
+            <p class="muted">{t('Unlock this setting through Engineering in Product.')}</p>
+            <a href={guideArticleHref(guideHref, key === 'role' ? 'service-decomposition' : key === 'domain' ? 'data-domains' : key === 'partition' ? 'database-sharding' : key === 'query_plan' ? 'query-optimization' : 'api-autoscaling')} target="_blank" rel="noreferrer">{t('Engineering Guide')}</a>
+          {:else if field.options}
             <Select id={`config-${key}`} label={t(field.label)} value={String(values[key])}
               options={field.options.map((option) => ({ value: option, label: t(option) }))} onchange={(value) => setValue(key, value)} />
           {:else if field.min != null && field.max != null}

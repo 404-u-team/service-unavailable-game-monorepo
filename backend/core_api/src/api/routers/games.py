@@ -28,6 +28,7 @@ from src.api.game_schemas import (
     DraftReview,
     DraftReviewRequest,
     Economy,
+    EngineeringLessonAction,
     FeatureAction,
     FeatureId,
     Forecast,
@@ -37,6 +38,8 @@ from src.api.game_schemas import (
     OnboardingAction,
     PatchDiagram,
     ProductAction,
+    ResearchAction,
+    ResearchId,
     SavePreview,
     SaveSummary,
     SettingsAction,
@@ -58,6 +61,7 @@ from src.services.games import (
     change_onboarding,
     change_product,
     deploy,
+    develop_research,
     discard_draft,
     edit_draft,
     forecast,
@@ -97,6 +101,7 @@ from src.simulation.catalog import (
 )
 from src.simulation.database import disk_limits
 from src.simulation.engine import evaluate
+from src.simulation.engineering import DOMAINS, RESEARCH, ROLES
 from src.simulation.models import Game, Snapshot, Topology
 from src.simulation.progression import drill
 from src.simulation.topology import RuleError
@@ -199,6 +204,11 @@ def catalog():
             for name, (_, surcharge) in DATABASE_DISKS.items()
         },
         "difficulties": DIFFICULTIES,
+        "engineering": RESEARCH,
+        "service_roles": {
+            key: sorted(ops - {"identity"}) for key, ops in ROLES.items()
+        },
+        "operation_domains": DOMAINS,
         "features": FEATURES,
         "campaigns": CAMPAIGNS,
         "scenarios": {
@@ -529,6 +539,38 @@ async def rollback(
         body,
         f"rollback:{deployment_id}",
         lambda game: deploy(game, body.revision, body.request_id, deployment_id),
+    )
+
+
+@router.post("/{game_id}/engineering/{research_id}", response_model=GameView)
+async def engineering(
+    game_id: UUID,
+    research_id: ResearchId,
+    body: ResearchAction,
+    owner_id: Owner,
+    service: Service,
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        f"research:{research_id}",
+        lambda game: develop_research(game, research_id),
+    )
+
+
+@router.put("/{game_id}/engineering-lesson", response_model=GameView)
+async def engineering_lesson(
+    game_id: UUID, body: EngineeringLessonAction, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "engineering-lesson",
+        lambda game: setattr(game, "engineering_lesson", body.step),
     )
 
 

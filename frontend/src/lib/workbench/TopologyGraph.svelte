@@ -181,7 +181,7 @@
         ? { source: node.id, target: linkStart.id } : { source: linkStart.id, target: node.id }, reconnectKey) : undefined;
       const base: WorkbenchNode = {
         id: node.id, type: 'workbench', position: position(node), ...card,
-        data: { name: t(node.name), kind: node.kind, meta, tone,
+        data: { name: t(node.name), kind: node.kind, meta: node.kind === 'api' ? `${t(String(settings.role ?? 'Universal'))} · ${meta}` : node.kind === 'database' ? `${t(String(settings.domain ?? 'Shared'))} · ${t(String(settings.partition ?? 'Independent'))}` : meta, tone,
           health: status ? t(statusLabel[status]) : node.kind === 'source' ? t('Traffic input') : t('Metrics unavailable'),
           change, use, editable: editable && !pending, vertical: compact, compatible,
           input: Position.Left, output: Position.Right },

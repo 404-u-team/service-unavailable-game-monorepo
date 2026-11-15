@@ -14,6 +14,14 @@ export const componentNotes: Record<Kind, [string, string, string]> = {
 };
 
 export const fieldNotes: Record<string, string> = {
+  role: 'Instances share one role and all dependencies. Separate API nodes can have different roles, resources and routes.',
+  domain: 'APIs handling the same domain must use the same primary or the same complete partition set.',
+  partition: 'Multiple primaries for one domain must all be explicit partitions.',
+  query_plan: 'History read work falls 35%; conversation-list read work falls 20%.',
+  autoscale: 'Requires monitoring, reacts after two ticks, waits three ticks between changes, and charges every active instance.',
+  min_instances: 'Unlock this setting through Engineering in Product.',
+  max_instances: 'Unlock this setting through Engineering in Product.',
+  target_utilization: 'Requires monitoring, reacts after two ticks, waits three ticks between changes, and charges every active instance.',
   instances: 'Each instance adds resources, redundancy, and the full daily instance cost.',
   cpu: 'Additional vCPUs process more work in parallel and raise daily cost. Database gains taper as disk limits are reached.',
   memory: 'RAM raises daily cost. It supports connections, keeps cache data resident, and improves database reads.',

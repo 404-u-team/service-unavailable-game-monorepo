@@ -6,6 +6,7 @@ export const chapters = [
 ] as const;
 
 export const target = {
+  research: 'engineering.research',
   clock: 'header.clock', balance: 'header.balance',
   canvas: 'topology.canvas', canvasTools: 'topology.canvas-tools', list: 'topology.component-list',
   api: 'topology.api', openInspector: 'topology.open-inspector',

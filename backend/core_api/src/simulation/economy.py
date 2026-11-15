@@ -14,6 +14,7 @@ from src.simulation.demand import (
     regional_audience,
 )
 from src.simulation.engine import Evaluation
+from src.simulation.engineering import effective_topology
 from src.simulation.models import (
     FinanceSample,
     Game,
@@ -110,7 +111,7 @@ def book_tick(
         / TERM_TICKS,
     )
     expenses = OperatingCosts(
-        infrastructure=topology_cost(game.production) / TICKS_PER_DAY,
+        infrastructure=topology_cost(effective_topology(game)) / TICKS_PER_DAY,
         traffic=result.snapshot.metrics.throughput
         * BUSINESS["traffic_cost_per_rps_day"]
         / TICKS_PER_DAY,

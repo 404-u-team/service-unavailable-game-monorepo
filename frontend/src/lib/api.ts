@@ -66,7 +66,7 @@ export async function loadCatalog(): Promise<Catalog> {
   const catalog = await api<unknown>('/catalog');
   const profiles = isRecord(catalog) ? catalog.difficulties : undefined;
   if (!isRecord(catalog) || catalog.diagram_layout !== true ||
-      !['components', 'scenarios', 'features', 'campaigns', 'operations', 'connections'].every((key) => isRecord(catalog[key])) ||
+      !['components', 'scenarios', 'features', 'campaigns', 'operations', 'connections', 'engineering', 'service_roles', 'operation_domains'].every((key) => isRecord(catalog[key])) ||
       typeof catalog.days_per_month !== 'number' || typeof catalog.minutes_per_tick !== 'number' || !isRecord(profiles) ||
       difficulties.some((key) => {
         const option = profiles[key];

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ServiceTelemetry from './ServiceTelemetry.svelte';
+  import Engineering from './Engineering.svelte';
   import { apiMessage, message, t } from '../i18n.svelte';
   import Language from '../Language.svelte';
   import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
@@ -301,6 +303,7 @@
       </section>
       <section class="panel inset pad stack"><h2>{t("Incident timeline")}</h2>{@render timeline()}<a class="btn" href={link('events')}>{t("View events")} <ArrowRight size={14} /></a></section>
     </div>
+    <ServiceTelemetry {game} {catalog} {link} />
     <section class="panel pad stack">
       <div class="row spread wrap"><h2 data-tutorial={target.coverage}>{t("Monitoring coverage")}</h2><a class="btn" href={link('build')}>{t("Edit coverage in topology")}</a></div>
       {#each Object.entries(game.snapshot.monitors ?? {}) as [id, collector]}
@@ -421,6 +424,7 @@
       </section>
     {/if}
   {:else if section === 'product'}
+    <Engineering {game} {catalog} {act} {busy} {link} />
     <div class="cards stats">
       {#each [
         { label: 'Active features', value: game.features.filter((item) => item.enabled).length },

@@ -27,6 +27,7 @@ from src.api.game_schemas import (
     PatchDiagram,
     Range,
     RequirementView,
+    ResearchView,
     SaveSummary,
     TutorialProgressAction,
 )
@@ -54,7 +55,16 @@ from src.simulation.demand import (
     workload,
 )
 from src.simulation.engine import evaluate
+from src.simulation.engineering import (
+    RESEARCH,
+    architecture_errors,
+    effective_topology,
+    migrated_storage,
+    migration_plan,
+    researched,
+)
 from src.simulation.models import (
+    ArchitectureMigration,
     Deployment,
     DeploymentComparison,
     Diagram,
@@ -89,7 +99,6 @@ from src.simulation.topology import (
     daily_cost,
     deployment_warnings,
     diff,
-    has_split_dataset,
     inspect_graph,
     install_cost,
     messenger_datasets,
@@ -277,6 +286,8 @@ def check_revision(game: Game, revision: int) -> None:
 
 def open_draft(game: Game, revision: int) -> None:
     check_revision(game, revision)
+    if game.migration is not None:
+        raise RuleError("Wait for the planned architecture migration to complete.")
     if game.draft is not None:
         raise RuleError("A draft already exists.")
     game.draft = game.production.model_copy(deep=True)
@@ -285,28 +296,23 @@ def open_draft(game: Game, revision: int) -> None:
 
 def discard_draft(game: Game, revision: int) -> None:
     check_revision(game, revision)
+    if game.migration is not None:
+        raise RuleError("Wait for the planned architecture migration to complete.")
     game.draft = None
     game.revision += 1
 
 
 def edit_draft(game: Game, revision: int, topology: Topology) -> None:
     check_revision(game, revision)
+    if game.migration is not None:
+        raise RuleError("Wait for the planned architecture migration to complete.")
     if game.draft is None:
         raise RuleError("Create a draft first.")
     graph = inspect_graph(topology)
     validate_identity(game.production, graph.nodes)
-    previous = inspect_graph(game.draft)
-    for node in topology.nodes:
-        if node.kind != "api":
-            continue
-        primaries = graph.primaries(node.id)
-        if len(primaries) > 1 and (
-            node.id not in previous.nodes or primaries != previous.primaries(node.id)
-        ):
-            raise RuleError(
-                "An API can use one primary database for its dataset.",
-                code="one_write_primary",
-            )
+    errors = architecture_errors(game, graph, partial=True)
+    if errors:
+        raise RuleError(errors[0])
     game.draft = topology
     game.revision += 1
     modified = (
@@ -445,8 +451,16 @@ def forecast(
     )
 
 
-def review(game: Game, revision: int, topology: Topology | None = None) -> DraftReview:
+def review(
+    game: Game,
+    revision: int,
+    topology: Topology | None = None,
+    *,
+    prepared: bool = False,
+) -> DraftReview:
     check_revision(game, revision)
+    if game.migration is not None:
+        raise RuleError("Wait for the planned architecture migration to complete.")
     candidate = topology if topology is not None else game.draft
     if candidate is None:
         raise RuleError("Create a draft first.")
@@ -456,22 +470,65 @@ def review(game: Game, revision: int, topology: Topology | None = None) -> Draft
     details = []
     estimate = None
     install = 0.0
-    daily_after = topology_cost(game.production)
+    daily_after = topology_cost(effective_topology(game))
+    migration_ticks, migration_cost = 0, 0.0
     try:
         graph = inspect_graph(candidate)
         validate_identity(game.production, graph.nodes)
-        daily_after = topology_cost(candidate)
+        daily_after = topology_cost(effective_topology(game, candidate))
         changes = diff(game.production, candidate)
         details = modifications(game.production, candidate)
-        install = install_cost(game.production, candidate)
+        install = install_cost(
+            effective_topology(game), effective_topology(game, candidate)
+        )
         warnings = deployment_warnings(graph)
-        datasets = messenger_datasets(graph)
-        if game.scenario == "messenger" and has_split_dataset(datasets):
-            message = "Messenger API servers receiving live requests must share one primary database."
-            if datasets != messenger_datasets(inspect_graph(game.production)):
-                errors.append(message)
-            else:
-                warnings.append(message)
+        issues = architecture_errors(game, graph)
+        # Preserve legacy games with pre-existing split primaries; never permit a new split.
+        if messenger_datasets(graph) == messenger_datasets(
+            inspect_graph(game.production)
+        ) and all(
+            config(n).get("role", "Universal") == "Universal"
+            and config(n).get("domain", "Shared") == "Shared"
+            and config(n).get("partition", "Independent") == "Independent"
+            for n in candidate.nodes
+        ):
+            for legacy in (
+                "APIs handling the same domain must use the same primary or the same complete partition set.",
+                "Multiple primaries for one domain must all be explicit partitions.",
+            ):
+                if legacy in issues:
+                    issues.remove(legacy)
+                    warnings.append(legacy)
+        if (
+            not researched(game, "domains")
+            and "APIs handling the same domain must use the same primary or the same complete partition set."
+            in issues
+        ):
+            issues[
+                issues.index(
+                    "APIs handling the same domain must use the same primary or the same complete partition set."
+                )
+            ] = "Messenger API servers receiving live requests must share one primary database."
+        errors.extend(issues)
+        for feature_id in game.infrastructure_releases:
+            if feature_id in game.enabled_features:
+                feature = FEATURES[feature_id]
+                if any(
+                    not requirement_met(
+                        REQUIREMENTS[key], graph, game, feature["operation"]
+                    )
+                    for key in feature["infrastructure"]
+                ):
+                    errors.append(
+                        "The draft cannot support a released product feature. Check its infrastructure requirements in Product."
+                    )
+        migration_ticks, migration_cost = migration_plan(game, candidate)
+        if migration_ticks:
+            migrated_storage(game, candidate, validate=not prepared)
+            install += migration_cost
+            warnings.append(
+                "Data migration keeps production serving until preparation completes. Copying reserves 10% database capacity."
+            )
         if game.speed and changes["disconnected"]:
             warnings.append(
                 "Live routing changes can cause a brief interruption while traffic shifts."
@@ -484,12 +541,14 @@ def review(game: Game, revision: int, topology: Topology | None = None) -> Draft
     except RuleError as error:
         errors.append(str(error))
     return DraftReview(
+        migration_ticks=migration_ticks,
+        migration_cost=migration_cost,
         revision=revision,
         errors=errors,
         warnings=warnings,
         changes=changes,
         details=details,
-        daily_before=topology_cost(game.production),
+        daily_before=topology_cost(effective_topology(game)),
         daily_after=daily_after,
         install=install,
         forecast=estimate,
@@ -566,7 +625,13 @@ def highest_pressure(snapshot: Snapshot, topology: Topology) -> ResourcePressure
 
 
 def deploy(
-    game: Game, revision: int, request_id: UUID, rollback: UUID | None = None
+    game: Game,
+    revision: int,
+    request_id: UUID,
+    rollback: UUID | None = None,
+    *,
+    prepared: bool = False,
+    prepaid_cost: float | None = None,
 ) -> None:
     candidate = game.draft
     if rollback:
@@ -578,12 +643,44 @@ def deploy(
         if entry is None:
             raise RuleError("That deployment is outside the rollback history.")
         candidate = entry.topology
-    result = review(game, revision, candidate)
+    result = review(game, revision, candidate, prepared=prepared)
+    if prepared:
+        result.errors = [
+            issue
+            for issue in result.errors
+            if issue != "The game balance cannot cover the deployment cost."
+        ]
     if result.errors:
         raise RuleError(result.errors[0])
     if not any(result.changes.values()):
         raise RuleError("There are no architecture changes to deploy.")
-    spend(game, result.install, "deployment")
+    if not prepared:
+        spend(game, result.install, "deployment")
+        if result.migration_ticks:
+            game.migration = ArchitectureMigration(
+                request_id=request_id,
+                ready_at=game.tick + result.migration_ticks,
+                topology=candidate.model_copy(deep=True),
+                cost=result.install,
+            )
+            game.draft = candidate.model_copy(deep=True)
+            game.revision += 1
+            add_event(
+                game,
+                "migration",
+                "Architecture migration",
+                "Production continues serving while data is prepared.",
+                "info",
+                result.migration_ticks,
+            )
+            return
+    if prepaid_cost is not None:
+        result.install = prepaid_cost
+    transferred = (
+        migrated_storage(game, candidate, validate=False)
+        if result.migration_ticks
+        else None
+    )
     count = sum(len(items) for key, items in result.changes.items() if key != "moved")
     summary = (
         "Rollback"
@@ -622,7 +719,11 @@ def deploy(
     game.revision += 1
     live = {node.id for node in game.production.nodes}
     game.queues = {key: value for key, value in game.queues.items() if key in live}
-    game.storage = {key: value for key, value in game.storage.items() if key in live}
+    game.storage = (
+        transferred
+        if transferred is not None
+        else {key: value for key, value in game.storage.items() if key in live}
+    )
     for event in game.incidents:
         if event.resolution is None and event.target and event.target not in live:
             event.resolution = "Affected component removed in deployment"
@@ -671,6 +772,27 @@ def deploy(
             )
 
 
+def research_state(game: Game, key: str) -> ResearchView:
+    if key in game.engineering:
+        remaining = max(0, game.engineering[key] - game.tick)
+        return ResearchView(
+            id=key,
+            state="developing" if remaining else "completed",
+            remaining=remaining,
+        )
+    ready = all(researched(game, p) for p in RESEARCH[key]["prereq"])
+    return ResearchView(id=key, state="available" if ready else "unavailable")
+
+
+def develop_research(game: Game, key: str) -> None:
+    if research_state(game, key).state != "available":
+        raise RuleError(
+            "Complete the research prerequisites first, or wait for the current project."
+        )
+    spend(game, RESEARCH[key]["cost"], "development")
+    game.engineering[key] = game.tick + RESEARCH[key]["duration"]
+
+
 def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureView:
     feature = FEATURES[key]
     graph = graph or inspect_graph(game.production)
@@ -683,6 +805,25 @@ def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureVi
         for rule_id in feature["infrastructure"]
         for rule in (REQUIREMENTS[rule_id],)
     ]
+    if feature["operation"] and any(
+        config(node).get("role", "Universal") != "Universal"
+        or config(node).get("domain", "Shared") != "Shared"
+        for node in graph.nodes.values()
+    ):
+        assumed = game.model_copy(
+            update={
+                "released": list(dict.fromkeys([*game.released, key])),
+                "disabled_features": game.disabled_features - {key},
+            }
+        )
+        issues = architecture_errors(assumed, graph)
+        infrastructure.append(
+            RequirementView(
+                id="service_routing",
+                description=issues[0] if issues else "Routing and dependencies",
+                met=not issues,
+            )
+        )
     enabled = game.enabled_features
     prereqs = [
         FEATURES[item]["name"] for item in feature["prereq"] if item not in enabled
@@ -738,6 +879,8 @@ def feature_state(game: Game, key: str, graph: Graph | None = None) -> FeatureVi
 
 
 def change_feature(game: Game, key: str, action: str) -> None:
+    if game.migration is not None and action in {"release", "enable"}:
+        raise RuleError("Wait for the planned architecture migration to complete.")
     state = feature_state(game, key)
     feature = FEATURES[key]
     if action == "develop" and state.state == "available":
@@ -914,7 +1057,7 @@ def finance(game: Game, active_users: float) -> Economy:
         - game.development_spend
         - game.marketing_spend
         - game.deployment_spend,
-        daily_infrastructure=topology_cost(game.production),
+        daily_infrastructure=topology_cost(effective_topology(game)),
         daily_revenue=daily_sources.total,
         daily_operating=daily_costs.total,
         daily_profit=daily_profit,
@@ -1275,10 +1418,18 @@ def view(game: Game, saved_at: datetime) -> GameView:
         economy=finance(game, result.daily_active_users),
         product=product_settings(game),
         advertising_estimates=estimates,
-        component_costs={node.id: daily_cost(node) for node in game.production.nodes},
-        draft_costs={node.id: daily_cost(node) for node in game.draft.nodes}
+        component_costs={
+            node.id: daily_cost(node) for node in effective_topology(game).nodes
+        },
+        draft_costs={
+            node.id: daily_cost(node)
+            for node in effective_topology(game, game.draft).nodes
+        }
         if game.draft
         else {},
+        engineering=[research_state(game, key) for key in RESEARCH],
+        migration=game.migration,
+        engineering_lesson=game.engineering_lesson,
         features=[feature_state(game, key, graph) for key in FEATURES],
         campaigns=[
             CampaignView(

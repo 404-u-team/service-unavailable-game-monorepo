@@ -55,6 +55,19 @@ COMPONENTS: dict[Kind, dict] = {
         "category": "Compute",
         "monthly": 180,
         "fields": {
+            "role": choice(
+                "API service role",
+                "Universal",
+                "Universal",
+                "Messages",
+                "Accounts",
+                "Media",
+                "Search",
+            ),
+            "autoscale": choice("Autoscaling", "Disabled", "Disabled", "Enabled"),
+            "min_instances": number("Minimum instances", 1, 1, 24),
+            "max_instances": number("Maximum instances", 4, 1, 24),
+            "target_utilization": number("Utilization target (%)", 65, 40, 90, 5),
             "instances": number("Instances", 1, 1, 24),
             "cpu": number("vCPU per instance", 2, 1, 32),
             "memory": number("RAM per instance (GB)", 4, 1, 128),
@@ -72,6 +85,21 @@ COMPONENTS: dict[Kind, dict] = {
         "category": "Data",
         "monthly": 360,
         "fields": {
+            "domain": choice(
+                "Data domain",
+                "Shared",
+                "Shared",
+                "Messages",
+                "Accounts",
+                "Media",
+                "Search",
+            ),
+            "partition": choice(
+                "Dataset membership", "Independent", "Independent", "Partition"
+            ),
+            "query_plan": choice(
+                "Query plan", "Standard", "Standard", "History indexes"
+            ),
             "cpu": number("Database vCPU", 2, 1, 32),
             "memory": number("RAM (GB)", 8, 1, 128),
             "storage": number("Storage (GB)", 32, 4, 10000),
@@ -317,6 +345,7 @@ def operation(
 
 
 OPERATIONS = {
+    "identity": operation("Identity checks", 0, 0.15, read=0.12, mb=0.002),
     "send": operation(
         "Send message", 0.0049, 1.0, write=1, jobs=0.2, storage=0.00000008
     ),
@@ -461,6 +490,7 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
     "limiter": {"balancer": "request", "api": "request", "monitor": "telemetry"},
     "balancer": {"api": "request", "monitor": "telemetry"},
     "api": {
+        "api": "identity",
         "database": "queries",
         "replica": "reads",
         "cache": "cache",

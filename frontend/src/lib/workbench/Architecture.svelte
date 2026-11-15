@@ -629,6 +629,13 @@
           {#if metric.jobs_expired != null}<div><dt>{t('Expired jobs per step')}</dt><dd>{num(metric.jobs_expired)}</dd></div>{/if}
           {#if metric.storage_used !== null}<div><dt>{t("Storage used")}</dt><dd>{num(metric.storage_used)} {t("GB")}</dd></div>{/if}
           {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
+          {#if metric.service_errors != null}<div><dt>{t('Service errors')}</dt><dd>{rps(metric.service_errors)}</dd></div>{/if}
+          {#if metric.service_latency != null}<div><dt>{t('Service latency')}</dt><dd>{ms(metric.service_latency)}</dd></div>{/if}
+          {#if metric.service_role}<div><dt>{t('API service role')}</dt><dd>{t(metric.service_role)}</dd></div>{/if}
+          {#if metric.data_domain}<div><dt>{t('Data domain')}</dt><dd>{t(metric.data_domain)}</dd></div>{/if}
+          {#if metric.partition_share != null}<div><dt>{t('Partition traffic share')}</dt><dd>{pct(metric.partition_share, 1)}</dd></div>{/if}
+          {#if metric.autoscaling}<div><dt>{t('Autoscaling')}</dt><dd>{t(metric.autoscaling)}</dd></div>{/if}
+          {#each Object.entries(metric.operations ?? {}) as [op, rate]}<div><dt>{t(catalog.operations[op] ?? op)}</dt><dd>{rps(rate)}</dd></div>{/each}
           {#if metric.active_instances !== null}<div><dt>{t("Active instances")}</dt><dd>{metric.active_instances}</dd></div>{/if}
         </dl>
       {/if}
@@ -901,7 +908,7 @@
     <div class="stack modal-inspector">{@render inspect(true)}</div>
   </Modal>
 {:else if dialog === 'configuration' && active}
-  <Configuration component={active} daily={(viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0} storage={catalog.database_storage} {guideHref} definition={catalog.components[active.kind]} {busy} error={error || editError}
+  <Configuration serviceRoles={catalog.service_roles} operationNames={catalog.operations} workloads={game.snapshot.demand} engineering={game.engineering} component={active} daily={(viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0} storage={catalog.database_storage} {guideHref} definition={catalog.components[active.kind]} {busy} error={error || editError}
     close={() => dialog = compact ? 'inspector' : undefined} apply={updateConfig} onEdited={(changed) => changedConfig = changed}
     preview={(name, config) => api<Review>(`/${game.id}/draft/review`, 'POST', { revision: game.revision, topology:
       { ...topology, nodes: topology.nodes.map((node) => node.id === selected ? { ...node, name, config } : node) } })} />
@@ -951,7 +958,8 @@
           <div class="row spread wrap"><span>{t("Daily infrastructure")}</span><strong>{preciseMoney(review.daily_before)} → {preciseMoney(review.daily_after)} ({dailyChange > 0 ? '+' : ''}{preciseMoney(dailyChange)})</strong></div>
           <div class="row spread"><span>{t("One-time deployment cost")}</span><strong>{preciseMoney(review.install)}</strong></div>
         </div>
-        {#each review.warnings as warning}<p class="notice warn">{message(warning)}</p>{/each}
+        {#if review.migration_ticks}<p class="notice warn">{t('Migration preparation: {0} ticks. Included transfer cost: {1}. Production stays live until completion.', [review.migration_ticks, preciseMoney(review.migration_cost ?? 0)])} <a href={guideArticleHref(guideHref, 'architecture-migration')}>{t('Architecture Migration')}</a></p>{/if}
+      {#each review.warnings as warning}<p class="notice warn">{message(warning)}</p>{/each}
         {#if review.forecast}
           <div data-tutorial={guideTarget.capacityForecast}><Forecast forecast={review.forecast} /></div>
           {#each Object.entries(review.forecast.databases ?? {}) as [id, database] (id)}

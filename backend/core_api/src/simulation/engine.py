@@ -12,6 +12,12 @@ from src.simulation.catalog import (
 )
 from src.simulation.database import WARNING, DatabaseLoad
 from src.simulation.demand import active_incidents, product_settings, workload
+from src.simulation.engineering import (
+    DOMAINS,
+    data_targets,
+    partition_weights,
+    supports,
+)
 from src.simulation.models import (
     ComponentMetrics,
     Game,
@@ -21,7 +27,7 @@ from src.simulation.models import (
     Topology,
     Traffic,
 )
-from src.simulation.topology import config, inspect_graph
+from src.simulation.topology import config, daily_cost, inspect_graph
 
 
 @dataclass
@@ -83,6 +89,17 @@ def evaluate(
     }
     requested = sum(workloads.values())
     settings = {node.id: config(node) for node in topology.nodes}
+    for node in topology.nodes:
+        cfg = settings[node.id]
+        if cfg.get("autoscale") == "Enabled":
+            state = game.autoscaling.get(node.id)
+            cfg["instances"] = min(
+                cfg["max_instances"],
+                max(
+                    cfg["min_instances"],
+                    state.instances if state else cfg["min_instances"],
+                ),
+            )
     enforced = {
         FEATURES[key]["operation"]: FEATURES[key]["infrastructure"]
         for key in game.infrastructure_releases
@@ -97,6 +114,11 @@ def evaluate(
         elif event.target and event.kind == "degradation":
             factors[event.target] *= event.factor
 
+    if game.migration:
+        for n in game.production.nodes:
+            if n.kind == "database":
+                factors[n.id] *= 0.9
+
     # A cohort is an operation and its originating API. Cohorts merge at each node,
     # keeping the calculation proportional to the graph rather than the request count.
     incoming: dict[str, dict[tuple[str, str], Batch]] = defaultdict(dict)
@@ -110,6 +132,9 @@ def evaluate(
     storage = dict(game.storage)
     replication = {}
     committed_writes: dict[str, float] = defaultdict(float)
+    identity_routes = {}
+    identity_sent = defaultdict(float)
+    shard_shares = {}
     rejected = 0.0
     seconds = MINUTES_PER_TICK * 60
 
@@ -177,10 +202,7 @@ def evaluate(
         if primary and graph.nodes[node_id].kind == "replica" and not failures[node_id]:
             followers[primary] += 1
 
-    def read_targets(api: str, source: str) -> list[str]:
-        primary = primary_for.get(api)
-        if primary is None:
-            return []
+    def read_targets(api: str, source: str, op: str, primary: str) -> list[str]:
         return [
             target
             for target in graph.targets[source]
@@ -191,6 +213,43 @@ def evaluate(
                 and not failures[target]
             )
         ]
+
+    def route_data(
+        api: str,
+        source: str,
+        key: tuple,
+        rate: float,
+        latency: float,
+        *,
+        reads: bool = False,
+    ):
+        primaries = data_targets(graph, api, key[0])
+        if not primaries:
+            return
+        weights = (
+            partition_weights(DOMAINS[key[0]], primaries)
+            if len(primaries) > 1
+            else [1.0]
+        )
+        for primary, weight in zip(primaries, weights):
+            if len(primaries) > 1:
+                shard_shares[primary] = weight
+            destinations = (
+                read_targets(api, source, key[0], primary) if reads else [primary]
+            )
+            if "search_index" in enforced.get(key[0], ()):
+                destinations = [
+                    p
+                    for p in destinations
+                    if settings[p].get("search_index") == "Enabled"
+                ]
+            forward(
+                source,
+                destinations,
+                key,
+                rate * weight,
+                latency + (4 + len(primaries) if len(primaries) > 1 else 0),
+            )
 
     for op, rate in workloads.items():
         add(incoming["traffic"], (op, ""), rate, 18)
@@ -222,9 +281,25 @@ def evaluate(
             field: str,
             cohorts: dict[tuple[str, str], Batch] = cohorts,
             indexed: bool = cfg.get("search_index") == "Enabled",
+            query_primary: str | None = node_id
+            if kind == "database"
+            else primary_for.get(node_id),
         ) -> float:
+            optimized = bool(
+                query_primary
+                and settings[query_primary].get("query_plan") == "History indexes"
+            )
             return sum(
                 (0.35 if field == "read" and key[0] == "search" and indexed else 1)
+                * (
+                    0.65
+                    if optimized and field == "read" and key[0] == "history"
+                    else 0.8
+                    if optimized and field == "read" and key[0] == "conversations"
+                    else 1.1
+                    if optimized and field == "write" and key[0] in {"send", "groups"}
+                    else 1
+                )
                 * operations[key[0]][field]
                 * batch.rate
                 for key, batch in cohorts.items()
@@ -238,14 +313,30 @@ def evaluate(
         details = {}
 
         if kind == "api":
+            overhead = 1.06 if cfg["role"] != "Universal" else 1
+            overhead += 0.03 * max(
+                0,
+                max(
+                    (len(data_targets(graph, node_id, op)) for op, _ in cohorts),
+                    default=1,
+                )
+                - 1,
+            )
             usage = {
-                "CPU": load("cpu") / (cfg["cpu"] * 77),
+                "CPU": load("cpu") * overhead / (cfg["cpu"] * 77),
                 "RAM": (0.9 * instances + load("connections") * 0.0035) / cfg["memory"],
-                "Network": load("mb") / cfg["network"],
+                "Network": load("mb") * overhead / cfg["network"],
                 "Connections": load("connections") / cfg["connections"],
                 "Concurrency": (load("cpu") * 0.17) / cfg["concurrency"],
             }
             details["active_instances"] = instances
+            details["service_role"] = cfg["role"]
+            details["autoscaling"] = (
+                "Enabled" if cfg["autoscale"] == "Enabled" else None
+            )
+            details["daily_cost"] = (
+                daily_cost(node) / config(node)["instances"] * cfg["instances"]
+            )
             base = 12
         elif kind == "balancer":
             usage = {
@@ -276,6 +367,10 @@ def evaluate(
             )
             if kind == "database":
                 details["storage_used"] = database.stored
+            details["data_domain"] = cfg.get(
+                "domain", settings.get(primary, {}).get("domain", "Shared")
+            )
+            details["partition_share"] = shard_shares.get(node_id)
             base = 21
         elif kind == "cache":
             usage = {"CPU": rate / (160 + cfg["memory"] * 35)}
@@ -380,25 +475,29 @@ def evaluate(
                     )
             elif kind == "api":
                 key = (op, node_id)
-                if operation["write"]:
-                    primary = primary_for[node_id]
-                    if primary is not None:
-                        forward(node_id, [primary], key, accepted, total_latency)
-                elif "search_index" in enforced.get(op, ()):
-                    primary = primary_for[node_id]
-                    if (
-                        primary is not None
-                        and settings[primary]["search_index"] == "Enabled"
-                    ):
-                        forward(node_id, [primary], key, accepted, total_latency)
-                elif operation["read"]:
+                if not supports(node, op):
+                    continue
+                if cfg["role"] not in {"Universal", "Accounts"}:
+                    accounts = [
+                        t
+                        for t in graph.targets[node_id]
+                        if graph.relationships[node_id, t] == "identity"
+                    ]
+                    identity_routes[node_id] = accounts
+                    for account in accounts:
+                        identity_sent[account] += accepted * 0.02 / len(accounts)
                     forward(
-                        node_id,
-                        by_kind["cache"] or read_targets(node_id, node_id),
-                        key,
-                        accepted,
-                        total_latency,
+                        node_id, accounts, ("identity", node_id), accepted * 0.02, 0
                     )
+                if operation["write"] or "search_index" in enforced.get(op, ()):
+                    route_data(node_id, node_id, key, accepted, total_latency)
+                elif operation["read"]:
+                    if by_kind["cache"]:
+                        forward(node_id, by_kind["cache"], key, accepted, total_latency)
+                    else:
+                        route_data(
+                            node_id, node_id, key, accepted, total_latency, reads=True
+                        )
                 else:
                     add(completed, key, accepted, total_latency)
             elif kind == "cache":
@@ -413,24 +512,32 @@ def evaluate(
                     )
                 else:
                     hit = 0
-                fallback = read_targets(origin, origin)
-                cache_data = read_targets(origin, node_id)
+                primaries = data_targets(graph, origin, op)
+                cache_data = any(
+                    read_targets(origin, node_id, op, p) for p in primaries
+                )
+                fallback = any(read_targets(origin, origin, op, p) for p in primaries)
                 if not cache_data and not fallback:
                     hit = 0
                 cache_hits += accepted * hit
                 add(completed, key, accepted * hit, total_latency)
-                if cache_data:
-                    forward(
-                        node_id, cache_data, key, accepted * (1 - hit), total_latency
-                    )
-                else:
-                    forward(origin, fallback, key, accepted * (1 - hit), total_latency)
+                route_data(
+                    origin,
+                    node_id if cache_data else origin,
+                    key,
+                    accepted * (1 - hit),
+                    total_latency,
+                    reads=True,
+                )
             elif kind == "balancer":
                 routed = [
                     target
                     for target in targets
-                    if cfg["health"] == "Disabled"
-                    or settings[target]["instances"] > failures[target]
+                    if supports(graph.nodes[target], op)
+                    and (
+                        cfg["health"] == "Disabled"
+                        or settings[target]["instances"] > failures[target]
+                    )
                 ]
                 weights = (
                     [
@@ -443,10 +550,19 @@ def evaluate(
                 )
                 forward(node_id, routed, key, accepted, total_latency, weights)
             else:
-                forward(node_id, targets, key, accepted, total_latency)
+                eligible = [
+                    t
+                    for t in targets
+                    if graph.nodes[t].kind != "api" or supports(graph.nodes[t], op)
+                ]
+                forward(node_id, eligible, key, accepted, total_latency)
 
         if kind == "cache":
             details["cache_hit"] = cache_hits / accepted_total if accepted_total else 0
+        details["operations"] = {
+            op: sum(b.rate for (name, _), b in cohorts.items() if name == op)
+            for op, _ in cohorts
+        }
         report(
             node_id,
             rate,
@@ -456,6 +572,31 @@ def evaluate(
             failed=not instances,
             **details,
         )
+
+    for key, batch in list(completed.items()):
+        op, origin = key
+        if op == "identity":
+            continue
+        if origin in identity_routes:
+            accounts = identity_routes[origin]
+            shares, latencies = [], []
+            for account in accounts:
+                replies = [
+                    b
+                    for (name, api), b in completed.items()
+                    if name == "identity" and api == account
+                ]
+                total = sum(b.rate for b in replies)
+                shares.append(min(1, total / max(identity_sent[account], 1e-12)))
+                latencies.append(
+                    sum(b.latency_total for b in replies) / max(total, 1e-12)
+                )
+            original_latency = batch.latency
+            batch.rate *= sum(shares) / len(shares) if shares else 0
+            batch.latency_total = batch.rate * (
+                original_latency + (sum(latencies) / len(latencies) if latencies else 0)
+            )
+    completed = {key: batch for key, batch in completed.items() if key[0] != "identity"}
 
     # Background work is generated only by requests that reached a successful terminal.
     jobs: dict[str, float] = defaultdict(float)
@@ -598,6 +739,8 @@ def evaluate(
     success = Batch()
     latency_cohorts = []
     ad_success = 0.0
+    service_success = defaultdict(Batch)
+    service_operations = defaultdict(lambda: defaultdict(float))
     for key, batch in completed.items():
         if key in missing_queues:
             continue
@@ -611,6 +754,8 @@ def evaluate(
             * prod(1 - dropped[target] for target in broadcast)
         )
         success.add(served, batch.latency)
+        service_success[key[1]].add(served, batch.latency)
+        service_operations[key[1]][key[0]] += served
         if served > 0:
             latency_cohorts.append((batch.latency, served))
         if key[0] == "ad":
@@ -663,6 +808,15 @@ def evaluate(
             if cumulative >= success.rate * 0.95:
                 p95 = latency
                 break
+    for node_id, metric in components.items():
+        if graph.nodes[node_id].kind == "api":
+            metric.completed_operations = dict(service_operations[node_id])
+            metric.service_errors = max(
+                0,
+                sum(v for op, v in metric.operations.items() if op != "identity")
+                - service_success[node_id].rate * rollout,
+            )
+            metric.service_latency = service_success[node_id].latency
     snapshot = Snapshot(
         metrics=Metrics(
             rps=requested,
