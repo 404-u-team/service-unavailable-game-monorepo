@@ -28,7 +28,8 @@
     selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
-    menu: (event: MouseEvent, id?: string) => void; clear: () => void; cluster: boolean; container: HTMLElement;
+    menu: (event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component'; id: string }) => void;
+    clear: () => void; cluster: boolean; container: HTMLElement;
     bindPlacement: (tools?: CanvasTools) => void;
     saveViewport: (viewport: Viewport) => void;
   } = $props();
@@ -389,10 +390,13 @@
     const delta = { ArrowLeft: [-5, 0], ArrowRight: [5, 0], ArrowUp: [0, -5], ArrowDown: [0, 5] }[event.key];
     const element = event.target;
     if (!(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
-    if ((event.key === 'Enter' || event.key === ' ') && element.dataset.id === guideApi && guideApi) {
+    const id = element.dataset.id;
+    if ((event.key === 'Enter' || event.key === ' ') && id && components[id]) {
       event.preventDefault();
       event.stopPropagation();
-      inspect(guideApi);
+      if (id === guideApi && !touchSelect) inspect(id);
+      else if (touchSelect) select(id);
+      else menu(event, { kind: 'component', id });
       return;
     }
     if (!delta) return;
@@ -437,7 +441,7 @@
     'minimap.ariaLabel': t('Minimap'),
     'handle.ariaLabel': t('Connection port'),
     'node.a11yDescription.default': t('Use arrow keys to move the selected node.'),
-    'node.a11yDescription.keyboardDisabled': t('Use Enter to select a component.'),
+    'node.a11yDescription.keyboardDisabled': t('Use Enter to open component actions.'),
     'node.a11yDescription.ariaLiveMessage': ({ x, y }: Point) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
     'edge.a11yDescription.default': t('Use Enter to select a connection.')
   });
@@ -472,13 +476,18 @@
   onreconnectend={() => { linkStart = undefined; reconnectKey = ''; }}
   onnodeclick={({ node, event }) => {
     if (node.type === 'groupCard') selectGroup(node.id);
-    else if (!('ctrlKey' in event) || !(event.ctrlKey || event.metaKey || event.shiftKey)) select(node.id);
+    else if (components[node.id] && !(event.target instanceof Element && event.target.closest('.svelte-flow__handle'))) {
+      if ('ctrlKey' in event && (event.ctrlKey || event.metaKey || event.shiftKey)) return;
+      if (touchSelect || !('clientX' in event)) select(node.id);
+      else menu(event, { kind: 'component', id: node.id });
+    }
   }}
-  onselectionchange={({ nodes: items, edges: chosen }) => {
+  onselectionchange={({ nodes: items, edges: chosen }) => untrack(() => {
+    // Keep workbench selection out of Svelte Flow's selection effect dependencies.
     const next = items.filter((item) => item.type === 'workbench').map((item) => item.id);
     if (!touchSelect) selectMany(next);
     if (chosen.length === 1 && chosen[0].id !== edgeSelected && !next.length) selectEdge(chosen[0].id);
-  }}
+  })}
   onedgeclick={({ edge }) => selectEdge(edge.id)}
   onnodedrag={({ nodes: dragged }) => previewPositions(alignedDrag(dragged, true))}
   onnodedragstop={({ nodes: dragged }) => finishMove(alignedDrag(dragged, false))}
@@ -490,9 +499,12 @@
     if (event || (viewportReady && !transientMove)) saveViewport(viewport);
   }}
   onpaneclick={() => { linkFeedback = ''; clear(); }}
-  onnodecontextmenu={({ event, node }) => { if (node.type === 'groupCard') { selectGroup(node.id); menu(event); } else menu(event, node.id); }}
+  onnodecontextmenu={({ event, node }) => {
+    if (node.type === 'groupCard') { selectGroup(node.id); menu(event); }
+    else if (components[node.id]) menu(event, { kind: 'component', id: node.id });
+  }}
   onpanecontextmenu={({ event }) => menu(event)}
-  onedgecontextmenu={({ event, edge }) => { selectEdge(edge.id); menu(event); }}
+  onedgecontextmenu={({ event, edge }) => menu(event, { kind: 'edge', id: edge.id })}
   panOnDrag={[0, 1]} panOnScroll zoomOnScroll={false} zoomActivationKey="Control" zoomOnPinch>
   <CanvasViewport {guides} nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />

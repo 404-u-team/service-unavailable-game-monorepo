@@ -10,6 +10,7 @@
   const toasts = createToasts();
   let modalOpen = $state(false);
   let slideoverOpen = $state(false);
+  let tooltipLine = $state<SVGPathElement>();
 </script>
 
 <Story name="Modal">
@@ -57,6 +58,16 @@
       <p>{t('Capacity is the number of requests that the current topology can serve per second.')}</p>
     {/snippet}
   </Tooltip>
+</Story>
+
+<Story name="Tooltip with an additional hover target">
+  <div class="help">
+    <svg width="128" height="24" viewBox="0 0 128 24" aria-hidden="true">
+      <path bind:this={tooltipLine} d="M 4 12 H 124" stroke="currentColor" stroke-width="4" />
+    </svg>
+    <Tooltip label={t('About capacity targets')} text={t('Capacity is the number of requests that the current topology can serve per second.')}
+      hoverTarget={tooltipLine} />
+  </div>
 </Story>
 
 <Story name="Toasts">

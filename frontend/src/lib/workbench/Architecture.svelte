@@ -1,7 +1,7 @@
 <script lang="ts">
   import { apiMessage, count, message, t } from '../i18n.svelte';
   import { onMount, tick } from 'svelte';
-  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Scan, Search, SlidersHorizontal,
+  import { ArrowLeft, ArrowRight, ChevronRight, Copy, GitBranch, Info, List, Minus, MousePointer2, Plus, Redo2, Scan, Search, SlidersHorizontal,
     Trash2, Undo2, X } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
@@ -77,7 +77,8 @@
   let configurationReturn: 'inspector' | undefined;
   let referenceReturn: 'catalog' | undefined;
   let reviewing = $state(false);
-  let context = $state<{ x: number; y: number }>();
+  let context = $state<{ x: number; y: number; kind: 'canvas' | 'edge' | 'component'; origin?: HTMLElement }>();
+  let contextPanel = $state<HTMLDivElement>();
   let cluster = $state(false);
   let editError = $state('');
   let localRevision = -1;
@@ -399,14 +400,14 @@
     else { history = list.slice(0, -1); future = [...future, before]; }
   }
 
-  async function add(kind: Kind) {
+  async function add(kind: Kind, name = catalog.components[kind].name, config: Component['config'] = {}) {
     const id = crypto.randomUUID();
     const position = placement?.place() ?? findPlacement(
       { x: 0, y: 0, width: 960, height: 580 }, { width: 167, height: 101 },
       topology.nodes.map((node) => ({ ...(savedDiagram.positions[node.id] ?? node.position), width: 167, height: 101 }))
     );
     if (await edit((value) => ({
-      ...value, nodes: [...value.nodes, { id, kind, position, name: catalog.components[kind].name, config: {} }]
+      ...value, nodes: [...value.nodes, { id, kind, position, name, config }]
     }))) {
       saveDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, [id]: position } });
       select(id);
@@ -414,6 +415,13 @@
       await tick();
       placement?.reveal(position);
     }
+  }
+
+  function copyComponent(component: Component) {
+    const suffixLength = t('{0} (copy)', ['']).length;
+    const name = Array.from(t(component.name)).slice(0, 60 - suffixLength).join('').trimEnd();
+    closeMenu(true);
+    return add(component.kind, t('{0} (copy)', [name]), { ...component.config });
   }
 
   function openConnect() {
@@ -506,11 +514,29 @@
     }
   }
 
-  function openMenu(event: MouseEvent, id?: string) {
+  function closeMenu(restoreFocus = false) {
+    const origin = context?.origin;
+    context = undefined;
+    if (restoreFocus) origin?.focus({ preventScroll: true });
+  }
+
+  async function openMenu(event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component'; id: string }) {
     event.preventDefault();
-    if (id) select(id);
-    context = { x: Math.min(event.clientX, innerWidth - 185), y: Math.min(event.clientY, innerHeight - 172) };
-    void tick().then(() => document.querySelector<HTMLButtonElement>('.context button')?.focus());
+    if (subject?.kind === 'component') select(subject.id);
+    if (subject?.kind === 'edge') selectEdge(subject.id);
+    const origin = event.target instanceof Element ? event.target.closest<HTMLElement>('.svelte-flow__node-workbench') ?? undefined : undefined;
+    const bounds = origin?.getBoundingClientRect();
+    const point = 'clientX' in event ? { x: event.clientX, y: event.clientY }
+      : { x: bounds?.left ?? 8, y: bounds?.bottom ?? 8 };
+    const kind = subject?.kind ?? 'canvas';
+    context = { ...point, kind, origin };
+    await tick();
+    if (!contextPanel || context?.kind !== kind) return;
+    const { width, height } = contextPanel.getBoundingClientRect();
+    context.x = Math.max(8, Math.min(point.x, innerWidth - width - 8));
+    context.y = point.y + 10 + height <= innerHeight - 8
+      ? point.y + 10 : Math.max(8, point.y - height - 10);
+    contextPanel.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   }
 
   function shortcuts(event: KeyboardEvent) {
@@ -526,7 +552,7 @@
       else void undo(redo);
     }
     if (event.key === 'Delete' && viewingDraft) { event.preventDefault(); void remove(); }
-    if (event.key === 'Escape') { if (context) context = undefined; else select(''); }
+    if (event.key === 'Escape') { if (context) closeMenu(true); else select(''); }
     if (event.key === 'Enter' && event.target instanceof HTMLElement) {
       const node = event.target.closest<HTMLElement>('.svelte-flow__node');
       if (node?.dataset.id) select(node.dataset.id);
@@ -534,7 +560,9 @@
   }
 </script>
 
-<svelte:window onkeydown={shortcuts} />
+<svelte:window onkeydown={shortcuts}
+  onpointerdowncapture={(event) => { if (context && event.target instanceof Node && !contextPanel?.contains(event.target)) closeMenu(); }}
+  onresize={() => closeMenu()} onscrollcapture={(event) => { if (event.target !== contextPanel) closeMenu(); }} />
 
 {#snippet inspectorFooter()}
   <Button variant="ghost" disabled={inspectorWidth === defaultInspectorWidth} onclick={() => {
@@ -815,7 +843,7 @@
           {#key compact}
             <TopologyGraph {guideApi} {tutorialLink} {topology} {diagram} {game} {catalog} {requestType} {hiddenConnections} {alignment} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft}
               {compact} {removed} {touchSelect} {select} inspect={inspectComponent} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
-              {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => { context = undefined; select(''); }} />
+              {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => select('')} />
           {/key}
           {/if}
           <p class="canvas-hint mono">{compact ? t("Pinch to zoom · Drag to pan") : t("Scroll to pan · Ctrl + wheel to zoom")}</p>
@@ -855,15 +883,24 @@
 </section>
 
 {#if context}
-  <div class="context panel stack" style:left={`${context.x}px`} style:top={`${context.y}px`}>
-    <Button onclick={() => { dialog = 'catalog'; context = undefined; }}>{t("Add node")}</Button>
-    {#if active && active.kind !== 'source'}<Button onclick={() => { context = undefined; void configure(); }}>{t("Edit configuration")}</Button>{/if}
-    {#if edge}
+  <div class="context panel stack" role="group" aria-label={t(context.kind === 'component' ? 'Component actions' : context.kind === 'edge' ? 'Connection actions' : 'Canvas actions')}
+    bind:this={contextPanel} style:left={`${context.x}px`} style:top={`${context.y}px`}>
+    {#if context.kind === 'component' && active}
+      {@const component = active}
+      <Button onclick={() => { closeMenu(true); inspectComponent(component.id); }}><Info size={14} />{t('Component info')}</Button>
+      {#if component.kind !== 'source'}
+        <Button disabled={busy} onclick={() => copyComponent(component)}><Copy size={14} />{t('Copy component')}</Button>
+        <Button disabled={busy} onclick={() => { closeMenu(true); void configure(); }}><SlidersHorizontal size={14} />{t('Edit configuration')}</Button>
+        {#if viewingDraft}<Button variant="danger" disabled={busy} onclick={() => { closeMenu(true); void remove(); }}><Trash2 size={14} />{t('Remove selected')}</Button>{/if}
+      {/if}
+    {:else if context.kind === 'edge' && edge}
       <Button onclick={() => { addWaypoint(); context = undefined; }}>{t("Add waypoint")}</Button>
       {#if diagram.routes[selectedEdge]?.length}<Button onclick={() => { updateRoute(selectedEdge, [], true); context = undefined; }}>{t("Reset route")}</Button>{/if}
+      {#if viewingDraft}<Button variant="danger" disabled={busy} onclick={() => { closeMenu(); void remove(); }}>{t("Remove selected")}</Button>{/if}
+    {:else if context.kind === 'canvas'}
+      <Button disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; closeMenu(); }}><Plus size={14} />{t("Add node")}</Button>
     {/if}
-    {#if viewingDraft && (edge || (active && active.kind !== 'source'))}<Button variant="danger" onclick={remove}>{t("Remove selected")}</Button>{/if}
-    <Button onclick={() => context = undefined}><X size={14} /> {t("Close menu")}</Button>
+    <Button variant="ghost" onclick={() => closeMenu(true)}><X size={14} /> {t("Close menu")}</Button>
   </div>
 {/if}
 
@@ -1084,7 +1121,9 @@
   .metric-details > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 6px 14px; align-items: baseline; padding: 8px 11px; }
   .metric-details > div + div { border-top: 1px solid var(--border); }
   .metric-details > div > dd { text-align: end; max-inline-size: 14ch; }
-  .context { position: fixed; z-index: 10; width: 175px; padding: 8px; gap: 5px; }
+  .context { position: fixed; z-index: var(--sui-layer-popover); width: max-content; min-width: 175px; max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px); padding: 8px; gap: 5px; overflow: auto; }
+  .context :global(.sui-button) { justify-content: flex-start; white-space: normal; text-align: start; min-height: 36px; }
   .mobile-sub, .mobile-heading { display: none; }
   @media (min-width: 851px) and (max-width: 1200px) {
     .topology-header { padding-inline: 18px; }

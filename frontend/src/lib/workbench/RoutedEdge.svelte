@@ -26,13 +26,15 @@
   import { t } from '../i18n.svelte';
   import TrafficPackets from './TrafficPackets.svelte';
   import { BaseEdge, EdgeLabel, EdgeReconnectAnchor, useSvelteFlow, useStore, type EdgeProps } from '@xyflow/svelte';
-  let { data, selected, sourceX, sourceY, targetX, targetY }: EdgeProps<RoutedEdge> = $props();
+  let { id, data, selected, sourceX, sourceY, targetX, targetY }: EdgeProps<RoutedEdge> = $props();
   const store = useStore();
   const { screenToFlowPosition } = useSvelteFlow();
   const points = $derived(data?.points.length ? data.points : [{ x: sourceX, y: sourceY }, { x: targetX, y: targetY }]);
   const path = $derived(points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '));
   const start = $derived(points[0]);
   const end = $derived(points.at(-1));
+  const ratePosition = $derived(data?.label && store.viewport.zoom >= .42 ? data.labelAt : undefined);
+  let line = $state<SVGGElement>();
   function dragWaypoint(event: PointerEvent, index: number) {
     if (event.button !== 0 || !data?.update) return;
     event.preventDefault();
@@ -70,8 +72,10 @@
 
 {#if data && end}
   <path d={path} stroke="#0c1013" stroke-width={data.width + 5} fill="none" pointer-events="none" />
-  <BaseEdge {path} interactionWidth={20}
-    style={`stroke:${data.color};stroke-width:${data.width};stroke-opacity:${data.speed > 0 && data.rate > 0 ? '.72' : '1'};${data.dashed ? 'stroke-dasharray:5 4;' : ''}`} />
+  <g bind:this={line}>
+    <BaseEdge {path} interactionWidth={20}
+      style={`stroke:${data.color};stroke-width:${data.width};stroke-opacity:${data.speed > 0 && data.rate > 0 ? '.72' : '1'};${data.dashed ? 'stroke-dasharray:5 4;' : ''}`} />
+  </g>
   <TrafficPackets {points} rate={data.rate} speed={data.speed} color={data.color} />
   {#if data.endpoints[0]}
     <line data-port="source" x1={start.x + 5} x2={start.x + 5} y1={start.y - 3} y2={start.y + 3} stroke={data.color} stroke-width="1.6" pointer-events="none" />
@@ -79,32 +83,32 @@
   {#if data.endpoints[1]}
     <line data-port="target" x1={end.x - 5} x2={end.x - 5} y1={end.y - 3} y2={end.y + 3} stroke={data.color} stroke-width="1.6" pointer-events="none" />
   {/if}
-  {#if data.labelAt && data.label && store.viewport.zoom >= .42}
-    <EdgeLabel transparent selectEdgeOnClick class="nopan rate-layer" x={data.labelAt.x} y={data.labelAt.y}>
-      <Tooltip class="topology-rate" label={t('Connection breakdown for {0}', [data.label])} delay={150}>
-        {#snippet trigger()}<span class="rate mono" style:color={data.color}>{data.label}</span>{/snippet}
-        {#snippet content()}
-          <strong>{t('Connection breakdown')}</strong>
-          <dl class="breakdown">
-            {#each data.breakdown as row (row.label)}
-              <div>
-                <dt><i style:background={row.color}></i>{row.label}</dt>
-                <dd>{num(row.count)}×{#if row.rate !== undefined} · {t('{0}/s', [num(row.rate)])}{/if}</dd>
-              </div>
+  <EdgeLabel transparent selectEdgeOnClick={Boolean(ratePosition)} class="nopan rate-layer" data-edge-id={id}
+    hidden={!ratePosition} x={ratePosition?.x} y={ratePosition?.y}>
+    <Tooltip class="topology-rate" label={data.label ? t('Connection breakdown for {0}', [data.label]) : t('Connection breakdown')}
+      delay={150} hoverTarget={line} showTrigger={Boolean(ratePosition)}>
+      {#snippet trigger()}<span class="rate mono" style:color={data.color}>{data.label}</span>{/snippet}
+      {#snippet content()}
+        <strong>{t('Connection breakdown')}</strong>
+        <dl class="breakdown">
+          {#each data.breakdown as row (row.label)}
+            <div>
+              <dt><i style:background={row.color}></i>{row.label}</dt>
+              <dd>{num(row.count)}×{#if row.rate !== undefined} · {t('{0}/s', [num(row.rate)])}{/if}</dd>
+            </div>
+          {/each}
+        </dl>
+        {#if data.operations.length}
+          <strong>{t('Request types')}</strong>
+          <dl class="breakdown operations">
+            {#each data.operations as row (row.label)}
+              <div><dt>{row.label}</dt><dd>{t('{0}/s', [num(row.rate)])}</dd></div>
             {/each}
           </dl>
-          {#if data.operations.length}
-            <strong>{t('Request types')}</strong>
-            <dl class="breakdown operations">
-              {#each data.operations as row (row.label)}
-                <div><dt>{row.label}</dt><dd>{t('{0}/s', [num(row.rate)])}</dd></div>
-              {/each}
-            </dl>
-          {/if}
-        {/snippet}
-      </Tooltip>
-    </EdgeLabel>
-  {/if}
+        {/if}
+      {/snippet}
+    </Tooltip>
+  </EdgeLabel>
   {#if selected && data.update}
     {#each data.waypoints as point, index (index)}
       <EdgeLabel transparent class="waypoint-layer nopan" x={point.x} y={point.y}>

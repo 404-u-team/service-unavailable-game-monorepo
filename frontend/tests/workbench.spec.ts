@@ -98,6 +98,98 @@ async function deploy(page: Page) {
   await results.getByRole('button', { name: 'Done' }).click();
 }
 
+test('component actions open with a click or keyboard and copy the selected block into the draft', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const initial = await state(page, id);
+  const original = initial.production.nodes.find((node) => node.id === 'api')!;
+  const node = page.locator('.svelte-flow__node[data-id="api"]');
+  const actions = page.getByRole('group', { name: 'Component actions' });
+
+  await node.click();
+  await expect(actions.getByRole('button', { name: 'Add node' })).toHaveCount(0);
+  await expect(actions.getByRole('button', { name: 'Component info' })).toBeFocused();
+  await actions.getByRole('button', { name: 'Component info' }).click();
+  await expect(page.getByRole('dialog', { name: 'Component inspector' }).getByRole('heading', { name: original.name })).toBeVisible();
+  await closeInspector(page);
+
+  await node.press('Enter');
+  await actions.getByRole('button', { name: 'Copy component' }).click();
+  const copy = page.locator('.svelte-flow__node[aria-label="Messenger API (copy)"]');
+  await expect(copy).toHaveClass(/selected/);
+  const copied = await state(page, id);
+  const { id: copyId, position, ...settings } = copied.draft!.nodes.find((item) => item.name === 'Messenger API (copy)')!;
+  expect(copyId).not.toBe(original.id);
+  expect(position).not.toEqual(original.position);
+  expect(settings).toEqual({ kind: original.kind, name: 'Messenger API (copy)', config: original.config });
+  expect(copied.draft?.edges).toEqual(initial.production.edges);
+  expect(copied.production).toEqual(initial.production);
+
+  await copy.click();
+  await actions.getByRole('button', { name: 'Edit configuration' }).click();
+  const configuration = page.getByRole('dialog', { name: 'Component configuration' });
+  await expect(configuration.getByLabel('Component name')).toHaveValue('Messenger API (copy)');
+  await configuration.getByRole('button', { name: 'Close dialog' }).click();
+
+  await page.getByRole('button', { name: 'Undo draft edit' }).click();
+  await expect(copy).toHaveCount(0);
+  await page.getByRole('button', { name: 'Redo draft edit' }).click();
+  await expect(copy).toBeVisible();
+  await page.reload();
+  await expect(copy).toBeVisible();
+
+  await page.locator('.svelte-flow__node[data-id="traffic"]').click();
+  await expect(actions.getByRole('button', { name: 'Component info' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Copy component' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(actions).toBeHidden();
+
+  await page.locator('.svelte-flow__pane').click({ button: 'right', position: { x: 30, y: 95 } });
+  const canvasActions = page.getByRole('group', { name: 'Canvas actions' });
+  await expect(canvasActions.getByRole('button', { name: 'Add node' })).toBeVisible();
+  await expect(canvasActions.getByRole('button', { name: 'Copy component' })).toHaveCount(0);
+});
+
+test('the connection line and its rate label show the same request breakdown', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await create(page, false, false);
+  const edge = page.locator('.svelte-flow__edge[data-id="traffic:edge"]');
+  const path = edge.locator('.svelte-flow__edge-interaction');
+  const pointOnLine = () => path.evaluate((element: SVGPathElement) => {
+    const matrix = element.getScreenCTM()!;
+    for (const fraction of [.15, .85, .07, .93, .25, .75]) {
+      const { x, y } = element.getPointAtLength(element.getTotalLength() * fraction).matrixTransform(matrix);
+      if (element.closest('.svelte-flow__edge')?.contains(document.elementFromPoint(x, y))) return { x, y };
+    }
+  });
+  const edgePoint = (await pointOnLine())!;
+  expect(edgePoint).toBeDefined();
+  const rate = page.locator('.rate-layer[data-edge-id="traffic:edge"]').getByRole('button', { name: /Connection breakdown for/ });
+  const tooltip = page.getByRole('tooltip');
+  await rate.hover();
+  await expect(tooltip).toContainText('Request types');
+  const breakdown = (await tooltip.textContent())!;
+  await page.mouse.move(5, 5);
+  await expect(tooltip).toBeHidden();
+  await page.mouse.move(edgePoint.x, edgePoint.y);
+  await expect(tooltip).toHaveText(breakdown);
+  await page.mouse.move(5, 5);
+  await expect(tooltip).toBeHidden();
+  await page.mouse.click(edgePoint.x, edgePoint.y);
+  await expect(edge).toHaveClass(/selected/);
+
+  const canvas = (await page.locator('.svelte-flow').boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, 900);
+  await page.keyboard.up('Control');
+  await expect(rate).toHaveCount(0);
+  let zoomedPoint: Awaited<ReturnType<typeof pointOnLine>>;
+  await expect.poll(async () => zoomedPoint = await pointOnLine()).toBeDefined();
+  await page.mouse.move(zoomedPoint!.x, zoomedPoint!.y);
+  await expect(tooltip).toHaveText(breakdown);
+});
+
 test('A and B · create, run, save, reopen, edit and scale production', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = await create(page);
@@ -339,6 +431,17 @@ test('E · failed instance reduces availability and redundancy restores service'
 
 test.describe('Mobile workbench', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: process.env.TEST_BROWSER !== 'firefox' });
+
+  test('tapping a block opens component actions within the viewport', async ({ page }) => {
+    await create(page, true, false);
+    const node = page.locator('.svelte-flow__node[data-id="api"]');
+    await node.tap();
+    const actions = page.getByRole('group', { name: 'Component actions' });
+    await expect(actions.getByRole('button', { name: 'Copy component' })).toBeVisible();
+    await expect(actions).toBeInViewport({ ratio: 1 });
+    await actions.getByRole('button', { name: 'Component info' }).tap();
+    await expect(page.getByRole('dialog', { name: 'Component inspector' }).getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+  });
 
   test('F · navigation, component list, mobile inspector and deployment', async ({ page, browserName }) => {
     const id = await create(page, true);
