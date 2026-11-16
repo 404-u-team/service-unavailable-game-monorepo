@@ -7,7 +7,6 @@ from src.services.games import (
     develop_research,
     edit_draft,
     open_draft,
-    prepare_sharding,
     research_state,
     review,
     view,
@@ -77,6 +76,20 @@ def sharded(count):
         link(game, "api", f"shard-{i}")
     monitor(game, "api", "db", "accounts-db", *(f"shard-{i}" for i in range(1, count)))
     component(game, "telemetry").config["slots"] = 32
+    return game
+
+
+def routed_shards():
+    game = sharded(2)
+    add_node(game, "router", "shard_router", domain="Messages")
+    game.production.edges = [
+        edge for edge in game.production.edges
+        if (edge.source, edge.target) not in {("api", "db"), ("api", "shard-1")}
+    ]
+    link(game, "api", "router")
+    link(game, "router", "db")
+    link(game, "router", "shard-1")
+    link(game, "router", "telemetry")
     return game
 
 
@@ -393,15 +406,18 @@ class EngineeringTests(TestCase):
         self.assertAlmostEqual(result["accounts-db"], 3)
         self.assertAlmostEqual(result["db"], 12)
 
-    def test_prepare_sharding_splits_shared_data_and_routes_queries_after_copy(self):
+    def test_manually_wired_sharding_switches_production_after_migration(self):
         game = fixture()
         monitor(game, "api", "db")
         before = game.production.model_copy(deep=True)
-        with self.assertRaisesRegex(RuleError, "Complete Database Sharding"):
-            prepare_sharding(game, game.revision, "db")
-        self.assertIsNone(game.draft)
+        candidate = routed_shards().production
+        open_draft(game, game.revision)
+        with self.assertRaisesRegex(RuleError, "Engineering research"):
+            edit_draft(game, game.revision, candidate)
+        self.assertEqual(game.draft, before)
         unlock(game)
-        prepare_sharding(game, game.revision, "db")
+        game.balance = 100_000
+        edit_draft(game, game.revision, candidate)
         self.assertEqual(game.production, before)
         router = next(node for node in game.draft.nodes if node.kind == "shard_router")
         self.assertEqual(router.config["domain"], "Messages")
@@ -411,10 +427,6 @@ class EngineeringTests(TestCase):
         self.assertEqual(len(graph.primaries("api")), 3)
         self.assertNotIn("db", graph.targets["api"])
 
-        game.draft.edges.append(Edge(source=router.id, target="telemetry"))
-        for shard in shards:
-            if shard != "db":
-                game.draft.edges.append(Edge(source=shard, target="telemetry"))
         result = review(game, game.revision)
         self.assertEqual(result.errors, [])
         self.assertGreater(result.migration_cost, 0)
@@ -436,9 +448,8 @@ class EngineeringTests(TestCase):
         self.assertEqual(snapshot.components[router.id].data_domain, "Messages")
 
     def test_shard_router_blocks_deployment_with_wrong_partition_or_direct_link(self):
-        game = fixture()
-        unlock(game)
-        prepare_sharding(game, game.revision, "db")
+        game = routed_shards()
+        open_draft(game, game.revision)
         game.draft.edges.append(Edge(source="api", target="db"))
         db = next(node for node in game.draft.nodes if node.id == "db")
         db.config["partition"] = "Independent"
@@ -446,15 +457,38 @@ class EngineeringTests(TestCase):
         self.assertIn("Connect each shard router to at least two primary partitions of its data domain.", result.errors)
         self.assertIn("Connect each API to one shard router per domain and remove its direct links to that domain's primaries.", result.errors)
 
-    def test_sharding_upgrades_a_legacy_shared_database_with_one_remaining_domain(self):
-        game = fixture()
-        unlock(game)
-        add_node(game, "messages-db", "database", domain="Messages")
-        link(game, "api", "messages-db")
-        prepare_sharding(game, game.revision, "messages-db")
-        self.assertEqual(review(game, game.revision).errors, [])
-        remaining = next(node for node in game.draft.nodes if node.id == "db")
-        self.assertEqual(remaining.config["domain"], "Accounts")
+    def test_cache_misses_reach_the_owning_shards_through_the_router(self):
+        game = routed_shards()
+        game.released.append("search")
+        add_node(game, "search-db", "database", domain="Search")
+        link(game, "api", "search-db")
+        for cache in ("cache-a", "cache-b"):
+            add_node(game, cache, "cache", ttl=3600)
+            link(game, "api", cache)
+            link(game, cache, "router")
+            link(game, cache, "telemetry")
+        self.assertEqual(architecture_errors(game, inspect_graph(game.production)), [])
+        snapshot = evaluate(game).snapshot
+        traffic = {(edge.source, edge.target): edge.operations for edge in snapshot.traffic}
+        cached_ops = {"history", "conversations"}
+        for cache in ("cache-a", "cache-b"):
+            self.assertEqual(set(traffic["api", cache]), cached_ops)
+            self.assertEqual(set(traffic[cache, "router"]), cached_ops)
+        self.assertEqual(set(traffic["api", "router"]), {"send"})
+        self.assertIn("search", traffic["api", "search-db"])
+        for op in cached_ops:
+            misses = sum(
+                traffic[cache, "router"][op] for cache in ("cache-a", "cache-b")
+            )
+            self.assertLess(misses, snapshot.demand[op])
+            self.assertAlmostEqual(
+                sum(traffic["router", shard][op] for shard in ("db", "shard-1")),
+                misses,
+            )
+            self.assertAlmostEqual(
+                snapshot.components["api"].completed_operations[op],
+                snapshot.demand[op],
+            )
 
     def test_query_plan_changes_only_eligible_work_and_increases_index_writes(self):
         game = fixture()

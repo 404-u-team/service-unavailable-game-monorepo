@@ -63,7 +63,6 @@ from src.simulation.engineering import (
     migrated_storage,
     migration_plan,
     researched,
-    sharding_topology,
     specialization_errors,
 )
 from src.simulation.models import (
@@ -305,13 +304,11 @@ def discard_draft(game: Game, revision: int) -> None:
     game.revision += 1
 
 
-def edit_draft(
-    game: Game, revision: int, topology: Topology, *, create: bool = False
-) -> None:
+def edit_draft(game: Game, revision: int, topology: Topology) -> None:
     check_revision(game, revision)
     if game.migration is not None:
         raise RuleError("Wait for the planned architecture migration to complete.")
-    if game.draft is None and not create:
+    if game.draft is None:
         raise RuleError("Create a draft first.")
     graph = inspect_graph(topology)
     validate_identity(game.production, graph.nodes)
@@ -337,14 +334,6 @@ def validate_identity(production: Topology, nodes: dict[str, Node]) -> None:
             raise RuleError(
                 f"Remove {node.name} and add a new component to change its type."
             )
-
-
-def prepare_sharding(game: Game, revision: int, primary: str) -> None:
-    check_revision(game, revision)
-    if game.migration:
-        raise RuleError("Wait for the planned architecture migration to complete.")
-    candidate = sharding_topology(game, game.draft or game.production, primary)
-    edit_draft(game, revision, candidate, create=True)
 
 
 def forecast(

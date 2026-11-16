@@ -65,10 +65,10 @@ export const componentArticles: Record<Kind, Article> = {
   shard_router: component("shard_router", "Shard router",
     "Connect APIs to the shard router for one data domain.",
     "Connect at least two primaries of that domain with Partition membership.",
-    "In the database inspector, choose Prepare sharding to build a draft with a router and two shards.",
+    "Add a shard router from the component library. Link the API to the router for queries. You can also link a cache to it for read misses.",
     ["database-sharding", "architecture-migration"]),
   cache: component("cache", "Cache",
-    "Use a cache for repeated history and conversation reads. Keep API → Primary for writes. Link API → Cache, then connect the cache to the owning primary or its replica.",
+    "Link API → Cache for repeated reads. Connect the cache to the owning primary, one of its replicas, or its shard router. Keep the API's write connection to the primary or router.",
     "Hits finish at the cache with a 4 ms base latency. More RAM relative to audience, longer TTL and LFU can improve hit rate, up to 91%. RAM also raises cache throughput and cost.",
     "Start with History only for repeat chat history reads. Compare the hit rate and primary read demand before widening the scope to All reads.",
     ["routing", "database-scaling"]),
@@ -123,7 +123,7 @@ export const articles: Record<string, Article> = {
   "routing": { category: "architecture", title: "Request routing and connection types",
     sections: [
       { id: "types", title: "Connection types", body: ["Solid request edges carry operations from the source through limiters and balancers to APIs. Data edges carry queries. Enqueue and worker edges carry background jobs. Replication subscribes a replica to a primary. Telemetry carries measurements."] },
-      { id: "data", title: "Data routing", body: ["The API sends each read to a cache linked to the owning primary or one of its available replicas. A miss follows those links. Reads with no eligible cache go directly from the API to their primary or its replicas. This also applies to individual database partitions."] },
+      { id: "data", title: "Data routing", body: ["The API sends a read to a cache linked to the owning primary, one of its available replicas, or a shard router that serves that partition. A miss follows those links. With no eligible cache, the API sends the read along its own data connections."] },
       { id: "dataset", title: "Datasets and primaries", body: ["Messenger deployment requires the same primary for every API that serves traffic. Connect both APIs behind a load balancer to one primary, and add replicas that follow that primary for eligible reads.", "Separate services can own separate datasets when routing assigns requests to the correct service. Sharding requires explicit partitioning and routing. Messenger has a single application dataset."] },
       { id: "cache-misses", title: "Cache hits and misses", body: ["The hit estimate improves with memory relative to the audience, longer TTL and LFU. TTL represents how long a cached value can be reused. There is no per-message invalidation or write-through. The simulator estimates hit rate without tracking cached values or stale responses."] }
     ],

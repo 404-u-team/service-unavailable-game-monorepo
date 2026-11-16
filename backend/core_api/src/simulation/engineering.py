@@ -7,11 +7,8 @@ partitions use 128 stable virtual keys with a 12% hot conversation cohort.
 from collections import defaultdict
 from hashlib import sha256
 from math import ceil
-from uuid import uuid4
 
-from pydantic import ValidationError
-
-from src.simulation.models import Edge, Game, Kind, Node, Position, Setting, Topology
+from src.simulation.models import Game, Topology
 from src.simulation.topology import Graph, RuleError, config, daily_cost, inspect_graph
 
 RESEARCH = {
@@ -298,122 +295,6 @@ def ownership(topology: Topology) -> dict[str, tuple[str, ...]]:
         )
         for domain in sorted(set(DOMAINS.values()))
     }
-
-
-def sharding_topology(game: Game, topology: Topology, primary_id: str) -> Topology:
-    if not researched(game, "sharding"):
-        raise RuleError(
-            "Complete Database Sharding research before using a shard router."
-        )
-    graph = inspect_graph(topology)
-    primary = graph.nodes.get(primary_id)
-    if (
-        primary is None
-        or primary.kind != "database"
-        or config(primary)["partition"] != "Independent"
-    ):
-        raise RuleError(
-            "Select an independent primary database to prepare sharding."
-        )
-    current_domain = config(primary)["domain"]
-    relevant = set(data_growth_by_domain(game))
-    owners = {
-        node.id: {
-            domain: data_targets(graph, node.id, op)
-            for op, domain in DOMAINS.items()
-            if domain in relevant and supports(node, op)
-        }
-        for node in graph.nodes.values()
-        if node.kind == "api"
-    }
-    apis = {
-        api: (
-            {domain for domain, links in routes.items() if primary_id in links}
-            if current_domain == "Shared"
-            else {current_domain}
-        )
-        for api, routes in owners.items()
-        if primary_id in graph.targets[api]
-    }
-    domains = set().union(*apis.values())
-    if not domains:
-        raise RuleError(
-            "Connect an API that uses this database before preparing sharding."
-        )
-    domain = min(domains, key=lambda name: (name != "Messages", name))
-    nodes = [node.model_copy(deep=True) for node in topology.nodes]
-    original = next(node for node in nodes if node.id == primary_id)
-    original.config.update(domain=domain, partition="Partition")
-    if current_domain == "Shared" and "Search" in domains - {domain}:
-        original.config["search_index"] = "Disabled"
-    # Legacy mixed topologies can already use a Shared primary for just one domain.
-    for node in nodes:
-        if node.kind != "database" or config(node)["domain"] != "Shared":
-            continue
-        assigned = {
-            name
-            for routes in owners.values()
-            for name, targets in routes.items()
-            if node.id in targets
-        }
-        if len(assigned) == 1:
-            node.config["domain"] = assigned.pop()
-
-    anchor = game.diagram.positions.get(primary_id, primary.position)
-    occupied = [game.diagram.positions.get(node.id, node.position) for node in nodes]
-
-    def add(kind: Kind, name: str, settings: dict[str, Setting]) -> Node:
-        # Seed positions only for new nodes. Existing diagram edits stay independent.
-        direction = 1 if anchor.x < 99_000 else -1
-        vertical = 1 if anchor.y < 85_000 else -1
-        x = anchor.x + 235 * direction
-        y = anchor.y + 140 * vertical
-        while any(
-            abs(point.x - x) < 175 and abs(point.y - y) < 115 for point in occupied
-        ):
-            y += 140 * vertical
-        position = Position(x=x, y=y)
-        node = Node(
-            id=str(uuid4()), kind=kind, name=name, position=position, config=settings
-        )
-        nodes.append(node)
-        occupied.append(position)
-        return node
-
-    router = add("shard_router", "Shard router", {"domain": domain})
-    second = add("database", "Second shard", original.config.copy())
-    extra = {
-        name: add(
-            "database",
-            f"{name} database",
-            {**primary.config, "domain": name, "partition": "Independent"},
-        )
-        for name in sorted(domains - {domain})
-    }
-    edges = [
-        edge
-        for edge in topology.edges
-        if not (edge.source in apis and edge.target == primary_id)
-    ]
-    edges.extend(
-        Edge(source=router.id, target=target) for target in (primary_id, second.id)
-    )
-    for api, assigned in apis.items():
-        for name in sorted(assigned):
-            target = router if name == domain else extra[name]
-            edges.append(Edge(source=api, target=target.id))
-    for node in topology.nodes:
-        if node.kind == "cache" and primary_id in graph.targets[node.id]:
-            edges.extend(
-                Edge(source=node.id, target=target.id)
-                for target in (second, *extra.values())
-            )
-    try:
-        return Topology(nodes=nodes, edges=edges)
-    except ValidationError as error:
-        raise RuleError(
-            "The draft has no room for the additional sharding components or connections."
-        ) from error
 
 
 def migration_plan(game: Game, topology: Topology) -> tuple[int, float]:

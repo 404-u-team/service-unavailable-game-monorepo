@@ -7,7 +7,6 @@
   import Meter from '../Meter.svelte';
   import { componentNotes } from './details';
   import TopologyGraph from './TopologyGraph.svelte';
-  import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
@@ -23,7 +22,7 @@
   import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory } from './connections';
   import { componentIcon, statusLabel } from '../labels';
   import { ms, num, pct, preciseMoney, rps } from '../format';
-  import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, PrepareSharding, Review, Setting, Topology } from '../types';
+  import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
   let { game, catalog, act, busy, error, tutorial, tutorialSelect, tutorialLink, tutorialState, tutorialEvent, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
@@ -379,28 +378,11 @@
     const result = await act('/draft', { revision: state.revision, topology: after }, 'PUT');
     editingDraft = false;
     if (!result) return false;
-    recordTopologyEdit(before, result);
-    return true;
-  }
-
-  function recordTopologyEdit(before: Topology, result: Game) {
     localRevision = result.revision;
     lastEdit = 'topology';
     history = [...history, before].slice(-50);
     future = [];
-  }
-
-  async function prepareSharding(primary: string) {
-    const before = game.draft ?? game.production;
-    const body: PrepareSharding = { revision: game.revision, primary };
-    editingDraft = true;
-    const result = await act('/draft/sharding', body);
-    editingDraft = false;
-    if (!result?.draft) return;
-    showProduction = false;
-    recordTopologyEdit(before, result);
-    await tick();
-    await inspectReview();
+    return true;
   }
 
   async function undo(redo = false) {
@@ -641,7 +623,7 @@
         {#each Object.entries(metric.utilization).sort((a, b) => b[1] - a[1]).slice(0, inspectorTab === 'configuration' ? 2 : undefined) as [label, value] (label)}
           <div class="resource-meter" data-tutorial={inspectorTab === 'metrics' && active?.id === guideApi && label === 'CPU' ? guideTarget.cpu : undefined}>
             <Meter {value} label={t(label)} />
-            {#if metric.database && label !== 'Disk I/O'}
+            {#if metric.database}
               <Tooltip label={t('Help with {0}', [t(label)])} text={t('Open the relevant guide article.')} href={guideArticleHref(guideHref, resourceArticle(label))} />
             {/if}
           </div>
@@ -696,21 +678,6 @@
         </div>
       {/if}
       {#if inspectorTab === 'configuration'}
-        {#if active.kind === 'database' && activeConfig?.partition !== 'Partition'}
-          <section class="inspector-section stack">
-            <h3>{t('Database Sharding')}</h3>
-            <p class="muted">{canShard
-              ? t('Prepare a draft with two shards and a router. Review costs and data migration before deploying.')
-              : t('Complete Database Sharding research before using a shard router.')}</p>
-            {#if canShard && activeConfig?.domain === 'Shared'}
-              <p class="muted">{t('A shared database is also split into the data domains it currently serves.')}</p>
-            {/if}
-            {#if canShard}
-              <Button disabled={busy || !!game.migration} onclick={() => active && prepareSharding(active.id)}>{t('Prepare sharding')}</Button>
-            {/if}
-            <a class="inspector-help" href={guideArticleHref(guideHref, 'database-sharding')}>{t('Sharding guide')}</a>
-          </section>
-        {/if}
         {#if active.kind === 'api' && activeConfig}
           <div class="stack" data-tutorial={active.id === guideApi ? guideTarget.capacity : undefined}>
             <div><p class="eyebrow">{t("Instance size")}</p><Button block class="instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></Button></div>
@@ -736,6 +703,26 @@
         <section class="inspector-section stack">
           <h3>{t('Detailed metrics')}</h3>
           <dl class="metric-details">
+            {#if metric.database}
+              {@const data = metric.database}
+              <div><dt>{t('Read demand')}</dt><dd>{t('{0} units/s', [num(data.read_demand)])}</dd></div>
+              {#if data.disk_read_iops != null && data.disk_write_iops != null && data.disk_capacity_iops != null}
+                <div><dt>{t('Modeled read IOPS')}</dt><dd>{num(data.disk_read_iops)}</dd></div>
+                <div><dt>{t('Modeled write IOPS')}</dt><dd>{num(data.disk_write_iops)}</dd></div>
+                <div><dt>{t('Modeled IOPS demand / capacity')}</dt><dd>{num(data.disk_read_iops + data.disk_write_iops)} / {num(data.disk_capacity_iops)}</dd></div>
+              {/if}
+              {#if data.write_capacity !== null}
+                <div><dt>{t('Write demand')}</dt><dd>{t('{0} units/s', [num(data.write_demand)])}</dd></div>
+                <div><dt>{t('Sustainable writes at current read load')}</dt><dd>{t('{0} units/s', [num(data.write_capacity)])}</dd></div>
+              {:else}
+                <div><dt>{t('Replication replay demand')}</dt><dd>{t('{0} units/s', [num(data.replication_demand)])}</dd></div>
+                <div><dt>{t('Replication replay throughput')}</dt><dd>{t('{0} units/s', [num(data.replication_throughput)])}</dd></div>
+                {#if data.replication_backlog > 0}
+                  <div><dt>{t('Pending replication work')}</dt><dd>{t('{0} units', [num(data.replication_backlog)])}</dd></div>
+                  {#if metric.replication_lag == null}<div><dt>{t('Replication lag')}</dt><dd>{t('Replay stalled')}</dd></div>{/if}
+                {/if}
+              {/if}
+            {/if}
             {#if metric.cache_hit != null}<div><dt>{t("Cache hit rate")}</dt><dd>{pct(metric.cache_hit, 1)}</dd></div>{/if}
             {#if metric.backlog != null}<div><dt>{t("Queued jobs")}</dt><dd>{num(metric.backlog)}</dd></div>{/if}
             {#if metric.queue_wait_minutes != null}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('{0} min', [num(metric.queue_wait_minutes)])}</dd></div>
@@ -755,9 +742,7 @@
           </dl>
         </section>
       {/if}
-      {#if metric?.database}
-        <DatabaseDiagnostics {metric} guide={guideHref} {configure} {busy} showHealthy={inspectorTab === 'metrics'} />
-      {:else if !metric && (active.kind === 'database' || active.kind === 'replica') &&
+      {#if !metric && (active.kind === 'database' || active.kind === 'replica') &&
         game.production.nodes.some((node) => node.id === selected) && metrics.errors > 0}
         <p class="muted">{t('{0} requests per second are failing across the service.', [num(metrics.errors)])}</p>
       {/if}
@@ -803,7 +788,7 @@
         </div>
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
-      {#if active.kind !== 'source' && !metric?.database?.diagnostic?.upgrades.length}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
+      {#if active.kind !== 'source'}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
       {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; changeDialog(); }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
       {#if viewingDraft}
         <div class="row wrap"><Button onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</Button>
@@ -824,7 +809,7 @@
     {@const kind = connectionKind(catalog, from?.kind, to?.kind)}
     <div class="stack"><h2>{t("Connection")}</h2><p>{t(from?.name ?? '')} → {t(to?.name ?? '')}</p>
     <p class="muted">{t(connectionLabels[kind])}</p>
-    {#if kind === 'cache'}<p>{t("Keep a direct API-to-primary connection for writes. Add API-to-cache for read lookups.")}</p>
+    {#if kind === 'cache'}<p>{t("Keep a direct API connection to the primary database or shard router for writes.")}</p>
     {:else if kind === 'telemetry'}<p>{t("This link sends metrics to the collector and uses one collection slot.")}</p>
     {:else if kind === 'replication'}<p>{t("The read replica subscribes to its primary using this link.")}</p>{/if}
     <div class="row wrap">

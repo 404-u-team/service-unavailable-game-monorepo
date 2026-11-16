@@ -112,11 +112,37 @@ test('covered services expose operation, domain and cost telemetry', async ({ pa
   await expect(telemetry).toContainText('per day');
 });
 
-test('sharding prepares a router and two partitions and switches production after copying', async ({ page }) => {
+test('manual sharding accepts a cache link and switches production after copying', async ({ page }) => {
   const game = await preparedGame(page, true);
+  const opened = await page.request.post(`/api/games/${game.id}/draft`, { data: { request_id: crypto.randomUUID(), revision: game.revision } });
+  expect(opened.ok()).toBeTruthy();
+  const draft = await opened.json();
+  const topology = draft.draft;
+  topology.nodes.find((node: { id: string }) => node.id === 'db').config = { domain: 'Messages', partition: 'Partition' };
+  topology.nodes.push(
+    { id: 'shard-2', kind: 'database', name: 'Second shard', config: { domain: 'Messages', partition: 'Partition' }, position: { x: 1100, y: 180 } },
+    { id: 'accounts', kind: 'database', name: 'Accounts database', config: { domain: 'Accounts' }, position: { x: 900, y: 320 } },
+    { id: 'router', kind: 'shard_router', name: 'Shard router', config: { domain: 'Messages' }, position: { x: 650, y: 160 } },
+    { id: 'cache', kind: 'cache', name: 'Cache', config: {}, position: { x: 500, y: 320 } }
+  );
+  topology.edges = topology.edges.filter((edge: { source: string; target: string }) => edge.source !== 'api' || edge.target !== 'db');
+  for (const [source, target] of [['api', 'accounts'], ['api', 'router'], ['api', 'cache'], ['router', 'db'], ['router', 'shard-2']]) {
+    topology.edges.push({ source, target });
+  }
+  const edited = await page.request.put(`/api/games/${game.id}/draft`, { data: { request_id: crypto.randomUUID(), revision: draft.revision, topology } });
+  expect(edited.ok(), await edited.text()).toBeTruthy();
   await page.goto(`/game/${game.id}?view=build&component=db`);
   const inspector = page.getByRole('dialog', { name: 'Component inspector' });
-  await inspector.getByRole('button', { name: 'Prepare sharding' }).click();
+  await expect(inspector.getByRole('button', { name: 'Edit configuration' })).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Prepare sharding' })).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  const connection = page.getByRole('dialog', { name: 'Connect components' });
+  await choose(connection.getByRole('combobox', { name: 'Source component' }), { label: 'Cache' });
+  await choose(connection.getByRole('combobox', { name: 'Target component' }), { label: 'Shard router' });
+  await connection.getByRole('button', { name: 'Connect components' }).click();
+  await expect(connection).toBeHidden();
+  await page.getByRole('button', { name: 'Review deployment' }).click();
   const review = page.getByRole('dialog', { name: 'Deployment review' });
   await expect(review.getByText(/Migration preparation:/)).toBeVisible();
   await expect(review.getByText(/Shard router/).first()).toBeVisible();
@@ -134,4 +160,5 @@ test('sharding prepares a router and two partitions and switches production afte
   const deployed = await current();
   expect(deployed.production.nodes.filter((node: { kind: string }) => node.kind === 'shard_router')).toHaveLength(1);
   expect(deployed.production.nodes.filter((node: { config: { partition?: string } }) => node.config.partition === 'Partition')).toHaveLength(2);
+  expect(deployed.production.edges).toContainEqual({ source: 'cache', target: 'router' });
 });

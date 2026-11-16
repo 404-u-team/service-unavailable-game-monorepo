@@ -205,6 +205,16 @@ def evaluate(
         if primary and graph.nodes[node_id].kind == "replica" and not failures[node_id]:
             followers[primary] += 1
 
+    router_shards = {
+        node.id: {
+            primary
+            for primary in graph.primaries(node.id)
+            if settings[primary]["domain"] == settings[node.id]["domain"]
+        }
+        for node in topology.nodes
+        if node.kind == "shard_router"
+    }
+
     def read_targets(source: str, primary: str) -> list[str]:
         return [
             target
@@ -215,7 +225,23 @@ def evaluate(
                 and primary_for[target] == primary
                 and not failures[target]
             )
+            or primary in router_shards.get(target, ())
         ]
+
+    def forward_partition(
+        source: str,
+        targets: list[str],
+        key: tuple[str, str],
+        primary: str,
+        rate: float,
+        latency: float,
+    ) -> None:
+        op, origin = key
+        for target in targets:
+            if graph.nodes[target].kind in {"shard_router", "cache"}:
+                partitions = routed_partitions[target, op, origin]
+                partitions[primary] = partitions.get(primary, 0) + rate / len(targets)
+        forward(source, targets, key, rate, latency)
 
     def route_data(
         api: str,
@@ -225,7 +251,7 @@ def evaluate(
         *,
         reads: bool = False,
     ) -> None:
-        op, origin = key
+        op, _ = key
         primaries = data_targets(graph, api, op)
         if not primaries:
             return
@@ -251,33 +277,18 @@ def evaluate(
                     and read_targets(target, primary)
                 ]
                 if caches:
-                    for cache in caches:
-                        partitions = routed_partitions[cache, op, origin]
-                        partitions[primary] = (
-                            partitions.get(primary, 0) + partition_rate / len(caches)
-                        )
-                    forward(api, caches, key, partition_rate, partition_latency)
+                    forward_partition(
+                        api, caches, key, primary, partition_rate, partition_latency
+                    )
                     continue
             if (
                 "search_index" in enforced.get(op, ())
                 and settings[primary].get("search_index") != "Enabled"
             ):
                 continue
-            route = routes[primary]
-            destinations = read_targets(api, primary) if reads else [route]
-            if route != primary:
-                if reads:
-                    destinations.append(route)
-                partitions = routed_partitions[route, op, origin]
-                partitions[primary] = (
-                    partitions.get(primary, 0) + partition_rate / len(destinations)
-                )
-            forward(
-                api,
-                destinations,
-                key,
-                partition_rate,
-                partition_latency,
+            destinations = read_targets(api, primary) if reads else [routes[primary]]
+            forward_partition(
+                api, destinations, key, primary, partition_rate, partition_latency
             )
 
     for op, rate in workloads.items():
@@ -535,10 +546,11 @@ def evaluate(
                 cache_hits += accepted * hit
                 add(completed, key, accepted * hit, total_latency)
                 for primary, rate in routed_partitions[node_id, op, origin].items():
-                    forward(
+                    forward_partition(
                         node_id,
                         read_targets(node_id, primary),
                         key,
+                        primary,
                         rate * share * (1 - hit),
                         total_latency,
                     )

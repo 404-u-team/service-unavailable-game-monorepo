@@ -6,7 +6,6 @@
   import Engineering from './Engineering.svelte';
   import { apiMessage, message, t } from '../i18n.svelte';
   import Language from '../Language.svelte';
-  import DatabaseDiagnostics from './DatabaseDiagnostics.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { onDestroy } from 'svelte';
   import { ArrowRight, ArrowUpRight } from '@lucide/svelte';
@@ -430,11 +429,8 @@
   <div class="stack">
     {#if pressured.length}
       {#each pressured as [id, item]}
-        <div class="stack">
-          <p><a class="warning" href={link('build', id)}>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</a> · {t(statusLabel[item.status])}{#if !item.database?.diagnostic && Object.keys(item.utilization).length} · {t(Object.entries(item.utilization).sort((a, b) => b[1] - a[1])[0][0])}{/if}</p>
-          <DatabaseDiagnostics metric={item} guide={link('guide')}
-            configureHref={game.draft?.nodes.every((node) => node.id !== id) ? undefined : `${link('build', id)}&configure=1`} />
-        </div>
+        {@const peak = Object.entries(item.utilization).sort((a, b) => b[1] - a[1])[0]}
+        <p><a class="warning" href={link('build', id)}>{t(game.production.nodes.find((node) => node.id === id)?.name ?? '')}</a> · {t(statusLabel[item.status])}{#if peak} · {t(peak[0])} {pct(peak[1])}{/if}</p>
       {/each}
     {:else}<p class="muted">{telemetry.length ? t("Monitored components are within their limits.") : t("Only service-level symptoms are available.")}</p>{/if}
     {#if databaseCoverageMissing}

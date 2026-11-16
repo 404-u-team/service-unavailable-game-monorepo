@@ -9,7 +9,6 @@ export type Setting = string | number;
 export type Component = { id: string; kind: Kind; name: string; position: Point; config: Record<string, Setting> };
 export type Connection = { source: string; target: string };
 export type Topology = { nodes: Component[]; edges: Connection[] };
-export type PrepareSharding = { primary: string; revision: number };
 export type DiagramGroup = { id: string; name: string; members: string[]; collapsed: boolean };
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };

@@ -223,7 +223,8 @@ def deployment_warnings(graph: Graph) -> list[str]:
         ):
             warnings.append(f"{node.name} needs a connection to a primary database.")
         elif node.kind == "cache" and not any(
-            graph.nodes[t].kind in {"database", "replica"} for t in graph.targets[node.id]
+            graph.nodes[t].kind in {"database", "replica", "shard_router"}
+            for t in graph.targets[node.id]
         ):
             warnings.append(
                 f"{node.name} cannot serve cache misses without a data connection."

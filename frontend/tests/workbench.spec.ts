@@ -335,19 +335,18 @@ test('database pool and hardware upgrades have distinct effects on a live save',
 
   await page.goto(`/game/${id}?view=monitor`);
   const diagnosis = page.getByRole('article', { name: 'Diagnostics' });
-  await expect(diagnosis.getByText('Database write capacity exceeded')).toBeVisible();
-  await expect(diagnosis.getByText('Sustainable writes at current read load')).toBeVisible();
-  const diskHelp = diagnosis.getByRole('link', { name: 'Help with Disk I/O' });
+  await expect(diagnosis).toContainText('Overloaded');
+  await expect(diagnosis.getByText('Database write capacity exceeded')).toHaveCount(0);
+  await diagnosis.getByRole('link', { name: 'Primary database' }).click();
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+  await inspector.getByRole('button', { name: 'Metrics', exact: true }).click();
+  await expect(inspector.getByText('Sustainable writes at current read load')).toBeVisible();
+  await expect(inspector.getByText('Database write capacity exceeded')).toHaveCount(0);
+  const diskHelp = inspector.getByRole('link', { name: 'Help with Disk I/O' });
   await diskHelp.click();
   await expect(page).toHaveURL(/article=database-io#io$/);
   await expect(page.getByRole('heading', { name: 'Disk I/O utilization' })).toBeVisible();
-  await page.goBack();
-  await expect(diagnosis.getByText('Increase vCPU to raise read and write processing capacity.')).toBeVisible();
-  await diagnosis.getByRole('link', { name: 'Database Guide' }).click();
-  await expect(page.getByRole('heading', { name: 'Cache versus read replica' })).toBeVisible();
-  await page.goto(`/game/${id}?view=monitor`);
-  await diagnosis.getByRole('link', { name: 'Edit configuration' }).click();
-  config = page.getByRole('dialog', { name: 'Component configuration' });
+  config = await editDatabase();
   await expect(config).toBeVisible();
   await config.getByLabel('Connection pool limit', { exact: true }).fill('700');
   let releaseForecast!: () => void;
@@ -373,6 +372,7 @@ test('database pool and hardware upgrades have distinct effects on a live save',
   await expect(config.getByRole('row', { name: /Sustainable writes/ })).toBeVisible();
   await config.getByRole('button', { name: 'Save to draft' }).click();
   await expect(config).toBeHidden();
+  await closeInspector(page);
   await page.getByRole('button', { name: 'Review deployment' }).click();
   await page.getByRole('button', { name: 'Deploy changes' }).click();
   const results = page.getByRole('dialog', { name: 'Deployment complete' });

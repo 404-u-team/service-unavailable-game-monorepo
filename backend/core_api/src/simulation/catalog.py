@@ -154,7 +154,7 @@ COMPONENTS: dict[Kind, dict] = {
                 "Cacheable reads", "All reads", "All reads", "History only"
             ),
         },
-        "description": "Serves repeated reads for its linked primaries or their replicas. Writes go directly to the owning primary.",
+        "description": "Serves repeated reads through linked primaries, replicas or shard routers.",
     },
     "limiter": {
         "name": "Rate limiter",
@@ -517,7 +517,12 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
         "queue": "enqueue",
         "monitor": "telemetry",
     },
-    "cache": {"database": "reads", "replica": "reads", "monitor": "telemetry"},
+    "cache": {
+        "database": "reads",
+        "replica": "reads",
+        "shard_router": "reads",
+        "monitor": "telemetry",
+    },
     "replica": {"database": "replication", "monitor": "telemetry"},
     "shard_router": {"database": "queries", "monitor": "telemetry"},
     "database": {"monitor": "telemetry"},

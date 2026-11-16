@@ -489,7 +489,8 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "configuration",
         "title": "Configuration",
         "body": [
-          "Complete Database Sharding research, then open an independent database and choose Prepare sharding. The draft adds a shard router and a second primary. For a shared database it also creates separate primaries for the other domains."
+          "Complete Database Sharding research and open a draft. Add a shard router from the component library. Set its data domain, assign the same domain and Partition membership to two or more primary databases, and connect the router to each one.",
+          "Connect every API that uses this domain to the router. Remove those APIs' direct links to primaries for that domain. To cache reads, add API → Cache and Cache → Shard router. The direct API → Shard router link handles writes."
         ]
       },
       {
@@ -524,7 +525,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "To build it manually, connect the API to a shard router and link the router to two primaries with the same domain and Partition membership. Review storage and cost, start migration, then run the clock until the copy completes."
+          "To shard chat history and messages from a shared database, configure the original database and a second primary as Messages partitions. Add an Accounts primary and any other domain primaries needed by released features. Connect the API to its Accounts primary and the Messages router. In Deployment review, check storage and cost, start migration, and run the clock until copying completes."
         ]
       }
     ],

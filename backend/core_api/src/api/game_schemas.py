@@ -75,10 +75,6 @@ class UpdateDraft(VersionedAction):
     topology: Topology
 
 
-class PrepareSharding(VersionedAction):
-    primary: NodeId
-
-
 class UpdateDiagram(Action):
     diagram: Diagram
 

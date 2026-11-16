@@ -46,7 +46,6 @@ from src.api.game_schemas import (
     TutorialAction,
     TutorialProgressAction,
     UpdateDiagram,
-    PrepareSharding,
     UpdateDraft,
     VersionedAction,
 )
@@ -67,7 +66,6 @@ from src.services.games import (
     edit_draft,
     forecast,
     open_draft,
-    prepare_sharding,
     patch_diagram,
     review,
     start_campaign,
@@ -503,20 +501,6 @@ async def remove_draft(
         body,
         "discard draft",
         lambda game: discard_draft(game, body.revision),
-    )
-
-
-@router.post("/{game_id}/draft/sharding", response_model=GameView)
-async def stage_sharding(
-    game_id: UUID, body: PrepareSharding, owner_id: Owner, service: Service
-):
-    return await mutate(
-        service,
-        owner_id,
-        game_id,
-        body,
-        "prepare sharding",
-        lambda game: prepare_sharding(game, body.revision, body.primary),
     )
 
 
