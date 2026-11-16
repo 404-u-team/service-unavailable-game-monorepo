@@ -64,6 +64,7 @@ def new_game(
         difficulty=difficulty,
         start_minute=START_MINUTE_UTC,
         onboarding=Onboarding(),
+        free_media_storage_gb=0,
     )
     game.history = [history_point(game, evaluate(game).snapshot)]
     return game
@@ -266,6 +267,9 @@ def advance(game: Game, steps: int) -> None:
             del game.regional_campaigns[key]
         game.queues = result.queues
         game.storage = result.storage
+        game.free_media_storage_gb, *paid_storage = result.media_storage
+        for term, stored in zip(game.subscriptions, paid_storage):
+            term.media_storage_gb = stored
         game.replication = result.replication
         metrics = result.snapshot.metrics
         record_capacity_event(game, result.snapshot)

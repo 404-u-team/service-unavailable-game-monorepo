@@ -28,6 +28,7 @@
     memory: 'Increase RAM to relieve memory pressure and improve read processing.',
     connections: 'Raise the connection pool limit to admit more reads and writes.',
     storage: 'Increase storage space to keep accepting writes.',
+    ssd: 'Switch to SSD to raise the shared disk I/O budget.',
     nvme: 'Switch to NVMe to raise the shared disk I/O budget.',
     nvme_array: 'Switch to NVMe array for a higher shared disk I/O budget.',
     legacy: 'Clear the legacy throughput throttles to let hardware set the limit.'

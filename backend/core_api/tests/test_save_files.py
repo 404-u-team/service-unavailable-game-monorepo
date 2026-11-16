@@ -161,11 +161,24 @@ class SaveFileTests(TestCase):
         payload = exported.model_dump(mode="json")
         del payload["game"]["product"]["premium_high_quality_media"]
         del payload["game"]["subscriptions"][0]["high_quality_media"]
+        del payload["game"]["free_media_storage_gb"]
+        for field in ("media_quota_gb", "premium_media_quota_gb"):
+            del payload["game"]["product"][field]
+        for field in ("media_quota_gb", "media_storage_gb"):
+            del payload["game"]["subscriptions"][0][field]
         restored = parse_save_file(json.dumps(payload).encode()).game
         self.assertFalse(restored.product.premium_high_quality_media)
         self.assertFalse(restored.subscriptions[0].high_quality_media)
+        self.assertIsNone(restored.product.media_quota_gb)
+        self.assertIsNone(restored.product.premium_media_quota_gb)
+        self.assertIsNone(restored.subscriptions[0].media_quota_gb)
         restored.product.premium_high_quality_media = True
         restored.subscriptions[0].high_quality_media = True
+        restored.product.media_quota_gb = 0.25
+        restored.product.premium_media_quota_gb = "unlimited"
+        restored.free_media_storage_gb = 0.1
+        restored.subscriptions[0].media_quota_gb = 1.5
+        restored.subscriptions[0].media_storage_gb = 0.3
         self.roundtrip(restored)
 
     def test_rejects_invalid_files(self):

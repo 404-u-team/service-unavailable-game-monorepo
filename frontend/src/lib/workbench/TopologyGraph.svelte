@@ -509,7 +509,8 @@
   <CanvasViewport {guides} nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
   <Controls position={compact ? "top-left" : "bottom-left"} showFitView={false} showLock={false} />
-  {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}
+  <MiniMap position="bottom-right" width={compact ? 94 : 119} height={compact ? 60 : 74}
+    pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />
 </SvelteFlow>
 </div>
 {/key}

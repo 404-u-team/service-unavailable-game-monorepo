@@ -57,7 +57,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "Research Service Decomposition, keep Messenger Universal live, then introduce Accounts in a reviewed draft."
+          "Research Service Decomposition. While the Universal API serves production traffic, prepare Messages and Accounts services in a draft."
         ]
       }
     ],
@@ -88,7 +88,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "configuration",
         "title": "Configuration",
         "body": [
-          "After Service Decomposition, edit API service role in a draft configuration. Keep all released operations covered."
+          "After Service Decomposition, set the API roles in a draft. A deployment uses either Universal APIs or specialized APIs and must cover all released operations."
         ]
       },
       {
@@ -123,7 +123,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "A Universal and an Accounts API share authentication requests while only Universal handles messages."
+          "A Messages API handles chats and calls. A separate Accounts API handles authentication and identity checks."
         ]
       }
     ],
@@ -190,7 +190,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "Keep Universal as a fallback while adding Media → Accounts and Media → its primary."
+          "In the same draft, replace Universal with the required specialized services. Connect Media to Accounts and its data owner."
         ]
       }
     ],
@@ -229,7 +229,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "simulation",
         "title": "Simulation and costs",
         "body": [
-          "Universal and matching specialized pools share eligible traffic equally, or by CPU times active instances with Weighted capacity. Ineligible nodes receive none."
+          "API pools that support an operation share its traffic. Round robin splits it equally, and Weighted capacity splits it by CPU times active instances."
         ]
       },
       {
@@ -355,14 +355,14 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "configuration",
         "title": "Configuration",
         "body": [
-          "Research Domain Data Separation. Assign a domain on a primary and link every API serving that domain to the same owner."
+          "Research Domain Data Separation. To deploy domain databases, assign every primary a domain and connect each API to the owners of the data it uses."
         ]
       },
       {
         "id": "simulation",
         "title": "Simulation and costs",
         "body": [
-          "A matching explicit domain link takes precedence over Shared for that API. The operation carries its original read and write work to that destination."
+          "With domain databases, an operation goes to the primary for its domain and carries its original read and write work."
         ]
       },
       {
@@ -383,14 +383,14 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "mistakes",
         "title": "Common mistakes",
         "body": [
-          "All services for a domain must agree on ownership, including Universal services kept during a gradual transition."
+          "Every API that uses a domain must connect to the same primary or the same complete set of partitions."
         ]
       },
       {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "Link Universal to Shared and Accounts Primary, then link Accounts API to Accounts Primary: both route auth to Accounts."
+          "Connect a Universal API to Messages and Accounts databases. It routes chat history to Messages and authentication to Accounts."
         ]
       }
     ],
@@ -489,7 +489,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "configuration",
         "title": "Configuration",
         "body": [
-          "Research Sharding, assign the same specific domain and Partition membership to each primary, and connect every serving API to every partition."
+          "Complete Database Sharding research, then open an independent database and choose Prepare sharding. The draft adds a shard router and a second primary. For a shared database it also creates separate primaries for the other domains."
         ]
       },
       {
@@ -510,7 +510,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "costs",
         "title": "Costs and limitations",
         "body": [
-          "Each extra partition adds 3% API compute coordination; routing adds 4 plus partition count milliseconds. Hardware, monitoring and rebalancing are paid. A failed shard loses its share."
+          "Each extra partition adds 3% API compute coordination. Partition lookup adds 4 milliseconds plus 1 millisecond per shard, and the router adds its own capacity limit and daily cost. A failed shard loses its share of requests."
         ]
       },
       {
@@ -524,7 +524,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "example",
         "title": "Messenger example",
         "body": [
-          "Connect Messenger Universal to three Messages partitions, retain Accounts ownership, and compare per-shard writes and forecast availability."
+          "To build it manually, connect the API to a shard router and link the router to two primaries with the same domain and Partition membership. Review storage and cost, start migration, then run the clock until the copy completes."
         ]
       }
     ],

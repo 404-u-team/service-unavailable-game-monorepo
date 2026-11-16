@@ -71,7 +71,7 @@
   const eligibleDemand = $derived(supported.reduce((sum, op) => sum + (workloads[op] ?? 0), 0));
   const presets = $derived(Object.entries(definition.presets ?? {}));
   const activePreset = $derived(presets.findIndex(([, entries]) => Object.entries(entries).every(([key, value]) => values[key] === value)));
-  const sliderFields = new Set(['cpu', 'memory', 'connections', 'network', 'concurrency', 'slots', 'capacity', 'limit']);
+  const sliderFields = new Set(['cpu', 'memory', 'connections', 'network', 'concurrency', 'slots', 'capacity', 'limit', 'routing_capacity']);
   const storageTier = $derived(storage?.[String(values.disk)]);
   const valid = $derived(!!name.trim() && Object.values(values).every((value) => typeof value !== 'number' || Number.isFinite(value)));
   const fields = $derived(Object.entries(definition.fields).filter(([key]) =>
@@ -237,7 +237,7 @@
           {/if}
         {/if}
         {#if key === 'disk' && storageTier}
-          <small class="muted">{t('{0} modeled IOPS · +{1} base cost', [num(storageTier.read_capacity), pct(storageTier.base_cost_surcharge)])}</small>
+          <small class="muted">{t('{0} modeled IOPS · {1} of base cost', [num(storageTier.read_capacity), pct(1 + storageTier.base_cost_surcharge)])}</small>
         {/if}
       {/snippet}
     </FormField>

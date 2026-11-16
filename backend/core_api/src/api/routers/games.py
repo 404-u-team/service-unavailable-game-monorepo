@@ -46,6 +46,7 @@ from src.api.game_schemas import (
     TutorialAction,
     TutorialProgressAction,
     UpdateDiagram,
+    PrepareSharding,
     UpdateDraft,
     VersionedAction,
 )
@@ -66,6 +67,7 @@ from src.services.games import (
     edit_draft,
     forecast,
     open_draft,
+    prepare_sharding,
     patch_diagram,
     review,
     start_campaign,
@@ -102,7 +104,13 @@ from src.simulation.catalog import (
 from src.simulation.database import disk_limits
 from src.simulation.engine import evaluate
 from src.simulation.engineering import DOMAINS, RESEARCH, ROLES
-from src.simulation.models import Game, Snapshot, Topology
+from src.simulation.models import (
+    MAX_MEDIA_QUOTA_GB,
+    MIN_MEDIA_QUOTA_GB,
+    Game,
+    Snapshot,
+    Topology,
+)
 from src.simulation.progression import drill
 from src.simulation.topology import RuleError
 
@@ -222,6 +230,8 @@ def catalog():
         "days_per_month": DAYS_PER_MONTH,
         "premium_price_min": BUSINESS["premium_min_price"],
         "premium_price_max": BUSINESS["premium_max_price"],
+        "media_quota_min_gb": MIN_MEDIA_QUOTA_GB,
+        "media_quota_max_gb": MAX_MEDIA_QUOTA_GB,
     }
 
 
@@ -493,6 +503,20 @@ async def remove_draft(
         body,
         "discard draft",
         lambda game: discard_draft(game, body.revision),
+    )
+
+
+@router.post("/{game_id}/draft/sharding", response_model=GameView)
+async def stage_sharding(
+    game_id: UUID, body: PrepareSharding, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "prepare sharding",
+        lambda game: prepare_sharding(game, body.revision, body.primary),
     )
 
 

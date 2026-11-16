@@ -19,7 +19,7 @@ class Requirement:
 
 REQUIREMENTS = {
     "primary": Requirement(
-        "Connect each API that receives traffic directly to a primary database for writes.",
+        "Connect each API that receives traffic to a primary database or a shard router for writes.",
         ("database",),
     ),
     "media_storage": Requirement(

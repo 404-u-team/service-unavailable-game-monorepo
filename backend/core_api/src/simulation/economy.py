@@ -16,6 +16,7 @@ from src.simulation.demand import (
 )
 from src.simulation.engine import Evaluation
 from src.simulation.engineering import effective_topology
+from src.simulation.media import effective_quota
 from src.simulation.models import (
     FinanceSample,
     Game,
@@ -35,6 +36,9 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
     if game.tick % TICKS_PER_DAY:
         return 0
     expiring = [term for term in game.subscriptions if term.expires <= game.tick]
+    expired_storage = sum(term.media_storage_gb for term in expiring)
+    if game.free_media_storage_gb is not None:
+        game.free_media_storage_gb += expired_storage
     game.subscriptions = [
         term for term in game.subscriptions if term.expires > game.tick
     ]
@@ -70,13 +74,19 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
     benefits = (
         1 if product.premium_fast_sync else BUSINESS["premium_standard_adoption_factor"]
     )
+    standard_quota = product.media_quota_gb
+    premium_quota = effective_quota(standard_quota, product.premium_media_quota_gb)
+    has_media = bool(game.enabled_features & {"images", "voice", "files"})
+    more_storage = standard_quota is not None and premium_quota != standard_quota
     media_benefit = (
         BUSINESS["premium_media_adoption_multiplier"]
-        if product.premium_high_quality_media and premium_media_gain(game, product)
+        if (has_media and more_storage)
+        or (product.premium_high_quality_media and premium_media_gain(game, product))
         else 1
     )
+    expired_users = sum(term.subscribers for term in expiring)
     renewals = (
-        sum(term.subscribers for term in expiring)
+        expired_users
         * BUSINESS["premium_renewal"]
         * reliability
         * benefits
@@ -97,6 +107,20 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
     )
     subscribers = renewals + new_subscribers
     if subscribers > 0:
+        stored = 0.0
+        if game.free_media_storage_gb is not None:
+            renewed_storage = (
+                expired_storage * (renewals / expired_users) if expired_users else 0
+            )
+            remaining_storage = max(0, game.free_media_storage_gb - renewed_storage)
+            free_users = game.audience - game.subscribers - renewals
+            new_storage = (
+                remaining_storage * min(1, new_subscribers / free_users)
+                if free_users > 0
+                else 0
+            )
+            stored = renewed_storage + new_storage
+            game.free_media_storage_gb = remaining_storage - new_storage
         game.subscriptions.append(
             SubscriptionTerm(
                 expires=game.tick + TERM_TICKS,
@@ -104,6 +128,8 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
                 price=product.premium_price,
                 fast_sync=product.premium_fast_sync,
                 high_quality_media=product.premium_high_quality_media,
+                media_quota_gb=product.premium_media_quota_gb,
+                media_storage_gb=stored,
             )
         )
     return subscribers * product.premium_price

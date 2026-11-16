@@ -1,6 +1,6 @@
 import type { TutorialProgress } from './workbench/onboarding';
 
-export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
+export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'shard_router' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
 export type Speed = 0 | 1 | 3 | 5;
 export const difficulties = ['beginner', 'standard', 'expert'] as const;
 export type Difficulty = typeof difficulties[number];
@@ -9,11 +9,12 @@ export type Setting = string | number;
 export type Component = { id: string; kind: Kind; name: string; position: Point; config: Record<string, Setting> };
 export type Connection = { source: string; target: string };
 export type Topology = { nodes: Component[]; edges: Connection[] };
+export type PrepareSharding = { primary: string; revision: number };
 export type DiagramGroup = { id: string; name: string; members: string[]; collapsed: boolean };
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };
 export type Metrics = { rps: number; throughput: number; availability: number; latency: number; p95_latency?: number | null; errors: number; rejected: number };
-export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'nvme' | 'nvme_array' | 'legacy';
+export type DatabaseUpgrade = 'cpu' | 'memory' | 'connections' | 'storage' | 'ssd' | 'nvme' | 'nvme_array' | 'legacy';
 export type DatabaseTelemetry = {
   read_demand: number; disk_read_iops?: number | null; disk_write_iops?: number | null; disk_capacity_iops?: number | null; write_demand: number; write_capacity: number | null;
   replication_demand: number; replication_throughput: number; replication_backlog: number;
@@ -58,6 +59,8 @@ export type ProductSettings = {
   premium_high_quality_media: boolean;
   sync_frequency: 'relaxed' | 'standard' | 'frequent';
   media_quality: 'compressed' | 'standard' | 'high';
+  media_quota_gb: number | null;
+  premium_media_quota_gb: number | 'unlimited' | null;
   north_america: boolean;
 };
 export type AdEstimate = { impressions: number; revenue: number; satisfaction_impact: number; churn_impact: number };
@@ -115,6 +118,7 @@ export type Catalog = {
   operations: Record<string, string>; connections: Record<Kind, Kind[]>;
   connection_types: Record<Kind, Partial<Record<Kind, keyof typeof import('./workbench/connections').connectionLabels>>>;
   minutes_per_tick: number; days_per_month: number; premium_price_min: number; premium_price_max: number;
+  media_quota_min_gb: number; media_quota_max_gb: number;
 };
 export type Interval = { low: number; high: number };
 export type DatabaseForecast = {

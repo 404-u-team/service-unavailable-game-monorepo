@@ -25,7 +25,12 @@ def choice(label: str, default: str, *options: str) -> dict:
 
 
 # Disk throughput multiplier and surcharge as a fraction of base daily cost.
-DATABASE_DISKS = {"SSD": (1.0, 0.0), "NVMe": (1.45, 0.35), "NVMe array": (4.5, 2.4)}
+DATABASE_DISKS = {
+    "HDD": (0.30, -0.20),
+    "SSD": (1.0, 0.0),
+    "NVMe": (1.45, 0.35),
+    "NVMe array": (4.5, 2.4),
+}
 
 
 COMPONENTS: dict[Kind, dict] = {
@@ -123,6 +128,20 @@ COMPONENTS: dict[Kind, dict] = {
         },
         "description": "Serves application reads. Subscribe to one primary database for replication. Reads can lag behind writes.",
     },
+    "shard_router": {
+        "name": "Shard router",
+        "category": "Data",
+        "monthly": 120,
+        "fields": {
+            "domain": choice(
+                "Data domain", "Messages", "Messages", "Accounts", "Media", "Search"
+            ),
+            "routing_capacity": number(
+                "Routing capacity (requests/s)", 2000, 100, 50000, 100
+            ),
+        },
+        "description": "Routes queries to the primary that owns each shard of one data domain.",
+    },
     "cache": {
         "name": "Cache",
         "category": "Data",
@@ -135,7 +154,7 @@ COMPONENTS: dict[Kind, dict] = {
                 "Cacheable reads", "All reads", "All reads", "History only"
             ),
         },
-        "description": "Serves repeated reads. On a miss, the cache uses its linked data sources or the API's data connections. Writes go directly to a primary database.",
+        "description": "Serves repeated reads for its linked primaries or their replicas. Writes go directly to the owning primary.",
     },
     "limiter": {
         "name": "Rate limiter",
@@ -492,6 +511,7 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
     "api": {
         "api": "identity",
         "database": "queries",
+        "shard_router": "queries",
         "replica": "reads",
         "cache": "cache",
         "queue": "enqueue",
@@ -499,6 +519,7 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
     },
     "cache": {"database": "reads", "replica": "reads", "monitor": "telemetry"},
     "replica": {"database": "replication", "monitor": "telemetry"},
+    "shard_router": {"database": "queries", "monitor": "telemetry"},
     "database": {"monitor": "telemetry"},
     "queue": {"worker": "jobs", "monitor": "telemetry"},
     "worker": {"monitor": "telemetry"},

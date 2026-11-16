@@ -22,7 +22,7 @@ export const mobile: Section[] = ['home', 'build', 'monitor', 'growth', 'more'];
 export const more: Section[] = ['product', 'finance', 'events', 'guide', 'saves', 'settings'];
 
 export const componentIcon = {
-  source: Radio, balancer: GitFork, api: Server, database: Database, replica: Database,
+  source: Radio, balancer: GitFork, api: Server, database: Database, shard_router: Workflow, replica: Database,
   cache: Layers, limiter: Gauge, queue: Cable, worker: Workflow, monitor: Network
 } satisfies Record<Kind, typeof Server>;
 

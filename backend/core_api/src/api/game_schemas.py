@@ -75,6 +75,10 @@ class UpdateDraft(VersionedAction):
     topology: Topology
 
 
+class PrepareSharding(VersionedAction):
+    primary: NodeId
+
+
 class UpdateDiagram(Action):
     diagram: Diagram
 
@@ -490,3 +494,5 @@ class Catalog(Model):
     days_per_month: int
     premium_price_min: float
     premium_price_max: float
+    media_quota_min_gb: float
+    media_quota_max_gb: float

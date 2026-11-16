@@ -193,6 +193,7 @@ test('the connection line and its rate label show the same request breakdown', a
 test('A and B · create, run, save, reopen, edit and scale production', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = await create(page);
+  await expect(page.getByRole('img', { name: 'Minimap' })).toBeInViewport();
   const first = await state(page, id);
   expect(first.tick).toBe(0);
   expect(first.snapshot.metrics.rps).toBeGreaterThan(100);
@@ -441,6 +442,59 @@ test.describe('Mobile workbench', () => {
     await expect(actions).toBeInViewport({ ratio: 1 });
     await actions.getByRole('button', { name: 'Component info' }).tap();
     await expect(page.getByRole('dialog', { name: 'Component inspector' }).getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+  });
+
+  test('the minimap stays in the bottom-right corner on narrow screens', async ({ page }) => {
+    await create(page, true, false);
+    const graph = page.locator('.svelte-flow');
+    const map = graph.getByRole('img', { name: 'Minimap' });
+    await expect(map).toBeInViewport();
+    const canvas = (await graph.boundingBox())!;
+    const preview = (await map.boundingBox())!;
+    const right = canvas.x + canvas.width - preview.x - preview.width;
+    const bottom = canvas.y + canvas.height - preview.y - preview.height;
+    expect(right).toBeGreaterThanOrEqual(0);
+    expect(right).toBeLessThan(24);
+    expect(bottom).toBeGreaterThanOrEqual(0);
+    expect(bottom).toBeLessThan(24);
+    await setMapView(page, 'list', true);
+    await expect(map).toHaveCount(0);
+    await setMapView(page, 'canvas', true);
+    await expect(map).toBeVisible();
+  });
+
+  test('standard and premium cloud media limits persist on a narrow screen', async ({ page }) => {
+    const created = await page.request.post('/api/games', {
+      data: { id: crypto.randomUUID(), name: 'Cloud Messenger', seed: 7, settings: { show_tutorial: false } }
+    });
+    expect(created.ok()).toBeTruthy();
+    const { id: initialId } = await created.json();
+    const save = await (await page.request.get(`/api/games/${initialId}/export`)).json();
+    save.game.released.push('images', 'premium');
+    const imported = await page.request.post('/api/games/import', { data: save });
+    expect(imported.ok(), await imported.text()).toBeTruthy();
+    const { id } = await imported.json();
+    await page.goto(`/game/${id}?view=product`);
+    await page.getByRole('tab', { name: 'Product settings' }).tap();
+    const standard = page.getByLabel('Limit cloud media storage', { exact: true });
+    await standard.focus();
+    await standard.press('Space');
+    await page.getByRole('spinbutton', { name: 'Cloud media limit per user' }).fill('0.25');
+    const premium = page.getByRole('combobox', { name: 'Premium cloud media storage' });
+    await choose(premium, 'custom');
+    await page.getByRole('spinbutton', { name: 'Cloud media limit per subscriber' }).fill('1.5');
+    const submit = page.getByRole('button', { name: 'Save product settings' });
+    await submit.tap();
+    await expect.poll(async () => (await state(page, id)).product).toMatchObject({
+      media_quota_gb: 0.25, premium_media_quota_gb: 1.5,
+    });
+    await choose(premium, 'unlimited');
+    await submit.tap();
+    await expect.poll(async () => (await state(page, id)).product.premium_media_quota_gb).toBe('unlimited');
+    await standard.tap();
+    await submit.tap();
+    await expect.poll(async () => (await state(page, id)).product.media_quota_gb).toBeNull();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 
   test('F · navigation, component list, mobile inspector and deployment', async ({ page, browserName }) => {

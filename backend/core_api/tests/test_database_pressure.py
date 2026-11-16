@@ -148,6 +148,7 @@ class DatabasePressureTests(TestCase):
 
         add_node(self.game, "cache", "cache", ttl=10, memory=1)
         link(self.game, "api", "cache")
+        link(self.game, "cache", "db")
         link(self.game, "cache", "telemetry")
         low_hit = self.snapshot(**heavy)
         cache = component(self.game, "cache")
@@ -169,7 +170,7 @@ class DatabasePressureTests(TestCase):
 
         for replica_id in ("read1", "read2"):
             add_node(self.game, replica_id, "replica", cpu=16, disk="NVMe", memory=16)
-            link(self.game, "api", replica_id)
+            link(self.game, "cache", replica_id)
             link(self.game, replica_id, "db")
             link(self.game, replica_id, "telemetry")
             linked = self.snapshot(**heavy)
@@ -199,6 +200,7 @@ class DatabasePressureTests(TestCase):
         self.db.config.update(cpu=32, disk="NVMe array")
         add_node(self.game, "cache", "cache", memory=12, ttl=1200, policy="LFU")
         link(self.game, "api", "cache")
+        link(self.game, "cache", "db")
         link(self.game, "cache", "telemetry")
         after = evaluate(self.game).snapshot
         self.assertEqual(after.metrics.errors, 0)
@@ -314,8 +316,8 @@ class DatabasePressureTests(TestCase):
         base = self.snapshot(send=20, history=50, auth=10).components["db"]
         add_node(self.game, "cache", "cache", ttl=500)
         link(self.game, "api", "cache")
+        link(self.game, "cache", "db")
         link(self.game, "cache", "telemetry")
-        # With no explicit data link, cache misses fall back to the API's primary.
         after = self.snapshot(send=20, history=50, auth=10).components
         hit = after["cache"].cache_hit
         self.assertGreater(hit, 0.5)
@@ -323,6 +325,17 @@ class DatabasePressureTests(TestCase):
         self.assertAlmostEqual(db.database.read_demand, 10 + 90 * (1 - hit))
         self.assertEqual(db.database.write_demand, base.database.write_demand)
         self.assertEqual(db.utilization["Writes"], base.utilization["Writes"])
+
+    def test_hdd_reduces_cost_and_throughput_and_suggests_ssd(self):
+        self.db.config["cpu"] = 16
+        ssd_cost = daily_cost(self.db)
+        ssd = self.snapshot(send=42, history=25).components["db"]
+        self.db.config["disk"] = "HDD"
+        hdd = self.snapshot(send=42, history=25).components["db"]
+        self.assertLess(daily_cost(self.db), ssd_cost)
+        self.assertEqual(hdd.database.disk_capacity_iops, 126)
+        self.assertLess(hdd.database.write_capacity, ssd.database.write_capacity)
+        self.assertIn("ssd", hdd.database.diagnostic.upgrades)
 
     def test_diagnostics_depend_on_monitoring_coverage(self):
         self.db.config.update(cpu=16, memory=128)

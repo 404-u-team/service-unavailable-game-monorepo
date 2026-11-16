@@ -261,14 +261,12 @@ class SimulationTests(TestCase):
             if (edge.source, edge.target) != ("cache", "db")
         ]
         fallback = evaluate(game).snapshot
-        self.assertEqual(
-            fallback.components["cache"].cache_hit, result.components["cache"].cache_hit
-        )
+        self.assertEqual(fallback.components["cache"].cache_hit, 0)
         self.assertAlmostEqual(
             fallback.components["db"].utilization["Reads"],
-            result.components["db"].utilization["Reads"],
+            original.utilization["Reads"],
         )
-        self.assertEqual(fallback.metrics, result.metrics)
+        self.assertFalse(any(edge.target == "cache" for edge in fallback.traffic))
         game.production.edges = [
             edge
             for edge in game.production.edges
@@ -370,6 +368,7 @@ class SimulationTests(TestCase):
         monitor(game, "db", "cache")
         add_node(game, "cache", "cache")
         link(game, "api", "cache")
+        link(game, "cache", "db")
         component(game, "db").config["search_index"] = "Enabled"
         self.assertTrue(feature_state(game, "search").can_release)
         change_feature(game, "search", "release")

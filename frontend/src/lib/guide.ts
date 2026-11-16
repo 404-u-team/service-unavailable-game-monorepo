@@ -62,8 +62,13 @@ export const componentArticles: Record<Kind, Article> = {
     "A replica uses its own CPU, RAM, pool and disk for reads and replay. Its base latency is 21 ms. Every available follower adds disk work on the primary and has its own operating cost.",
     "Keep API → Primary database. Add Replica → Primary database, then add API → Replica or Cache → Replica for reads. Link both databases to Monitoring and check lag after deployment.",
     ["replication", "database-scaling"]),
+  shard_router: component("shard_router", "Shard router",
+    "Connect APIs to the shard router for one data domain.",
+    "Connect at least two primaries of that domain with Partition membership.",
+    "In the database inspector, choose Prepare sharding to build a draft with a router and two shards.",
+    ["database-sharding", "architecture-migration"]),
   cache: component("cache", "Cache",
-    "Use a cache for repeated history and conversation reads. Keep API → Primary for writes. Link API → Cache and optionally Cache → Primary or Cache → Replica for misses.",
+    "Use a cache for repeated history and conversation reads. Keep API → Primary for writes. Link API → Cache, then connect the cache to the owning primary or its replica.",
     "Hits finish at the cache with a 4 ms base latency. More RAM relative to audience, longer TTL and LFU can improve hit rate, up to 91%. RAM also raises cache throughput and cost.",
     "Start with History only for repeat chat history reads. Compare the hit rate and primary read demand before widening the scope to All reads.",
     ["routing", "database-scaling"]),
@@ -118,7 +123,7 @@ export const articles: Record<string, Article> = {
   "routing": { category: "architecture", title: "Request routing and connection types",
     sections: [
       { id: "types", title: "Connection types", body: ["Solid request edges carry operations from the source through limiters and balancers to APIs. Data edges carry queries. Enqueue and worker edges carry background jobs. Replication subscribes a replica to a primary. Telemetry carries measurements."] },
-      { id: "data", title: "Data routing", body: ["The API splits eligible reads evenly between its linked primary and linked replicas that follow that primary. Failed replicas are skipped. If caches are attached, they receive ordinary reads first. Cache misses use the cache’s eligible data links, or the originating API’s links when the cache has none eligible. A saturated target keeps its share of the load."] },
+      { id: "data", title: "Data routing", body: ["The API sends each read to a cache linked to the owning primary or one of its available replicas. A miss follows those links. Reads with no eligible cache go directly from the API to their primary or its replicas. This also applies to individual database partitions."] },
       { id: "dataset", title: "Datasets and primaries", body: ["Messenger deployment requires the same primary for every API that serves traffic. Connect both APIs behind a load balancer to one primary, and add replicas that follow that primary for eligible reads.", "Separate services can own separate datasets when routing assigns requests to the correct service. Sharding requires explicit partitioning and routing. Messenger has a single application dataset."] },
       { id: "cache-misses", title: "Cache hits and misses", body: ["The hit estimate improves with memory relative to the audience, longer TTL and LFU. TTL represents how long a cached value can be reused. There is no per-message invalidation or write-through. The simulator estimates hit rate without tracking cached values or stale responses."] }
     ],
@@ -133,8 +138,8 @@ export const articles: Record<string, Article> = {
   },
   "database-io": { category: "architecture", title: "Database disk I/O",
     sections: [
-      { id: "io", title: "Disk I/O utilization", body: ["Disk I/O is a shared budget. Add read demand divided by the read budget and write demand divided by the write budget, including index and replication overhead. SSD budgets are 420 reads/s or 115 writes/s in weighted units. NVMe gives 609 or 166.75. NVMe array gives 1,890 or 517.5.", "Combined disk load above 100% throttles requests. NVMe adds 35% of base daily cost. NVMe array adds 240%. Every available follower adds 8% of base disk work per primary write.", "Modeled IOPS use a read unit as the reference. A write uses the ratio of read to write budgets, multiplied by the index and replica overhead for its workload. Dividing the combined work by effective disk capacity gives the Disk I/O meter."] },
-      { id: "space", title: "Storage types and space", body: ["SSD and NVMe set the I/O budget. Storage (GB) sets the volume available for persistent data. Messenger images, voice messages and files consume more space than texts. Media quality affects bytes stored.", "When a data volume fills up, writes are limited and reads can continue. Add GB or reduce media quality to conserve space. NVMe alone leaves free space unchanged. Extra space and NVMe raise costs, and lower media quality can reduce user satisfaction."] }
+      { id: "io", title: "Disk I/O utilization", body: ["Disk I/O is a shared budget. Add read demand divided by the read budget and write demand divided by the write budget, including index and replication overhead. HDD budgets are 126 reads/s or 34.5 writes/s in weighted units. SSD gives 420 or 115, NVMe gives 609 or 166.75, and NVMe array gives 1,890 or 517.5.", "Combined disk load above 100% throttles requests. HDD saves 20% of base daily cost. NVMe adds 35% and NVMe array adds 240%. Every available follower adds 8% of base disk work per primary write.", "Modeled IOPS use a read unit as the reference. A write uses the ratio of read to write budgets, multiplied by the index and replica overhead for its workload. Dividing the combined work by effective disk capacity gives the Disk I/O meter."] },
+      { id: "space", title: "Storage types and space", body: ["The drive type sets the I/O budget. Storage (GB) sets the volume available for persistent data. Media quality affects the bytes stored. In Product settings, a per-user cloud media quota can limit future uploads.", "When a data volume fills up, writes are limited and reads can continue. Add GB or reduce media quality to conserve space. NVMe alone leaves free space unchanged. Extra space and NVMe raise costs, and lower media quality can reduce user satisfaction."] }
     ],
     related: ["read-write-throughput", "database-scaling", "replication"]
   },

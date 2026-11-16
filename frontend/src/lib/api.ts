@@ -61,6 +61,7 @@ export async function loadCatalog(): Promise<Catalog> {
   const profiles = isRecord(catalog) ? catalog.difficulties : undefined;
   if (!isRecord(catalog) || catalog.diagram_layout !== true ||
       !['components', 'scenarios', 'features', 'campaigns', 'operations', 'connections', 'engineering', 'service_roles', 'operation_domains'].every((key) => isRecord(catalog[key])) ||
+      typeof catalog.media_quota_min_gb !== 'number' || typeof catalog.media_quota_max_gb !== 'number' ||
       typeof catalog.days_per_month !== 'number' || typeof catalog.minutes_per_tick !== 'number' || !isRecord(profiles) ||
       difficulties.some((key) => {
         const option = profiles[key];

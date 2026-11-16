@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Form, PageColumns, Switch } from '@service-unavailable/ui';
+  import { Button, Form, FormField, PageColumns, Switch } from '@service-unavailable/ui';
   import Select from '../controls/Select.svelte';
   import NumberInput from '../controls/NumberInput.svelte';
   import { message, t } from '../i18n.svelte';
@@ -16,9 +16,22 @@
   const ads = $derived(game.features.find((item) => item.id === 'advertising'));
   const premium = $derived(game.features.find((item) => item.id === 'premium'));
   const estimate = $derived(game.advertising_estimates[product.ad_intensity]);
+  const premiumQuotaMode = $derived(product.premium_media_quota_gb === null ? 'standard'
+    : product.premium_media_quota_gb === 'unlimited' ? 'unlimited' : 'custom');
+  const quotaMin = $derived(catalog.media_quota_min_gb);
+  const quotaMax = $derived(catalog.media_quota_max_gb);
+  const valid = $derived(Object.values(product).every((value) => typeof value !== 'number' || Number.isFinite(value)));
+
+  function setPremiumQuota(mode: string) {
+    if (mode === 'custom') {
+      edits.premium_media_quota_gb = Math.min(quotaMax, Math.max(1, product.media_quota_gb ?? 0));
+    } else {
+      edits.premium_media_quota_gb = mode === 'unlimited' ? 'unlimited' : null;
+    }
+  }
 
   async function submit() {
-    if (await save(product)) edits = {};
+    if (valid && await save(product)) edits = {};
   }
 </script>
 
@@ -53,6 +66,25 @@
         <Switch label={t('Offer faster synchronization')} checked={product.premium_fast_sync} onchange={({ currentTarget }) => edits.premium_fast_sync = currentTarget.checked} />
         <Switch label={t('Offer higher-quality media')} checked={product.premium_high_quality_media}
           onchange={({ currentTarget }) => edits.premium_high_quality_media = currentTarget.checked} />
+        <FormField label={t('Premium cloud media storage')}>
+          {#snippet children(field)}
+            <Select {...field} label={t('Premium cloud media storage')} value={premiumQuotaMode} onchange={setPremiumQuota}
+              options={[
+                { value: 'standard', label: t('Standard plan limit') },
+                { value: 'custom', label: t('Custom limit') },
+                { value: 'unlimited', label: t('Unlimited') }
+              ]} />
+          {/snippet}
+        </FormField>
+        {#if typeof product.premium_media_quota_gb === 'number'}
+          <FormField label={t('Cloud media limit per subscriber')} hint={t('Subscribers always get at least the standard plan allowance.')}>
+            {#snippet children(field)}
+              <NumberInput {...field} label={t('Cloud media limit per subscriber')} required
+                min={quotaMin} max={quotaMax} step={quotaMin} precision={2} unit={t('GB')}
+                value={product.premium_media_quota_gb as number} onchange={(value) => edits.premium_media_quota_gb = value ?? NaN} />
+            {/snippet}
+          </FormField>
+        {/if}
         <p class="muted">{t('Faster synchronization increases requests. Higher-quality media uses more bandwidth and storage when the standard plan uses lower quality.')}</p>
         <p class="muted">{t('Premium is ad-free. Benefit changes apply to new subscriptions and renewals. Paid terms keep their benefits until they expire.')}</p>
         <p class="muted">{t('Reliability and latency affect renewals.')}</p>
@@ -74,6 +106,18 @@
             options={[{ value: 'compressed', label: t('Compressed') }, { value: 'standard', label: t('Standard') }, { value: 'high', label: t('High') }]} />
         </div>
       <p class="muted">{t('Compression reduces network and storage use for future uploads and requires more CPU. Higher quality improves satisfaction.')}</p>
+      <Switch label={t('Limit cloud media storage')} checked={product.media_quota_gb !== null}
+        onchange={({ currentTarget }) => edits.media_quota_gb = currentTarget.checked ? 0.1 : null} />
+      {#if product.media_quota_gb !== null}
+        <FormField label={t('Cloud media limit per user')}>
+          {#snippet children(field)}
+            <NumberInput {...field} label={t('Cloud media limit per user')} required
+              min={quotaMin} max={quotaMax} step={quotaMin} precision={2} unit={t('GB')}
+              value={product.media_quota_gb ?? undefined} onchange={(value) => edits.media_quota_gb = value ?? NaN} />
+          {/snippet}
+        </FormField>
+      {/if}
+      <p class="muted">{t('The limit covers images, voice messages and files. It restricts new uploads and keeps existing media.')}</p>
     </fieldset>
     {#if game.product.north_america}
     <fieldset class="stack">
@@ -85,7 +129,7 @@
     {/if}
   </PageColumns>
   {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-  <div><Button variant="primary" type="submit" disabled={busy || !Object.keys(edits).length}>{t('Save product settings')}</Button></div>
+  <div><Button variant="primary" type="submit" disabled={busy || !valid || !Object.keys(edits).length}>{t('Save product settings')}</Button></div>
 </Form>
 
 <style>

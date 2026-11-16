@@ -63,6 +63,8 @@ from src.simulation.engineering import (
     migrated_storage,
     migration_plan,
     researched,
+    sharding_topology,
+    specialization_errors,
 )
 from src.simulation.models import (
     ArchitectureMigration,
@@ -303,11 +305,13 @@ def discard_draft(game: Game, revision: int) -> None:
     game.revision += 1
 
 
-def edit_draft(game: Game, revision: int, topology: Topology) -> None:
+def edit_draft(
+    game: Game, revision: int, topology: Topology, *, create: bool = False
+) -> None:
     check_revision(game, revision)
     if game.migration is not None:
         raise RuleError("Wait for the planned architecture migration to complete.")
-    if game.draft is None:
+    if game.draft is None and not create:
         raise RuleError("Create a draft first.")
     graph = inspect_graph(topology)
     validate_identity(game.production, graph.nodes)
@@ -333,6 +337,14 @@ def validate_identity(production: Topology, nodes: dict[str, Node]) -> None:
             raise RuleError(
                 f"Remove {node.name} and add a new component to change its type."
             )
+
+
+def prepare_sharding(game: Game, revision: int, primary: str) -> None:
+    check_revision(game, revision)
+    if game.migration:
+        raise RuleError("Wait for the planned architecture migration to complete.")
+    candidate = sharding_topology(game, game.draft or game.production, primary)
+    edit_draft(game, revision, candidate, create=True)
 
 
 def forecast(
@@ -484,6 +496,9 @@ def review(
         )
         warnings = deployment_warnings(graph)
         issues = architecture_errors(game, graph)
+        # A paid migration from an older save may already be preparing this topology.
+        if not prepared:
+            issues.extend(specialization_errors(graph))
         # Preserve legacy games with pre-existing split primaries; never permit a new split.
         if messenger_datasets(graph) == messenger_datasets(
             inspect_graph(game.production)
@@ -972,6 +987,7 @@ def change_product(game: Game, product: ProductSettings) -> None:
         ("premium_price", "premium"),
         ("premium_fast_sync", "premium"),
         ("premium_high_quality_media", "premium"),
+        ("premium_media_quota_gb", "premium"),
     ):
         if (
             getattr(product, field) != getattr(previous, field)

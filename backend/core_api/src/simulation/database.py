@@ -145,7 +145,11 @@ class DatabaseLoad:
                 if resource in targets and cfg[field] < fields[field]["max"]:
                     upgrades.append(action)
             if "Disk I/O" in targets:
-                next_disk = {"SSD": "nvme", "NVMe": "nvme_array"}.get(cfg["disk"])
+                next_disk = {
+                    "HDD": "ssd",
+                    "SSD": "nvme",
+                    "NVMe": "nvme_array",
+                }.get(cfg["disk"])
                 if next_disk:
                     upgrades.append(next_disk)
             if "Legacy read throttle" in targets or "Legacy write throttle" in targets:

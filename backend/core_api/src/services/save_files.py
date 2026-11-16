@@ -106,15 +106,24 @@ def require_complete(value: object) -> None:
                 "autoscaling",
                 "migration",
                 "engineering_lesson",
+                "free_media_storage_gb",
             }
         elif isinstance(value, FinanceSample):
             allowed_omissions = {"regional_ads"}
         elif isinstance(value, Onboarding):
             allowed_omissions = {"step_id", "furthest_id"}
         elif isinstance(value, ProductSettings):
-            allowed_omissions = {"premium_high_quality_media"}
+            allowed_omissions = {
+                "premium_high_quality_media",
+                "media_quota_gb",
+                "premium_media_quota_gb",
+            }
         elif isinstance(value, SubscriptionTerm):
-            allowed_omissions = {"high_quality_media"}
+            allowed_omissions = {
+                "high_quality_media",
+                "media_quota_gb",
+                "media_storage_gb",
+            }
         elif isinstance(value, HistoryPoint):
             allowed_omissions = {"resource_utilization"}
         elif isinstance(value, Incident):
@@ -172,7 +181,8 @@ def validate_game(game: Game) -> None:
         if architecture_errors(game, inspect_graph(game.migration.topology)):
             raise ValueError("Invalid migration topology")
     if any(
-        n.config.get("role", "Universal") != "Universal"
+        n.kind == "shard_router"
+        or n.config.get("role", "Universal") != "Universal"
         or n.config.get("domain", "Shared") != "Shared"
         or n.config.get("partition", "Independent") != "Independent"
         for n in game.production.nodes

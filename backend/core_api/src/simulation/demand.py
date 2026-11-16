@@ -20,6 +20,7 @@ from src.simulation.catalog import (
     SYNC_FREQUENCY,
     TICKS_PER_DAY,
 )
+from src.simulation.media import MediaDemand, media_demand
 from src.simulation.models import (
     AdIntensity,
     DemandOverview,
@@ -210,6 +211,7 @@ class Demand:
     ad_value_per_impression: float
     overview: DemandOverview | None
     regional_ad_rates: dict[str, float]
+    media: MediaDemand
 
 
 def workload(
@@ -218,6 +220,8 @@ def workload(
     boost: float = 0,
     *,
     overview: bool = False,
+    load_scale: float = 1,
+    enforce_media_quota: bool = True,
 ) -> Demand:
     scenario = SCENARIOS[game.scenario]
     users = game.audience if audience is None else audience
@@ -269,8 +273,10 @@ def workload(
         baseline_requests
     ) = 0.0
     regional_details = []
+    regional_application = []
     regional_ad_rates: dict[str, float] = {}
     expected = [0.0] * 25 if overview else []
+    expected_application = [0.0] * len(expected)
     base_rps = sum(base_rates.values()) * engagement * scenario["activity"]
     weekday_start = utc_minute - utc_minute % MINUTES_PER_DAY
     for region_id, population in regions:
@@ -314,6 +320,10 @@ def workload(
         campaign_requests += baseline * targeted + arrival_requests
         if overview:
             _, local_minute, offset = local_time(region["timezone"], utc_minute)
+            regional_application.append(
+                (profile * base_rps * population * regional_lift + arrival_requests)
+                * noise
+            )
             regional_details.append(
                 RegionDemand(
                     id=region_id,
@@ -327,14 +337,28 @@ def workload(
                 )
             )
             for hour in range(len(expected)):
-                expected[hour] += (base_rps * population + region_ads) * activity(
-                    region, weekday_start + hour * 60
-                )
+                hourly_activity = activity(region, weekday_start + hour * 60)
+                expected_application[hour] += base_rps * population * hourly_activity
+                expected[hour] += (base_rps * population + region_ads) * hourly_activity
 
     operations = {
         key: rate * population_activity * engagement * scenario["activity"] * noise
         for key, rate in base_rates.items()
     }
+    media = media_demand(
+        game, product, operations, users, load_scale, enforce_quota=enforce_media_quota
+    )
+    media_rate = sum(base_rates.get(key, 0) for key in sorted(MEDIA_OPERATIONS))
+    reduction = (1 - media.rate_factor) * media_rate / (sum(base_rates.values()) or 1)
+    for key in MEDIA_OPERATIONS & operations.keys():
+        operations[key] *= media.rate_factor
+    if reduction:
+        for region, application in zip(regional_details, regional_application):
+            region.requests -= application * reduction
+        expected = [
+            requests - application * reduction
+            for requests, application in zip(expected, expected_application)
+        ]
     if ad_params:
         operations["ad"] = ad_rate * noise
     return Demand(
@@ -353,4 +377,5 @@ def workload(
         if overview
         else None,
         regional_ad_rates,
+        media,
     )

@@ -10,6 +10,7 @@ Kind = Literal[
     "balancer",
     "api",
     "database",
+    "shard_router",
     "replica",
     "cache",
     "limiter",
@@ -27,6 +28,12 @@ Setting = str | float
 AdIntensity = Literal["low", "moderate", "high"]
 SyncFrequency = Literal["relaxed", "standard", "frequent"]
 MediaQuality = Literal["compressed", "standard", "high"]
+MIN_MEDIA_QUOTA_GB = 0.01
+MAX_MEDIA_QUOTA_GB = 10000
+MediaQuota = Annotated[
+    float, Field(ge=MIN_MEDIA_QUOTA_GB, le=MAX_MEDIA_QUOTA_GB, strict=True)
+]
+PremiumMediaQuota = MediaQuota | Literal["unlimited"]
 
 
 class Model(BaseModel):
@@ -121,7 +128,7 @@ class DatabaseDiagnostic(Model):
     resources: list[str]
     upgrades: list[
         Literal[
-            "cpu", "memory", "connections", "storage", "nvme", "nvme_array", "legacy"
+            "cpu", "memory", "connections", "storage", "ssd", "nvme", "nvme_array", "legacy"
         ]
     ]
     limiting: list[str] = Field(default_factory=list)
@@ -322,6 +329,8 @@ class ProductSettings(Model):
     premium_high_quality_media: bool = False
     sync_frequency: SyncFrequency = "standard"
     media_quality: MediaQuality = "standard"
+    media_quota_gb: MediaQuota | None = None
+    premium_media_quota_gb: PremiumMediaQuota | None = None
     north_america: bool = False
 
 
@@ -331,6 +340,8 @@ class SubscriptionTerm(Model):
     price: float
     fast_sync: bool = True
     high_quality_media: bool = False
+    media_quota_gb: PremiumMediaQuota | None = None
+    media_storage_gb: float = Field(default=0, ge=0)
 
 
 class Onboarding(Model):
@@ -427,6 +438,7 @@ class Game(Model):
     regional_campaigns: dict[str, RegionalCampaign] = Field(default_factory=dict)
     premium_quality: float = 0.98
     subscriptions: list[SubscriptionTerm] = Field(default_factory=list)
+    free_media_storage_gb: float | None = Field(default=None, ge=0)
     engineering: dict[str, int] = Field(default_factory=dict)
     autoscaling: dict[NodeId, AutoscaleState] = Field(default_factory=dict)
     migration: ArchitectureMigration | None = None

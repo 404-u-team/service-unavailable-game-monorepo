@@ -36,11 +36,23 @@ class Graph:
     relationships: dict[tuple[str, str], str]
 
     def primaries(self, node_id: str) -> list[str]:
-        return [
-            target
-            for target in self.targets[node_id]
+        return sorted(self.primary_routes(node_id))
+
+    def primary_routes(self, node_id: str) -> dict[str, str]:
+        routes = {
+            target: target for target in self.targets[node_id]
             if self.nodes[target].kind == "database"
-        ]
+        }
+        if self.nodes[node_id].kind == "api":
+            for router in self.targets[node_id]:
+                if self.nodes[router].kind != "shard_router":
+                    continue
+                domain = config(self.nodes[router])["domain"]
+                for primary in self.targets[router]:
+                    node = self.nodes[primary]
+                    if node.kind == "database" and config(node)["domain"] == domain:
+                        routes[primary] = router
+        return routes
 
 
 def inspect_graph(topology: Topology) -> Graph:
@@ -160,13 +172,13 @@ def deployment_warnings(graph: Graph) -> list[str]:
     for node_id in reversed(graph.order):
         kind = graph.nodes[node_id].kind
         if kind == "database" or (
-            kind in {"api", "source", "limiter", "balancer"}
+            kind in {"api", "source", "limiter", "balancer", "shard_router"}
             and any(target in writes for target in graph.targets[node_id])
         ):
             writes.add(node_id)
     if "traffic" not in writes:
         raise RuleError(
-            "Connect traffic to an API server, then connect that API directly to a primary database to handle writes.",
+            "Connect traffic to an API server, then connect it to a primary database or a shard router.",
             code="missing_write_path",
         )
     warnings = []
@@ -193,7 +205,7 @@ def deployment_warnings(graph: Graph) -> list[str]:
             )
         elif node.kind in {"api", "limiter", "balancer"} and node.id not in writes:
             warnings.append(
-                f"{node.name} has no write path. Route traffic to an API with a direct connection to a primary database."
+                f"{node.name} has no write path. Route traffic to an API connected to a primary database or a shard router."
             )
         elif (
             node.kind == "api"
@@ -210,6 +222,12 @@ def deployment_warnings(graph: Graph) -> list[str]:
             graph.nodes[t].kind == "database" for t in graph.targets[node.id]
         ):
             warnings.append(f"{node.name} needs a connection to a primary database.")
+        elif node.kind == "cache" and not any(
+            graph.nodes[t].kind in {"database", "replica"} for t in graph.targets[node.id]
+        ):
+            warnings.append(
+                f"{node.name} cannot serve cache misses without a data connection."
+            )
         elif node.kind == "queue" and not any(
             graph.nodes[t].kind == "worker" for t in graph.targets[node.id]
         ):

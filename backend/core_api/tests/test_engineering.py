@@ -7,6 +7,7 @@ from src.services.games import (
     develop_research,
     edit_draft,
     open_draft,
+    prepare_sharding,
     research_state,
     review,
     view,
@@ -121,7 +122,7 @@ class EngineeringTests(TestCase):
             architecture_errors(micro, inspect_graph(micro.production)), []
         )
 
-    def test_mixed_universal_specialized_and_equivalent_pools_do_not_duplicate_demand(
+    def test_legacy_mixed_api_roles_do_not_duplicate_demand(
         self,
     ):
         game = specialized()
@@ -179,7 +180,7 @@ class EngineeringTests(TestCase):
             if (e.source, e.target) != ("edge", "accounts")
         ]
         self.assertIn(
-            "A required operation has no connected API service. Add a capable API or a Universal API.",
+            "A required operation has no connected API service. Connect an API that handles this operation.",
             architecture_errors(game, inspect_graph(game.production)),
         )
 
@@ -307,6 +308,9 @@ class EngineeringTests(TestCase):
             game = sharded(count)
             add_node(game, "cache", "cache", memory=64, ttl=3600)
             link(game, "api", "cache")
+            for node in game.production.nodes:
+                if node.config.get("domain") == "Messages":
+                    link(game, "cache", node.id)
             snapshots.append(evaluate(game, load_scale=28).snapshot)
         self.assertLess(snapshots[0].metrics.availability, 0.9)
         self.assertLess(snapshots[1].metrics.availability, 0.99)
@@ -320,12 +324,137 @@ class EngineeringTests(TestCase):
             ),
         )
 
+    def test_cache_on_shared_primary_cannot_serve_message_domain(self):
+        game = fixture()
+        unlock(game)
+        add_node(game, "messages-db", "database", domain="Messages")
+        add_node(game, "cache", "cache")
+        link(game, "api", "messages-db")
+        link(game, "api", "cache")
+        link(game, "cache", "db")
+        monitor(game, "api", "cache", "messages-db")
+        snapshot = evaluate(game).snapshot
+        traffic = {(edge.source, edge.target): edge.operations for edge in snapshot.traffic}
+        self.assertNotIn(("api", "cache"), traffic)
+        self.assertEqual(snapshot.components["cache"].cache_hit, 0)
+        for op in ("history", "conversations"):
+            self.assertAlmostEqual(traffic["api", "messages-db"][op], snapshot.demand[op])
+
+    def test_cache_covers_only_the_shard_owned_by_its_replica(self):
+        game = sharded(2)
+        add_node(game, "cache", "cache", scope="History only", ttl=3600)
+        add_node(game, "reader", "replica")
+        link(game, "api", "cache")
+        link(game, "cache", "reader")
+        link(game, "reader", "db")
+        for node in ("cache", "reader"):
+            link(game, node, "telemetry")
+        snapshot = evaluate(game).snapshot
+        traffic = {(edge.source, edge.target): edge.operations for edge in snapshot.traffic}
+        cached = traffic["api", "cache"]["history"]
+        other = traffic["api", "shard-1"]["history"]
+        self.assertAlmostEqual(cached + other, snapshot.demand["history"])
+        self.assertEqual(set(traffic["api", "cache"]), {"history"})
+        hit = snapshot.components["cache"].cache_hit
+        self.assertGreater(hit, 0)
+        self.assertAlmostEqual(traffic["cache", "reader"]["history"], cached * (1 - hit))
+        self.assertAlmostEqual(
+            snapshot.components["api"].completed_operations["history"], snapshot.demand["history"]
+        )
+
+    def test_draft_can_stage_both_switches_and_deploy_only_consistent_modes(self):
+        game = fixture()
+        unlock(game)
+        open_draft(game, game.revision)
+        staged = specialized()
+        add_node(staged, "unused-api", "api")
+        add_node(staged, "messages-db", "database", domain="Messages")
+        edit_draft(game, game.revision, staged.production)
+        issues = review(game, game.revision).errors
+        self.assertIn("Use either shared databases or domain databases throughout the topology.", issues)
+        self.assertIn("Use either Universal APIs or specialized APIs throughout the topology.", issues)
+        with self.assertRaises(RuleError):
+            deploy(game, game.revision, uuid4())
+        self.assertIsNone(game.migration)
+        self.assertEqual(component(game, "db").config.get("domain", "Shared"), "Shared")
+        _, legacy = export_file(staged)
+        self.assertEqual(parse_save_file(legacy.model_dump_json().encode()).game.production, staged.production)
+        edit_draft(game, game.revision, specialized().production)
+        result = review(game, game.revision)
+        self.assertEqual(result.errors, [])
+        deploy(game, game.revision, uuid4())
+        advance(game, result.migration_ticks)
+        self.assertEqual(component(game, "api").config["role"], "Messages")
+
     def test_migration_keeps_explicit_domain_volumes(self):
         game = sharded(2)
         game.storage = {"db": 8, "shard-1": 4, "accounts-db": 3}
         result = migrated_storage(game, sharded(1).production)
         self.assertAlmostEqual(result["accounts-db"], 3)
         self.assertAlmostEqual(result["db"], 12)
+
+    def test_prepare_sharding_splits_shared_data_and_routes_queries_after_copy(self):
+        game = fixture()
+        monitor(game, "api", "db")
+        before = game.production.model_copy(deep=True)
+        with self.assertRaisesRegex(RuleError, "Complete Database Sharding"):
+            prepare_sharding(game, game.revision, "db")
+        self.assertIsNone(game.draft)
+        unlock(game)
+        prepare_sharding(game, game.revision, "db")
+        self.assertEqual(game.production, before)
+        router = next(node for node in game.draft.nodes if node.kind == "shard_router")
+        self.assertEqual(router.config["domain"], "Messages")
+        graph = inspect_graph(game.draft)
+        shards = graph.primaries(router.id)
+        self.assertEqual(len(shards), 2)
+        self.assertEqual(len(graph.primaries("api")), 3)
+        self.assertNotIn("db", graph.targets["api"])
+
+        game.draft.edges.append(Edge(source=router.id, target="telemetry"))
+        for shard in shards:
+            if shard != "db":
+                game.draft.edges.append(Edge(source=shard, target="telemetry"))
+        result = review(game, game.revision)
+        self.assertEqual(result.errors, [])
+        self.assertGreater(result.migration_cost, 0)
+        deploy(game, game.revision, uuid4())
+        self.assertEqual(game.production, before)
+        _, pending = export_file(game)
+        self.assertEqual(parse_save_file(pending.model_dump_json().encode()).game, game)
+        advance(game, result.migration_ticks)
+        self.assertIsNone(game.migration)
+        self.assertGreaterEqual(sum(game.storage.values()), 2)
+        snapshot = evaluate(game).snapshot
+        traffic = {(edge.source, edge.target): edge.operations for edge in snapshot.traffic}
+        self.assertEqual(set(traffic["api", router.id]), {"send", "history", "conversations"})
+        self.assertAlmostEqual(
+            sum(traffic[router.id, shard]["send"] for shard in shards),
+            traffic["api", router.id]["send"],
+        )
+        self.assertTrue(all(game.storage[shard] > 0 for shard in shards))
+        self.assertEqual(snapshot.components[router.id].data_domain, "Messages")
+
+    def test_shard_router_blocks_deployment_with_wrong_partition_or_direct_link(self):
+        game = fixture()
+        unlock(game)
+        prepare_sharding(game, game.revision, "db")
+        game.draft.edges.append(Edge(source="api", target="db"))
+        db = next(node for node in game.draft.nodes if node.id == "db")
+        db.config["partition"] = "Independent"
+        result = review(game, game.revision)
+        self.assertIn("Connect each shard router to at least two primary partitions of its data domain.", result.errors)
+        self.assertIn("Connect each API to one shard router per domain and remove its direct links to that domain's primaries.", result.errors)
+
+    def test_sharding_upgrades_a_legacy_shared_database_with_one_remaining_domain(self):
+        game = fixture()
+        unlock(game)
+        add_node(game, "messages-db", "database", domain="Messages")
+        link(game, "api", "messages-db")
+        prepare_sharding(game, game.revision, "messages-db")
+        self.assertEqual(review(game, game.revision).errors, [])
+        remaining = next(node for node in game.draft.nodes if node.id == "db")
+        self.assertEqual(remaining.config["domain"], "Accounts")
 
     def test_query_plan_changes_only_eligible_work_and_increases_index_writes(self):
         game = fixture()

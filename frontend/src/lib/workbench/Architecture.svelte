@@ -23,7 +23,7 @@
   import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory } from './connections';
   import { componentIcon, statusLabel } from '../labels';
   import { ms, num, pct, preciseMoney, rps } from '../format';
-  import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
+  import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, PrepareSharding, Review, Setting, Topology } from '../types';
 
   let { game, catalog, act, busy, error, tutorial, tutorialSelect, tutorialLink, tutorialState, tutorialEvent, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
@@ -83,6 +83,7 @@
   let editError = $state('');
   let localRevision = -1;
   let editingDraft = false;
+  const canShard = $derived(game.engineering.some((item) => item.id === 'sharding' && item.state === 'completed'));
   let canvas: HTMLDivElement | undefined = $state();
   let placement = $state.raw<CanvasTools>();
   const bindPlacement = (tools?: typeof placement) => { placement = tools; };
@@ -378,11 +379,28 @@
     const result = await act('/draft', { revision: state.revision, topology: after }, 'PUT');
     editingDraft = false;
     if (!result) return false;
+    recordTopologyEdit(before, result);
+    return true;
+  }
+
+  function recordTopologyEdit(before: Topology, result: Game) {
     localRevision = result.revision;
     lastEdit = 'topology';
     history = [...history, before].slice(-50);
     future = [];
-    return true;
+  }
+
+  async function prepareSharding(primary: string) {
+    const before = game.draft ?? game.production;
+    const body: PrepareSharding = { revision: game.revision, primary };
+    editingDraft = true;
+    const result = await act('/draft/sharding', body);
+    editingDraft = false;
+    if (!result?.draft) return;
+    showProduction = false;
+    recordTopologyEdit(before, result);
+    await tick();
+    await inspectReview();
   }
 
   async function undo(redo = false) {
@@ -506,7 +524,7 @@
   async function finish(deploy: boolean) {
     const result = await act(deploy ? '/deployments' : '/draft/discard', { revision: review?.revision ?? game.revision });
     if (result) {
-      deployed = deploy ? result.deployments[0] : undefined;
+      deployed = deploy && !result.migration ? result.deployments[0] : undefined;
       dialog = deployed?.comparison ? 'deployed' : undefined;
       history = [];
       future = [];
@@ -581,9 +599,11 @@
         {#each matches as kind}
           {@const Icon = componentIcon[kind]}
           <div class="catalog-row">
-            <Button class="catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined} disabled={busy} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
+            <Button class="catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined}
+              disabled={busy || (kind === 'shard_router' && !canShard)} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
             <Tooltip label={t("About {0}", [t(catalog.components[kind].name)])}
-              text={t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
+              text={kind === 'shard_router' && !canShard ? t('Complete Database Sharding research before using a shard router.')
+                : t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
               onclick={() => { helpKind = kind; referenceReturn = 'catalog'; changeDialog('reference'); }} />
           </div>
         {/each}
@@ -657,8 +677,10 @@
         <Button variant="danger" href={guideHref.replace('view=guide', 'view=events') + (incident ? `&event=${encodeURIComponent(incident.id)}` : '')}>{t('View incident history')}</Button>
       {/if}
       {#if active.kind === 'api'}
-        {@const primaries = topology.nodes.filter((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
-        <p class="muted">{primaries.length ? t('Primary database: {0}', [primaries.map((node) => t(node.name)).join(', ')]) : t('Connect this API to the shared primary database.')}</p>
+        {@const dataLinks = topology.nodes.filter((node) => ['database', 'shard_router'].includes(node.kind) && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
+        <p class="muted">{dataLinks.length
+          ? t(dataLinks.some((node) => node.kind === 'shard_router') ? 'Data connections: {0}' : 'Primary database: {0}', [dataLinks.map((node) => t(node.name)).join(', ')])
+          : t('Connect this API to a primary database or a shard router.')}</p>
         {#if metric?.active_instances != null && metric.active_instances < liveInstances}
           <Alert tone="warning" title={t('{0} of {1} instances are serving.', [metric.active_instances, liveInstances])}>
             <a class="inspector-help" href={guideHref.replace('view=guide', 'view=events')}>{t('View incident history')}</a>
@@ -674,6 +696,21 @@
         </div>
       {/if}
       {#if inspectorTab === 'configuration'}
+        {#if active.kind === 'database' && activeConfig?.partition !== 'Partition'}
+          <section class="inspector-section stack">
+            <h3>{t('Database Sharding')}</h3>
+            <p class="muted">{canShard
+              ? t('Prepare a draft with two shards and a router. Review costs and data migration before deploying.')
+              : t('Complete Database Sharding research before using a shard router.')}</p>
+            {#if canShard && activeConfig?.domain === 'Shared'}
+              <p class="muted">{t('A shared database is also split into the data domains it currently serves.')}</p>
+            {/if}
+            {#if canShard}
+              <Button disabled={busy || !!game.migration} onclick={() => active && prepareSharding(active.id)}>{t('Prepare sharding')}</Button>
+            {/if}
+            <a class="inspector-help" href={guideArticleHref(guideHref, 'database-sharding')}>{t('Sharding guide')}</a>
+          </section>
+        {/if}
         {#if active.kind === 'api' && activeConfig}
           <div class="stack" data-tutorial={active.id === guideApi ? guideTarget.capacity : undefined}>
             <div><p class="eyebrow">{t("Instance size")}</p><Button block class="instance" disabled={busy} onclick={configure}>{activeConfig.cpu} {t("vCPU /")} {activeConfig.memory} {t("GB")} <ChevronRight size={15} /></Button></div>
@@ -1048,7 +1085,7 @@
     {#snippet footer()}
       <div class="row spread wrap"><Button onclick={() => dialog = undefined}>{t("Back to draft")}</Button>
         <Button variant="primary" data-tutorial={guideTarget.deploy} disabled={busy || !review || review.errors.length > 0 || !Object.values(review.changes).some((items) => items.length)}
-          onclick={() => finish(true)}>{t("Deploy changes")} <ArrowRight size={15} /></Button>
+          onclick={() => finish(true)}>{t(review?.migration_ticks ? "Start migration" : "Deploy changes")} <ArrowRight size={15} /></Button>
       </div>
     {/snippet}
   </Modal>

@@ -5,13 +5,12 @@ from math import exp, prod
 from src.simulation.catalog import (
     FEATURES,
     MEDIA_OPERATIONS,
-    MEDIA_QUALITY,
     MINUTES_PER_TICK,
     OPERATIONS,
     topic_accepts,
 )
 from src.simulation.database import WARNING, DatabaseLoad
-from src.simulation.demand import active_incidents, product_settings, workload
+from src.simulation.demand import active_incidents, workload
 from src.simulation.engineering import (
     DOMAINS,
     data_targets,
@@ -49,6 +48,7 @@ class Evaluation:
     snapshot: Snapshot
     queues: dict[str, float] = field(default_factory=dict)
     storage: dict[str, float] = field(default_factory=dict)
+    media_storage: tuple[float, ...] = ()
     replication: dict[str, float] = field(default_factory=dict)
     daily_active_users: float = 0
     ad_impressions_per_second: float = 0
@@ -73,24 +73,16 @@ def evaluate(
 ) -> Evaluation:
     topology = topology or game.production
     graph = inspect_graph(topology)
-    activity = workload(game, audience, boost, overview=overview)
+    activity = workload(game, audience, boost, overview=overview, load_scale=load_scale)
     workloads = {key: rate * load_scale for key, rate in activity.operations.items()}
-    media = MEDIA_QUALITY[product_settings(game).media_quality]
-    premium_media_users = sum(
-        term.subscribers for term in game.subscriptions if term.high_quality_media
-    )
+    media = activity.media
     population = game.audience if audience is None else audience
-    media_share = min(1, premium_media_users / max(1, population))
-    # Subscribers generate the same media requests with a different payload and encoding cost.
-    high_quality = MEDIA_QUALITY["high"]
-    media_size = media["size"] + media_share * (high_quality["size"] - media["size"])
-    media_cpu = media["cpu"] + media_share * (high_quality["cpu"] - media["cpu"])
     operations = {
         key: {
             **operation,
-            "cpu": operation["cpu"] * media_cpu,
-            "mb": operation["mb"] * media_size,
-            "storage": operation["storage"] * media_size,
+            "cpu": operation["cpu"] * media.cpu_factor,
+            "mb": operation["mb"] * media.size_factor,
+            "storage": operation["storage"] * media.size_factor,
         }
         if key in MEDIA_OPERATIONS
         else operation
@@ -139,11 +131,13 @@ def evaluate(
     completed: dict[tuple[str, str], Batch] = {}
     queues = {}
     storage = dict(game.storage)
+    media_written = 0.0
     replication = {}
     committed_writes: dict[str, float] = defaultdict(float)
     identity_routes = {}
     identity_sent = defaultdict(float)
     shard_shares = {}
+    routed_partitions: dict[tuple[str, str, str], dict[str, float]] = defaultdict(dict)
     rejected = 0.0
     seconds = MINUTES_PER_TICK * 60
 
@@ -203,7 +197,7 @@ def evaluate(
     primary_for = {
         node.id: next(iter(graph.primaries(node.id)), None)
         for node in topology.nodes
-        if node.kind in {"api", "replica"}
+        if node.kind == "replica"
     }
 
     followers: dict[str, int] = defaultdict(int)
@@ -211,7 +205,7 @@ def evaluate(
         if primary and graph.nodes[node_id].kind == "replica" and not failures[node_id]:
             followers[primary] += 1
 
-    def read_targets(api: str, source: str, op: str, primary: str) -> list[str]:
+    def read_targets(source: str, primary: str) -> list[str]:
         return [
             target
             for target in graph.targets[source]
@@ -225,16 +219,17 @@ def evaluate(
 
     def route_data(
         api: str,
-        source: str,
-        key: tuple,
+        key: tuple[str, str],
         rate: float,
         latency: float,
         *,
         reads: bool = False,
-    ):
-        primaries = data_targets(graph, api, key[0])
+    ) -> None:
+        op, origin = key
+        primaries = data_targets(graph, api, op)
         if not primaries:
             return
+        routes = graph.primary_routes(api)
         weights = (
             partition_weights(DOMAINS[key[0]], primaries)
             if len(primaries) > 1
@@ -243,28 +238,52 @@ def evaluate(
         for primary, weight in zip(primaries, weights):
             if len(primaries) > 1:
                 shard_shares[primary] = weight
-            destinations = (
-                read_targets(api, source, key[0], primary) if reads else [primary]
+            partition_rate = rate * weight
+            partition_latency = latency + (
+                4 + len(primaries) if len(primaries) > 1 else 0
             )
-            if "search_index" in enforced.get(key[0], ()):
-                destinations = [
-                    p
-                    for p in destinations
-                    if settings[p].get("search_index") == "Enabled"
+            if reads:
+                caches = [
+                    target
+                    for target in graph.targets[api]
+                    if graph.nodes[target].kind == "cache"
+                    and (settings[target]["scope"] == "All reads" or op == "history")
+                    and read_targets(target, primary)
                 ]
+                if caches:
+                    for cache in caches:
+                        partitions = routed_partitions[cache, op, origin]
+                        partitions[primary] = (
+                            partitions.get(primary, 0) + partition_rate / len(caches)
+                        )
+                    forward(api, caches, key, partition_rate, partition_latency)
+                    continue
+            if (
+                "search_index" in enforced.get(op, ())
+                and settings[primary].get("search_index") != "Enabled"
+            ):
+                continue
+            route = routes[primary]
+            destinations = read_targets(api, primary) if reads else [route]
+            if route != primary:
+                if reads:
+                    destinations.append(route)
+                partitions = routed_partitions[route, op, origin]
+                partitions[primary] = (
+                    partitions.get(primary, 0) + partition_rate / len(destinations)
+                )
             forward(
-                source,
+                api,
                 destinations,
                 key,
-                rate * weight,
-                latency + (4 + len(primaries) if len(primaries) > 1 else 0),
+                partition_rate,
+                partition_latency,
             )
 
     for op, rate in workloads.items():
         add(incoming["traffic"], (op, ""), rate, 18)
 
-    # Cache misses can return to the originating API's data connections, so
-    # evaluate all caches before their possible read destinations.
+    # Process primaries before replicas so replicas can replay this step's writes.
     data_order = {"database": 1, "replica": 2}
     for node_id in sorted(
         graph.order, key=lambda item: data_order.get(graph.nodes[item].kind, 0)
@@ -282,9 +301,6 @@ def evaluate(
         ]
         cohorts = incoming[node_id]
         rate = sum(batch.rate for batch in cohorts.values())
-        by_kind = defaultdict(list)
-        for target in targets:
-            by_kind[graph.nodes[target].kind].append(target)
 
         def load(
             field: str,
@@ -352,6 +368,10 @@ def evaluate(
                 "Connections": load("connections") / cfg["connections"],
                 "Network": load("mb") / cfg["network"],
             }
+            base = 3
+        elif kind == "shard_router":
+            usage = {"Routing capacity": rate / cfg["routing_capacity"]}
+            details["data_domain"] = cfg["domain"]
             base = 3
         elif kind in {"database", "replica"}:
             primary = primary_for[node_id] if kind == "replica" else None
@@ -478,10 +498,10 @@ def evaluate(
                 add(completed, key, accepted, total_latency)
                 if kind == "database":
                     committed_writes[node_id] += accepted * operation["write"]
-                    storage[node_id] = (
-                        storage.get(node_id, 0)
-                        + accepted * operation["storage"] * seconds
-                    )
+                    written = accepted * operation["storage"] * seconds
+                    storage[node_id] = storage.get(node_id, 0) + written
+                    if op in MEDIA_OPERATIONS:
+                        media_written += written
             elif kind == "api":
                 key = (op, node_id)
                 if not supports(node, op):
@@ -499,45 +519,32 @@ def evaluate(
                         node_id, accounts, ("identity", node_id), accepted * 0.02, 0
                     )
                 if operation["write"] or "search_index" in enforced.get(op, ()):
-                    route_data(node_id, node_id, key, accepted, total_latency)
+                    route_data(node_id, key, accepted, total_latency)
                 elif operation["read"]:
-                    if by_kind["cache"]:
-                        forward(node_id, by_kind["cache"], key, accepted, total_latency)
-                    else:
-                        route_data(
-                            node_id, node_id, key, accepted, total_latency, reads=True
-                        )
+                    route_data(node_id, key, accepted, total_latency, reads=True)
                 else:
                     add(completed, key, accepted, total_latency)
             elif kind == "cache":
-                if cfg["scope"] == "All reads" or op == "history":
-                    users = audience if audience is not None else game.audience
-                    working_set = max(1, users / 6000)
-                    hit = min(
-                        0.91,
-                        (0.25 + 0.65 * (1 - exp(-cfg["ttl"] / 150)))
-                        * min(1, cfg["memory"] / working_set)
-                        * (1.10 if cfg["policy"] == "LFU" else 1),
-                    )
-                else:
-                    hit = 0
-                primaries = data_targets(graph, origin, op)
-                cache_data = any(
-                    read_targets(origin, node_id, op, p) for p in primaries
+                working_set = max(1, population / 6000)
+                hit = min(
+                    0.91,
+                    (0.25 + 0.65 * (1 - exp(-cfg["ttl"] / 150)))
+                    * min(1, cfg["memory"] / working_set)
+                    * (1.10 if cfg["policy"] == "LFU" else 1),
                 )
-                fallback = any(read_targets(origin, origin, op, p) for p in primaries)
-                if not cache_data and not fallback:
-                    hit = 0
                 cache_hits += accepted * hit
                 add(completed, key, accepted * hit, total_latency)
-                route_data(
-                    origin,
-                    node_id if cache_data else origin,
-                    key,
-                    accepted * (1 - hit),
-                    total_latency,
-                    reads=True,
-                )
+                for primary, rate in routed_partitions[node_id, op, origin].items():
+                    forward(
+                        node_id,
+                        read_targets(node_id, primary),
+                        key,
+                        rate * share * (1 - hit),
+                        total_latency,
+                    )
+            elif kind == "shard_router":
+                for primary, rate in routed_partitions[node_id, op, origin].items():
+                    forward(node_id, [primary], key, rate * share, total_latency)
             elif kind == "balancer":
                 routed = [
                     target
@@ -859,6 +866,12 @@ def evaluate(
         snapshot=snapshot,
         queues=queues,
         storage=storage,
+        media_storage=tuple(
+            stored + media_written * media.storage_shares[index]
+            if media.storage_shares
+            else stored
+            for index, stored in enumerate(media.stored)
+        ),
         replication=replication,
         daily_active_users=activity.active_users,
         ad_impressions_per_second=ad_success * rollout,

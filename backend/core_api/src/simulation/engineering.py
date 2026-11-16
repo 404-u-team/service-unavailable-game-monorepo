@@ -1,4 +1,4 @@
-"""Architectural capabilities; request rates remain owned by demand.workload.
+"""Architectural capabilities and topology changes.
 
 Domains partition existing operations, never multiply external traffic. Conversation
 partitions use 128 stable virtual keys with a 12% hot conversation cohort.
@@ -7,9 +7,12 @@ partitions use 128 stable virtual keys with a 12% hot conversation cohort.
 from collections import defaultdict
 from hashlib import sha256
 from math import ceil
+from uuid import uuid4
 
-from src.simulation.models import Game, Topology
-from src.simulation.topology import Graph, RuleError, config, daily_cost
+from pydantic import ValidationError
+
+from src.simulation.models import Edge, Game, Kind, Node, Position, Setting, Topology
+from src.simulation.topology import Graph, RuleError, config, daily_cost, inspect_graph
 
 RESEARCH = {
     "decomposition": {
@@ -51,7 +54,7 @@ RESEARCH = {
         "duration": 96,
         "prereq": ["domains"],
         "description": "Partition one logical data domain across finite independent primaries.",
-        "unlocks": "Partition membership on primary databases.",
+        "unlocks": "Shard routers and partition membership on primary databases.",
         "advantages": "Spread reads and writes beyond one primary's resource ceiling.",
         "tradeoffs": "Routing adds compute and latency. Hot conversations, partial failures and paid rebalancing remain.",
         "guide": "database-sharding",
@@ -140,12 +143,31 @@ def request_apis(graph: Graph) -> set[str]:
     return {n for n in reachable if graph.nodes[n].kind == "api"}
 
 
+def specialization_errors(graph: Graph) -> list[str]:
+    domains = {
+        config(n)["domain"] for n in graph.nodes.values() if n.kind == "database"
+    }
+    roles = {config(n)["role"] for n in graph.nodes.values() if n.kind == "api"}
+    errors = []
+    if "Shared" in domains and len(domains) > 1:
+        errors.append(
+            "Use either shared databases or domain databases throughout the topology."
+        )
+    if "Universal" in roles and len(roles) > 1:
+        errors.append(
+            "Use either Universal APIs or specialized APIs throughout the topology."
+        )
+    return errors
+
+
 def architecture_errors(
     game: Game, graph: Graph, *, partial: bool = False
 ) -> list[str]:
     errors = []
     for node in graph.nodes.values():
         cfg = config(node)
+        if node.kind == "shard_router" and not researched(game, "sharding"):
+            errors.append("Complete Database Sharding research before using a shard router.")
         for field, key, default in (
             ("role", "decomposition", "Universal"),
             ("domain", "domains", "Shared"),
@@ -168,9 +190,35 @@ def architecture_errors(
             errors.append("Autoscaling minimum must not exceed its maximum.")
     if partial:
         return list(dict.fromkeys(errors))
+    for node in graph.nodes.values():
+        if node.kind == "shard_router":
+            primaries = [graph.nodes[p] for p in graph.primaries(node.id)]
+            if len(primaries) < 2 or any(
+                config(primary)["partition"] != "Partition"
+                or config(primary)["domain"] != config(node)["domain"]
+                for primary in primaries
+            ):
+                errors.append(
+                    "Connect each shard router to at least two primary partitions of its data domain."
+                )
+        elif node.kind == "api":
+            router_domains = [
+                config(graph.nodes[t])["domain"]
+                for t in graph.targets[node.id]
+                if graph.nodes[t].kind == "shard_router"
+            ]
+            if len(router_domains) != len(set(router_domains)) or any(
+                graph.nodes[t].kind == "database"
+                and config(graph.nodes[t])["domain"] in router_domains
+                for t in graph.targets[node.id]
+            ):
+                errors.append(
+                    "Connect each API to one shard router per domain and "
+                    "remove its direct links to that domain's primaries."
+                )
     from src.simulation.demand import workload
 
-    operations = workload(game).operations
+    operations = workload(game, enforce_media_quota=False).operations
     apis = [graph.nodes[n] for n in sorted(request_apis(graph))]
     owners = defaultdict(set)
     for op, rate in operations.items():
@@ -179,7 +227,7 @@ def architecture_errors(
         capable = [n for n in apis if supports(n, op)]
         if not capable:
             errors.append(
-                "A required operation has no connected API service. Add a capable API or a Universal API."
+                "A required operation has no connected API service. Connect an API that handles this operation."
             )
         for api in capable:
             primaries = data_targets(graph, api.id, op)
@@ -234,8 +282,6 @@ def architecture_errors(
 
 
 def ownership(topology: Topology) -> dict[str, tuple[str, ...]]:
-    from src.simulation.topology import inspect_graph
-
     graph = inspect_graph(topology)
     return {
         domain: tuple(
@@ -252,6 +298,122 @@ def ownership(topology: Topology) -> dict[str, tuple[str, ...]]:
         )
         for domain in sorted(set(DOMAINS.values()))
     }
+
+
+def sharding_topology(game: Game, topology: Topology, primary_id: str) -> Topology:
+    if not researched(game, "sharding"):
+        raise RuleError(
+            "Complete Database Sharding research before using a shard router."
+        )
+    graph = inspect_graph(topology)
+    primary = graph.nodes.get(primary_id)
+    if (
+        primary is None
+        or primary.kind != "database"
+        or config(primary)["partition"] != "Independent"
+    ):
+        raise RuleError(
+            "Select an independent primary database to prepare sharding."
+        )
+    current_domain = config(primary)["domain"]
+    relevant = set(data_growth_by_domain(game))
+    owners = {
+        node.id: {
+            domain: data_targets(graph, node.id, op)
+            for op, domain in DOMAINS.items()
+            if domain in relevant and supports(node, op)
+        }
+        for node in graph.nodes.values()
+        if node.kind == "api"
+    }
+    apis = {
+        api: (
+            {domain for domain, links in routes.items() if primary_id in links}
+            if current_domain == "Shared"
+            else {current_domain}
+        )
+        for api, routes in owners.items()
+        if primary_id in graph.targets[api]
+    }
+    domains = set().union(*apis.values())
+    if not domains:
+        raise RuleError(
+            "Connect an API that uses this database before preparing sharding."
+        )
+    domain = min(domains, key=lambda name: (name != "Messages", name))
+    nodes = [node.model_copy(deep=True) for node in topology.nodes]
+    original = next(node for node in nodes if node.id == primary_id)
+    original.config.update(domain=domain, partition="Partition")
+    if current_domain == "Shared" and "Search" in domains - {domain}:
+        original.config["search_index"] = "Disabled"
+    # Legacy mixed topologies can already use a Shared primary for just one domain.
+    for node in nodes:
+        if node.kind != "database" or config(node)["domain"] != "Shared":
+            continue
+        assigned = {
+            name
+            for routes in owners.values()
+            for name, targets in routes.items()
+            if node.id in targets
+        }
+        if len(assigned) == 1:
+            node.config["domain"] = assigned.pop()
+
+    anchor = game.diagram.positions.get(primary_id, primary.position)
+    occupied = [game.diagram.positions.get(node.id, node.position) for node in nodes]
+
+    def add(kind: Kind, name: str, settings: dict[str, Setting]) -> Node:
+        # Seed positions only for new nodes. Existing diagram edits stay independent.
+        direction = 1 if anchor.x < 99_000 else -1
+        vertical = 1 if anchor.y < 85_000 else -1
+        x = anchor.x + 235 * direction
+        y = anchor.y + 140 * vertical
+        while any(
+            abs(point.x - x) < 175 and abs(point.y - y) < 115 for point in occupied
+        ):
+            y += 140 * vertical
+        position = Position(x=x, y=y)
+        node = Node(
+            id=str(uuid4()), kind=kind, name=name, position=position, config=settings
+        )
+        nodes.append(node)
+        occupied.append(position)
+        return node
+
+    router = add("shard_router", "Shard router", {"domain": domain})
+    second = add("database", "Second shard", original.config.copy())
+    extra = {
+        name: add(
+            "database",
+            f"{name} database",
+            {**primary.config, "domain": name, "partition": "Independent"},
+        )
+        for name in sorted(domains - {domain})
+    }
+    edges = [
+        edge
+        for edge in topology.edges
+        if not (edge.source in apis and edge.target == primary_id)
+    ]
+    edges.extend(
+        Edge(source=router.id, target=target) for target in (primary_id, second.id)
+    )
+    for api, assigned in apis.items():
+        for name in sorted(assigned):
+            target = router if name == domain else extra[name]
+            edges.append(Edge(source=api, target=target.id))
+    for node in topology.nodes:
+        if node.kind == "cache" and primary_id in graph.targets[node.id]:
+            edges.extend(
+                Edge(source=node.id, target=target.id)
+                for target in (second, *extra.values())
+            )
+    try:
+        return Topology(nodes=nodes, edges=edges)
+    except ValidationError as error:
+        raise RuleError(
+            "The draft has no room for the additional sharding components or connections."
+        ) from error
 
 
 def migration_plan(game: Game, topology: Topology) -> tuple[int, float]:
@@ -276,26 +438,30 @@ def migration_plan(game: Game, topology: Topology) -> tuple[int, float]:
     return duration, cost
 
 
-def migrated_storage(
-    game: Game, topology: Topology, *, validate: bool = True
-) -> dict[str, float]:
-    """Conserve stored GB using modeled data growth to apportion legacy shared data."""
+def data_growth_by_domain(game: Game) -> dict[str, float]:
     from src.simulation.catalog import FEATURES, OPERATIONS, SCENARIOS
 
-    before, after = ownership(game.production), ownership(topology)
-    old_nodes = {n.id: n for n in game.production.nodes}
-    new_nodes = {n.id: n for n in topology.nodes}
     operations = set(SCENARIOS[game.scenario]["operations"]) | {
         FEATURES[f]["operation"] for f in game.released if FEATURES[f]["operation"]
     }
     growth = defaultdict(float)
-    # Disabled features keep their data. Explicit domains retain their own GB;
-    # only legacy Shared data needs an aggregate allocation assumption.
+    # Disabled features retain their data.
     for op in sorted(operations):
         operation = OPERATIONS[op]
         growth[DOMAINS[op]] += operation["rate"] * max(
             operation["storage"], operation["write"] * 0.00000001
         )
+    return growth
+
+
+def migrated_storage(
+    game: Game, topology: Topology, *, validate: bool = True
+) -> dict[str, float]:
+    """Conserve stored GB using modeled data growth to apportion legacy shared data."""
+    before, after = ownership(game.production), ownership(topology)
+    old_nodes = {n.id: n for n in game.production.nodes}
+    new_nodes = {n.id: n for n in topology.nodes}
+    growth = data_growth_by_domain(game)
     volumes = defaultdict(float)
     result = defaultdict(float)
     for primary, stored in sorted(game.storage.items()):

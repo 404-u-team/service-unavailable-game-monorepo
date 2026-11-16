@@ -316,7 +316,11 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 422)
 
     def test_premium_media_setting_requires_release_and_round_trips(self):
-        product = self.game["product"] | {"premium_high_quality_media": True}
+        product = self.game["product"] | {
+            "premium_high_quality_media": True,
+            "media_quota_gb": 0.25,
+            "premium_media_quota_gb": "unlimited",
+        }
         status, _ = call(
             self.client, self.path + "/product", "PUT", action(product=product)
         )
@@ -333,6 +337,11 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 200, updated)
         self.assertTrue(updated["product"]["premium_high_quality_media"])
         self.assertEqual(call(self.client, path)[1]["product"], product)
+        for invalid in ({"media_quota_gb": -1}, {"premium_media_quota_gb": "5"}):
+            status, _ = call(
+                self.client, path + "/product", "PUT", action(product=product | invalid)
+            )
+            self.assertEqual(status, 422)
 
     def test_catalog_difficulty_profiles_match_new_games(self):
         status, catalog = call(self.client, "/catalog")

@@ -366,7 +366,10 @@
     <div class="main-area">
       {#if game.migration}
         <div class="migration"><Alert tone="warning" title={t('Architecture migration')}>
-          {t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])}
+          <div class="row spread wrap">
+            <span>{t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])} · {t('Production serves traffic while data is copied.')}</span>
+            {#if game.speed === 0}<Button disabled={busy} onclick={() => speed(1)}>{t('Run migration')}</Button>{/if}
+          </div>
         </Alert></div>
       {/if}
       {#key `${game.id}:${section}`}
@@ -392,7 +395,7 @@
           complete={() => completion = false} />
       {/if}
     </div>
-    <NavTabs class="bottom" variant="dock" data-tutorial-obstruction="bottom"
+    <NavTabs class="mobile-navigation" variant="dock" data-tutorial-obstruction="bottom"
       label={t('Mobile navigation')} items={navItems(mobile, true)} icon={navIcon} />
   {/if}
 </div>
@@ -424,7 +427,7 @@
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
   .migration { margin: 8px 16px 0; }
 
-  .game :global(.bottom) { display: none; }
+  .game > :global(.mobile-navigation) { display: none; }
   @media (max-width: 1120px) {
     .topbar { grid-template-columns: minmax(205px, 1fr) minmax(290px, 1.3fr) auto; padding-inline: 12px; }
 
@@ -442,7 +445,7 @@
     .controls { gap: 3px; }
     .balance strong { font-size: 12px; }
     .main-area { grid-column: 1; }
-    .game :global(.bottom) {
+    .game > :global(.mobile-navigation) {
       position: fixed; inset: auto 0 0; z-index: var(--layer-workbench-navigation); display: flex;
       padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border);
     }

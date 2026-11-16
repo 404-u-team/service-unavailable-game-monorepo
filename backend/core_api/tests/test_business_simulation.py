@@ -209,6 +209,71 @@ class BusinessSimulationTests(TestCase):
         update_subscriptions(game, 1, game.audience)
         self.assertFalse(any(term.high_quality_media for term in game.subscriptions))
 
+    def test_cloud_media_quota_limits_new_writes_for_each_plan(self):
+        game = fixture()
+        game.released.extend(("images", "voice", "files", "premium"))
+        component(game, "api").config.update(
+            cpu=16, memory=32, network=250, connections=5000, concurrency=200
+        )
+        component(game, "db").config.update(
+            cpu=16, memory=32, disk="NVMe", connections=1200, storage=500
+        )
+        game.subscriptions = [
+            SubscriptionTerm(
+                expires=TERM_TICKS, subscribers=game.audience / 4, price=4,
+                media_quota_gb="unlimited", media_storage_gb=21,
+            )
+        ]
+        game.free_media_storage_gb = 63
+        game.storage["db"] = 86
+        baseline = evaluate(game)
+        change_product(game, product_settings(game).model_copy(update={"media_quota_gb": 0.01}))
+        limited = evaluate(game)
+        for op in ("upload", "voice", "files"):
+            self.assertAlmostEqual(limited.snapshot.demand[op], baseline.snapshot.demand[op] / 4)
+        self.assertEqual(limited.snapshot.demand["send"], baseline.snapshot.demand["send"])
+        self.assertEqual(limited.media_storage[0], 63)
+        self.assertGreater(limited.media_storage[1], 21)
+        self.assertGreater(limited.storage["db"], game.storage["db"])
+        self.assertLess(limited.storage["db"], baseline.storage["db"])
+        self.assertEqual(game.subscriptions[0].media_storage_gb, 21)
+
+        game.subscriptions[0].media_quota_gb = 0.02
+        game.subscriptions[0].media_storage_gb = 41.999
+        remaining = evaluate(game, load_scale=2)
+        self.assertAlmostEqual(remaining.media_storage[1], 42)
+        game.subscriptions[0].media_storage_gb = 42
+        full = evaluate(game)
+        self.assertTrue(all(full.snapshot.demand[op] == 0 for op in ("upload", "voice", "files")))
+        self.assertEqual(full.snapshot.metrics.errors, 0)
+        self.assertEqual(full.media_storage, (63, 42))
+
+    def test_cloud_media_benefits_are_booked_at_checkout_and_storage_survives_renewal(self):
+        game = fixture()
+        product = product_settings(game).model_copy(
+            update={"media_quota_gb": 0.01, "premium_media_quota_gb": "unlimited"}
+        )
+        with self.assertRaisesRegex(RuleError, "Release the feature"):
+            change_product(game, product)
+        game.released.extend(("images", "premium"))
+        game.free_media_storage_gb = 80
+        change_product(game, product)
+        game.tick = TICKS_PER_DAY
+        update_subscriptions(game, 1, game.audience)
+        first = game.subscriptions[0]
+        self.assertEqual(first.media_quota_gb, "unlimited")
+        self.assertGreater(first.media_storage_gb, 0)
+        self.assertAlmostEqual(game.free_media_storage_gb + first.media_storage_gb, 80)
+
+        change_product(game, product.model_copy(update={"premium_media_quota_gb": 0.05}))
+        self.assertEqual(first.media_quota_gb, "unlimited")
+        game.tick = first.expires
+        update_subscriptions(game, 1, game.audience)
+        self.assertEqual(game.subscriptions[0].media_quota_gb, 0.05)
+        self.assertAlmostEqual(
+            game.free_media_storage_gb + sum(t.media_storage_gb for t in game.subscriptions), 80
+        )
+
     def test_disabling_preserves_development_and_data_and_respects_dependencies(self):
         game = fixture()
         release(game, "groups")

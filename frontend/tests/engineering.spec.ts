@@ -81,11 +81,13 @@ test('domain, partition, query and autoscaling settings preview and persist inde
   await choose(dialog.getByRole('combobox', { name: 'Data domain', exact: true }), 'Messages');
   await choose(dialog.getByRole('combobox', { name: 'Dataset membership', exact: true }), 'Partition');
   await choose(dialog.getByRole('combobox', { name: 'Query plan', exact: true }), 'History indexes');
+  await choose(dialog.getByRole('combobox', { name: 'Storage type', exact: true }), 'HDD');
+  await expect(dialog.getByText('126 modeled IOPS · 80% of base cost')).toBeVisible();
   await dialog.getByRole('button', { name: 'Save to draft', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   const updated = await (await page.request.get(`/api/games/${game.id}`)).json();
   const changed = updated.draft.nodes.find((n: { id: string }) => n.id === 'db');
-  expect(changed.config).toMatchObject({ domain: 'Messages', partition: 'Partition', query_plan: 'History indexes' });
+  expect(changed.config).toMatchObject({ domain: 'Messages', partition: 'Partition', query_plan: 'History indexes', disk: 'HDD' });
   expect(updated.production).toEqual(game.production);
   await page.goto(`/game/${game.id}?view=build&component=api&configure=1`);
   await expect(dialog.getByText('Eligible demand before routing', { exact: true })).toBeVisible();
@@ -108,4 +110,28 @@ test('covered services expose operation, domain and cost telemetry', async ({ pa
   await expect(telemetry).toContainText('Chat history');
   await expect(telemetry).toContainText('Shared');
   await expect(telemetry).toContainText('per day');
+});
+
+test('sharding prepares a router and two partitions and switches production after copying', async ({ page }) => {
+  const game = await preparedGame(page, true);
+  await page.goto(`/game/${game.id}?view=build&component=db`);
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+  await inspector.getByRole('button', { name: 'Prepare sharding' }).click();
+  const review = page.getByRole('dialog', { name: 'Deployment review' });
+  await expect(review.getByText(/Migration preparation:/)).toBeVisible();
+  await expect(review.getByText(/Shard router/).first()).toBeVisible();
+  await expect(review.getByText(/Second shard/).first()).toBeVisible();
+  const start = review.getByRole('button', { name: 'Start migration' });
+  await expect(start).toBeEnabled();
+  const current = async () => (await page.request.get(`/api/games/${game.id}`)).json();
+  expect((await current()).production).toEqual(game.production);
+  await start.click();
+  await expect(review).toBeHidden();
+  await expect(page.getByText('Production serves traffic while data is copied.', { exact: false })).toBeVisible();
+  expect((await current()).production).toEqual(game.production);
+  await page.getByRole('button', { name: 'Run migration' }).click();
+  await expect.poll(async () => (await current()).migration, { timeout: 15_000 }).toBeNull();
+  const deployed = await current();
+  expect(deployed.production.nodes.filter((node: { kind: string }) => node.kind === 'shard_router')).toHaveLength(1);
+  expect(deployed.production.nodes.filter((node: { config: { partition?: string } }) => node.config.partition === 'Partition')).toHaveLength(2);
 });
