@@ -142,7 +142,8 @@ test('topology opens node details on a double-click, with real motion in both di
   await expect.poll(translation).toBeGreaterThan(5);
   await expect(panel).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Show component list' }).click();
+  await page.getByRole('button', { name: 'Map settings', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Map settings' }).getByRole('button', { name: 'Show component list' }).click();
   await page.getByRole('button', { name: 'Messenger API API server', exact: true }).dblclick();
   const inspector = page.getByRole('dialog', { name: 'Component inspector' });
   await expect(inspector).toBeVisible();

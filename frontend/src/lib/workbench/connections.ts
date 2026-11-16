@@ -12,7 +12,25 @@ export const connectionLabels = {
   telemetry: 'Metrics collection'
 };
 
-type ConnectionKind = keyof typeof connectionLabels;
+export type ConnectionKind = keyof typeof connectionLabels;
+export const connectionStyles = {
+  application: { label: 'Application requests', color: '#c7f46c', dashed: false },
+  data: { label: 'Data dependencies', color: '#5ed5c6', dashed: false },
+  background: { label: 'Background jobs', color: '#ffd587', dashed: false },
+  replication: { label: 'Replication subscription', color: '#d7aeed', dashed: true },
+  monitoring: { label: 'Metrics collection', color: '#8cbdf3', dashed: true }
+};
+
+export type ConnectionCategory = keyof typeof connectionStyles;
+const categories: Record<ConnectionKind, ConnectionCategory> = {
+  request: 'application', identity: 'application', queries: 'data', reads: 'data', cache: 'data',
+  enqueue: 'background', jobs: 'background', replication: 'replication', telemetry: 'monitoring'
+};
+
+export function connectionCategory(kind: ConnectionKind) {
+  return categories[kind];
+}
+
 export function connectionKind(catalog: Catalog, source?: Kind, target?: Kind): ConnectionKind {
   return source && target ? catalog.connection_types?.[source]?.[target] ?? 'request' : 'request';
 }

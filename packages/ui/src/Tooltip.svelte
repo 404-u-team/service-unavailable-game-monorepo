@@ -1,10 +1,14 @@
 <script lang="ts">
   import { Tooltip } from 'bits-ui';
+  import type { Snippet } from 'svelte';
   import { CircleHelp } from '@lucide/svelte';
 
-  let { label, text, href, newTab = false, onclick, delay = 350, side = 'top' }: {
+  let { label, text, trigger, content, class: className, href, newTab = false, onclick, delay = 350, side = 'top' }: {
     label: string;
-    text: string;
+    text?: string;
+    trigger?: Snippet;
+    content?: Snippet;
+    class?: string;
     href?: string;
     newTab?: boolean;
     onclick?: () => void;
@@ -16,23 +20,25 @@
   let anchor = $state<HTMLElement>();
 </script>
 
+{#snippet triggerContent()}{#if trigger}{@render trigger()}{:else}<CircleHelp size={18} aria-hidden="true" />{/if}{/snippet}
+
 <span class="anchor" bind:this={anchor}>
 <Tooltip.Provider delayDuration={delay} disableCloseOnTriggerClick>
   <Tooltip.Root bind:open>
-    <Tooltip.Trigger type="button" class="sui-button" data-variant="ghost" data-icon-only aria-label={label}
-      onclick={() => { if (onclick) onclick(); else if (!href) open = !open; }}>
+    <Tooltip.Trigger type="button" class={trigger ? className : ['sui-button', className]} data-variant={trigger ? undefined : 'ghost'} data-icon-only={trigger ? undefined : ''} aria-label={label}
+      onclick={() => { if (onclick) onclick(); else if (!href) open = trigger ? true : !open; }}>
       {#snippet child({ props })}
         {#if href}
           <a {...props} {href} target={newTab ? '_blank' : undefined} rel={newTab ? 'noopener' : undefined}>
-            <CircleHelp size={18} aria-hidden="true" />
+            {@render triggerContent()}
           </a>
         {:else}
-          <button {...props}><CircleHelp size={18} aria-hidden="true" /></button>
+          <button {...props}>{@render triggerContent()}</button>
         {/if}
       {/snippet}
     </Tooltip.Trigger>
     <Tooltip.Portal to={anchor?.closest<HTMLElement>('.sui-overlay') ?? undefined}>
-      <Tooltip.Content role="tooltip" class="sui-tooltip" {side} sideOffset={6} collisionPadding={12}>{text}</Tooltip.Content>
+      <Tooltip.Content role="tooltip" class="sui-tooltip" {side} sideOffset={6} collisionPadding={12}>{#if content}{@render content()}{:else}{text}{/if}</Tooltip.Content>
     </Tooltip.Portal>
   </Tooltip.Root>
 </Tooltip.Provider>

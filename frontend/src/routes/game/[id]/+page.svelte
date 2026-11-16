@@ -153,9 +153,17 @@
     if (game) {
       reportEvents(next, game);
       // Keep structural references stable when REST replies or reconnect snapshots include them again.
-      for (const key of ['production', 'draft', 'diagram', 'settings'] as const) {
+      for (const key of ['production', 'draft', 'settings'] as const) {
         if (next[key] === game[key] || JSON.stringify(next[key]) !== JSON.stringify(game[key])) continue;
         Object.assign(next, { [key]: game[key] });
+      }
+      if (next.diagram !== game.diagram) {
+        for (const key of ['positions', 'groups', 'routes', 'viewports'] as const) {
+          const value = next.diagram[key];
+          const stable = pendingDiagram?.[key];
+          if (stable && JSON.stringify(value) === JSON.stringify(stable)) Object.assign(next.diagram, { [key]: stable });
+          else if (JSON.stringify(value) === JSON.stringify(game.diagram[key])) Object.assign(next.diagram, { [key]: game.diagram[key] });
+        }
       }
     }
     game = next;
@@ -331,14 +339,14 @@
         </a>
         <div class="speed-group row" data-tutorial={target.clock} role="group" aria-label={t('Game speed')}>
           {#each speedOptions as option (option.value)}
-            <Button disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
+            <Button aria-disabled={busy} aria-pressed={game.speed === option.value} aria-label={t(option.label)}
               title={t('{0} ({1})', [t(option.label), t(option.shortcut)])} onclick={() => speed(option.value)}>
               {#if option.value}{option.value}×{:else}<Pause size={14} />{/if}
             </Button>
           {/each}
         </div>
         <span class="time mono">{game.snapshot.demand_overview ? t('Day {0} / {1}', [game.snapshot.demand_overview.day, minuteClock(game.snapshot.demand_overview.utc_minute)]) : when(game.tick)}</span>
-        <Button iconOnly class="quick-save" title={t("Save game (Ctrl/Cmd + S)")} aria-label={t("Save game")} disabled={busy} onclick={save}><SaveIcon size={15} /></Button>
+        <Button iconOnly class="quick-save" title={t("Save game (Ctrl/Cmd + S)")} aria-label={t("Save game")} aria-disabled={busy} onclick={save}><SaveIcon size={15} /></Button>
       </div>
     {/if}
   </header>

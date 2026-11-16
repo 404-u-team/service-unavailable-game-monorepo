@@ -35,8 +35,8 @@
 </script>
 
 {#if data && (diagnostic || showHealthy)}
-  <div class="stack database-details" class:notice={Boolean(diagnostic)} class:warn={Boolean(diagnostic)}>
-    {#if diagnostic}<strong>{t(titles[diagnostic.level])}</strong>{/if}
+  <div class="stack database-details" class:diagnostic={Boolean(diagnostic)}>
+    {#if diagnostic}<h3 class={diagnostic.level === 'write_exceeded' ? 'danger' : 'warning'}>{t(titles[diagnostic.level])}</h3>{/if}
     <dl>
       <div><dt>{t('Read demand')}</dt><dd>{t('{0} units/s', [num(data.read_demand)])}</dd></div>
       <div><dt class="row">{t('Disk I/O')} <Tooltip label={t('Help with {0}', [t('Disk I/O')])}
@@ -100,9 +100,11 @@
 {/if}
 
 <style>
-  .database-details { font-size: 13px; overflow-wrap: anywhere; }
-  .database-details dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .database-details dt { min-height: 34px; align-content: center; color: var(--muted); }
+  .database-details { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .database-details.diagnostic { padding: 12px; border: 1px solid var(--border); border-inline-start: 3px solid var(--warning); border-radius: 9px; background: var(--surface); }
+  .database-details dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 136px), 1fr)); gap: 5px; }
+  .database-details dl > div { display: grid; align-content: space-between; gap: 5px; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 7px; }
+  .database-details dt { color: var(--muted); }
   .database-details dd { font: 600 13px var(--mono); margin: 0; }
   .database-details ul { margin: 0; padding-inline-start: 18px; }
   .resource { display: block; }

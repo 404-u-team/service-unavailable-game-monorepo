@@ -1,7 +1,7 @@
 <script lang="ts">
   import { apiMessage, count, message, t } from '../i18n.svelte';
   import { onMount, tick } from 'svelte';
-  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Scan, Search,
+  import { ArrowLeft, ArrowRight, ChevronRight, GitBranch, List, Minus, MousePointer2, Plus, Redo2, Scan, Search, SlidersHorizontal,
     Trash2, Undo2, X } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
@@ -12,7 +12,7 @@
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
   import Select from '../controls/Select.svelte';
-  import { Badge, Button, Checkbox, Form, TextInput, Tooltip } from '@service-unavailable/ui';
+  import { Alert, Badge, Button, Checkbox, Disclosure, Form, Switch, TextInput, Tooltip } from '@service-unavailable/ui';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { api } from '../api';
   import { inspectorPreference } from './layout-sync';
@@ -20,7 +20,7 @@
   import { target as guideTarget, tutorialApi, type TutorialArchitecture, type TutorialEvent } from './onboarding';
   import { findPlacement, type CanvasTools } from './placement';
   import { groupComponents, nestedGroups, removeGroup } from './groups';
-  import { connectionError, connectionKind, connectionLabels } from './connections';
+  import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory } from './connections';
   import { componentIcon, statusLabel } from '../labels';
   import { ms, num, pct, preciseMoney, rps } from '../format';
   import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
@@ -48,8 +48,22 @@
   let selectedEdge = $state('');
   let search = $state('');
   let requestType = $state('');
+  let hiddenConnections = $state.raw<ConnectionCategory[]>([]);
+  let alignment = $state(false);
+  const mapPreferenceKey = 'workbench-map-preferences';
+
+  function setMapPreferences(hidden: ConnectionCategory[], guides: boolean) {
+    hiddenConnections = hidden;
+    alignment = guides;
+    try { localStorage.setItem(mapPreferenceKey, JSON.stringify({ hidden, guides })); }
+    catch { /* Preferences still apply for this session. */ }
+  }
+
+  function toggleConnection(category: ConnectionCategory, visible: boolean) {
+    setMapPreferences(visible ? hiddenConnections.filter((item) => item !== category) : [...hiddenConnections, category], alignment);
+  }
   let inspectorTab = $state<'configuration' | 'metrics'>('configuration');
-  let dialog = $state<'deployed' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect'>();
+  let dialog = $state<'deployed' | 'map-settings' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect'>();
   let drawer = $state<{ dismiss: (after?: () => void) => void }>();
   let source = $state('');
   let target = $state('');
@@ -213,6 +227,7 @@
   const missingDraftApi = $derived(tutorial && viewingDraft && !guideApi && Boolean(tutorialApi(game.production)));
   const active = $derived(topology.nodes.find((node) => node.id === selected));
   const metric = $derived(game.snapshot.components[selected]);
+  const liveInstances = $derived(Number(game.production.nodes.find((node) => node.id === selected)?.config.instances ?? catalog.components.api.fields.instances.default));
   const monitors = $derived(game.snapshot.monitors ?? {});
   const connections = $derived(topology.edges.filter((item) => item.source === selected || item.target === selected));
   const activeConfig = $derived(active && Object.fromEntries(Object.entries(catalog.components[active.kind].fields).map(([key, field]) => [key, active.config[key] ?? field.default])));
@@ -222,6 +237,10 @@
   const kinds = $derived((Object.keys(catalog.components) as Kind[]).filter((kind) => kind !== 'source'));
   const categories = ['Traffic', 'Compute', 'Data', 'Operations'];
   const edgeKey = (edge: Connection) => `${edge.source}:${edge.target}`;
+  const visibleConnections = $derived.by(() => {
+    const kinds = new Map(topology.nodes.map((node) => [node.id, node.kind]));
+    return topology.edges.filter((edge) => !hiddenConnections.includes(connectionCategory(connectionKind(catalog, kinds.get(edge.source), kinds.get(edge.target)))));
+  });
   const edge = $derived(topology.edges.find((item) => edgeKey(item) === selectedEdge));
   const origin = $derived(topology.nodes.find((node) => node.id === source));
   const targets = $derived(origin ? topology.nodes.filter((node) =>
@@ -258,6 +277,12 @@
 
   onMount(() => {
     inspectorWidth = inspectorPreference() ?? defaultInspectorWidth;
+    try {
+      const preferences = JSON.parse(localStorage.getItem(mapPreferenceKey) ?? 'null');
+      if (Array.isArray(preferences?.hidden)) hiddenConnections = Object.keys(connectionStyles)
+        .filter((category): category is ConnectionCategory => preferences.hidden.includes(category));
+      alignment = preferences?.guides === true;
+    } catch { /* Keep the default preferences if browser storage is unavailable. */ }
     if (focusId && topology.nodes.some((item) => item.id === focusId)) {
       select(focusId, false);
       if (openConfiguration) void configure();
@@ -394,6 +419,7 @@
   }
 
   async function connect(connection: Connection, replaces = '') {
+    if (busy) return;
     const problem = connectionError(topology, catalog, connection, replaces);
     if (problem) { editError = problem; return; }
     if (await edit((value) => ({ ...value, edges: [...value.edges.filter((item) => edgeKey(item) !== replaces), connection] }))) {
@@ -533,15 +559,61 @@
   {#if search && !kinds.some((kind) => t(catalog.components[kind].name).toLowerCase().includes(search.trim().toLowerCase()))}<p class="muted">{t("No matching components.")}</p>{/if}
 {/snippet}
 
+{#snippet connectionReference()}
+  <div class="stack">
+    <div class="field"><span>{t("Component type")}</span>
+      <Select label={t("Component type")} value={helpKind} onchange={(value) => helpKind = value as Kind}
+        options={Object.entries(catalog.components).map(([value, definition]) => ({ value, label: t(definition.name) }))} />
+    </div>
+    <p>{t(catalog.components[helpKind].description)}</p>
+    <p>{preciseMoney(catalog.components[helpKind].daily)} {t("base daily cost")}</p>
+    <ul>{#each componentNotes[helpKind] as note}<li>{t(note)}</li>{/each}</ul>
+    <h3>{t("Input connections")}</h3>
+    <ul>{#each (Object.keys(catalog.components) as Kind[]).filter((kind) => catalog.connections[kind].includes(helpKind)) as kind}
+      <li>{t(catalog.components[kind].name)} · {t(connectionLabels[connectionKind(catalog, kind, helpKind)])}</li>
+    {:else}<li>{t("None")}</li>{/each}</ul>
+    <h3>{t("Output connections")}</h3>
+    <ul>{#each catalog.connections[helpKind] as kind}
+      <li>{t(catalog.components[kind].name)} · {t(connectionLabels[connectionKind(catalog, helpKind, kind)])}</li>
+    {:else}<li>{t("None")}</li>{/each}</ul>
+  </div>
+{/snippet}
+
+{#snippet resourceUsage()}
+  {#if metric && Object.keys(metric.utilization).length}
+    <section class="inspector-section stack">
+      <h3>{t('Resource utilization')}</h3>
+      <div class="resource-list">
+        {#each Object.entries(metric.utilization).sort((a, b) => b[1] - a[1]).slice(0, inspectorTab === 'configuration' ? 2 : undefined) as [label, value] (label)}
+          <div class="resource-meter" data-tutorial={inspectorTab === 'metrics' && active?.id === guideApi && label === 'CPU' ? guideTarget.cpu : undefined}>
+            <Meter {value} label={t(label)} />
+            {#if metric.database && label !== 'Disk I/O'}
+              <Tooltip label={t('Help with {0}', [t(label)])} text={t('Open the relevant guide article.')} href={guideArticleHref(guideHref, resourceArticle(label))} />
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
+{/snippet}
+
 {#snippet inspect()}
   {#if active}
     {@const definition = catalog.components[active.kind]}
     {@const Icon = componentIcon[active.kind]}
-    <div class="panel identity row">
+    <div class="identity">
       <span class="component-symbol"><Icon size={22} /></span>
-      <div><h2>{t(active.name)}</h2><p class="eyebrow {metric?.status === 'failed' ? 'danger' : 'accent'}">{t(definition.name)}{metric ? ` / ${t(statusLabel[metric.status])}` : ''}</p></div>
+      <div>
+        <p>{t(definition.name)}</p>
+        <h2>{t(active.name)}</h2>
+        <div class="row wrap identity-meta">
+          {#if metric}
+            <Badge tone={metric.status === 'failed' || metric.status === 'overloaded' ? 'danger' : metric.status === 'warning' ? 'warning' : metric.status === 'healthy' ? 'success' : 'neutral'}>{t(statusLabel[metric.status])}</Badge>
+          {/if}
+          <a class="inspector-help" href={guideArticleHref(guideHref, active.kind)}>{t('Component guide')}</a>
+        </div>
+      </div>
     </div>
-      <a class="inspector-help" href={guideArticleHref(guideHref, active.kind)}>{t('Component guide')}</a>
       <div class="switch" data-tutorial-obstruction="top" role="group" aria-label={t("Inspector view")}>
         <Button variant="ghost" data-tutorial={active.id === guideApi ? guideTarget.configuration : undefined} aria-pressed={inspectorTab === 'configuration'} onclick={() => selectTab('configuration')}>{t("Configuration")}</Button>
         <Button variant="ghost" data-tutorial={active.id === guideApi ? guideTarget.metrics : undefined} aria-pressed={inspectorTab === 'metrics'} onclick={() => selectTab('metrics')}>{t("Metrics")}</Button>
@@ -553,9 +625,10 @@
       {#if active.kind === 'api'}
         {@const primaries = topology.nodes.filter((node) => node.kind === 'database' && topology.edges.some((edge) => edge.source === active?.id && edge.target === node.id))}
         <p class="muted">{primaries.length ? t('Primary database: {0}', [primaries.map((node) => t(node.name)).join(', ')]) : t('Connect this API to the shared primary database.')}</p>
-        {#if metric?.active_instances != null && metric.active_instances < Number(activeConfig?.instances ?? 1)}
-          <p class="notice warn">{t('{0} of {1} instances are serving.', [metric.active_instances, activeConfig?.instances ?? 1])}
-            <a href={guideHref.replace('view=guide', 'view=events')}>{t('View incident history')}</a></p>
+        {#if metric?.active_instances != null && metric.active_instances < liveInstances}
+          <Alert tone="warning" title={t('{0} of {1} instances are serving.', [metric.active_instances, liveInstances])}>
+            <a class="inspector-help" href={guideHref.replace('view=guide', 'view=events')}>{t('View incident history')}</a>
+          </Alert>
         {/if}
       {/if}
       {#if active.kind === 'replica'}
@@ -583,27 +656,33 @@
         {:else}<p class="muted">{t(definition.description)}</p>{/if}
       {:else if metric}
         {@const background = active.kind === 'queue' || active.kind === 'worker'}
-        <dl class="metrics" data-tutorial={active.id === guideApi ? guideTarget.throughput : undefined}>
+        <dl class="metric-overview" data-tutorial={active.id === guideApi ? guideTarget.throughput : undefined}>
           <div><dt>{t("Incoming")}</dt><dd>{background ? t('{0} jobs/s', [num(metric.rps)]) : rps(metric.rps)}</dd></div>
           <div><dt>{t(active.kind === 'queue' ? 'Accepted jobs' : 'Processed')}</dt><dd>{background ? t('{0} jobs/s', [num(metric.throughput)]) : rps(metric.throughput)}</dd></div>
           {#if !background}<div><dt>{t("Local latency")}</dt><dd>{ms(metric.latency)}</dd></div>{/if}
-          {#if metric.cache_hit !== null}<div><dt>{t("Cache hit rate")}</dt><dd>{pct(metric.cache_hit, 1)}</dd></div>{/if}
-          {#if metric.backlog !== null}<div><dt>{t("Queued jobs")}</dt><dd>{num(metric.backlog)}</dd></div>{/if}
-          {#if metric.queue_wait_minutes != null}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('{0} min', [num(metric.queue_wait_minutes)])}</dd></div>
-          {:else if metric.backlog}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('No active processing capacity')}</dd></div>{/if}
-          {#if metric.jobs_dropped != null}<div><dt>{t('Rejected jobs per step')}</dt><dd>{num(metric.jobs_dropped)}</dd></div>{/if}
-          {#if metric.jobs_expired != null}<div><dt>{t('Expired jobs per step')}</dt><dd>{num(metric.jobs_expired)}</dd></div>{/if}
-          {#if metric.storage_used !== null}<div><dt>{t("Storage used")}</dt><dd>{num(metric.storage_used)} {t("GB")}</dd></div>{/if}
-          {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
-          {#if metric.service_errors != null}<div><dt>{t('Service errors')}</dt><dd>{rps(metric.service_errors)}</dd></div>{/if}
-          {#if metric.service_latency != null}<div><dt>{t('Service latency')}</dt><dd>{ms(metric.service_latency)}</dd></div>{/if}
-          {#if metric.service_role}<div><dt>{t('API service role')}</dt><dd>{t(metric.service_role)}</dd></div>{/if}
-          {#if metric.data_domain}<div><dt>{t('Data domain')}</dt><dd>{t(metric.data_domain)}</dd></div>{/if}
-          {#if metric.partition_share != null}<div><dt>{t('Partition traffic share')}</dt><dd>{pct(metric.partition_share, 1)}</dd></div>{/if}
-          {#if metric.autoscaling}<div><dt>{t('Autoscaling')}</dt><dd>{t(metric.autoscaling)}</dd></div>{/if}
-          {#each Object.entries(metric.operations ?? {}) as [op, rate]}<div><dt>{t(catalog.operations[op] ?? op)}</dt><dd>{rps(rate)}</dd></div>{/each}
-          {#if metric.active_instances !== null}<div><dt>{t("Active instances")}</dt><dd>{metric.active_instances}</dd></div>{/if}
         </dl>
+        {@render resourceUsage()}
+        <section class="inspector-section stack">
+          <h3>{t('Detailed metrics')}</h3>
+          <dl class="metric-details">
+            {#if metric.cache_hit != null}<div><dt>{t("Cache hit rate")}</dt><dd>{pct(metric.cache_hit, 1)}</dd></div>{/if}
+            {#if metric.backlog != null}<div><dt>{t("Queued jobs")}</dt><dd>{num(metric.backlog)}</dd></div>{/if}
+            {#if metric.queue_wait_minutes != null}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('{0} min', [num(metric.queue_wait_minutes)])}</dd></div>
+            {:else if metric.backlog}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('No active processing capacity')}</dd></div>{/if}
+            {#if metric.jobs_dropped != null}<div><dt>{t('Rejected jobs per step')}</dt><dd>{num(metric.jobs_dropped)}</dd></div>{/if}
+            {#if metric.jobs_expired != null}<div><dt>{t('Expired jobs per step')}</dt><dd>{num(metric.jobs_expired)}</dd></div>{/if}
+            {#if metric.storage_used != null}<div><dt>{t("Storage used")}</dt><dd>{num(metric.storage_used)} {t("GB")}</dd></div>{/if}
+            {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
+            {#if metric.service_errors != null}<div><dt>{t('Service errors')}</dt><dd>{rps(metric.service_errors)}</dd></div>{/if}
+            {#if metric.service_latency != null}<div><dt>{t('Service latency')}</dt><dd>{ms(metric.service_latency)}</dd></div>{/if}
+            {#if metric.service_role}<div><dt>{t('API service role')}</dt><dd>{t(metric.service_role)}</dd></div>{/if}
+            {#if metric.data_domain}<div><dt>{t('Data domain')}</dt><dd>{t(metric.data_domain)}</dd></div>{/if}
+            {#if metric.partition_share != null}<div><dt>{t('Partition traffic share')}</dt><dd>{pct(metric.partition_share, 1)}</dd></div>{/if}
+            {#if metric.autoscaling}<div><dt>{t('Autoscaling')}</dt><dd>{t(metric.autoscaling)}</dd></div>{/if}
+            {#each Object.entries(metric.operations ?? {}) as [op, rate]}<div><dt>{t(catalog.operations[op] ?? op)}</dt><dd>{rps(rate)}</dd></div>{/each}
+            {#if metric.active_instances != null}<div><dt>{t("Active instances")}</dt><dd>{metric.active_instances}</dd></div>{/if}
+          </dl>
+        </section>
       {/if}
       {#if metric?.database}
         <DatabaseDiagnostics {metric} guide={guideHref} {configure} {busy} showHealthy={inspectorTab === 'metrics'} />
@@ -612,21 +691,16 @@
         <p class="muted">{t('{0} requests per second are failing across the service.', [num(metrics.errors)])}</p>
       {/if}
       {#if active.kind === 'source'}
-        <div class="bars">
-          {#each Object.entries(game.snapshot.demand) as [key, value]}
-            <div class="row spread"><span>{t(catalog.operations[key])}</span><strong class="mono">{rps(value)}</strong></div>
-          {/each}
-        </div>
+        <section class="inspector-section stack">
+          <h3>{t('Request types')}</h3>
+          <dl class="metric-details">
+            {#each Object.entries(game.snapshot.demand) as [key, value] (key)}
+              <div><dt>{t(catalog.operations[key] ?? key)}</dt><dd>{rps(value)}</dd></div>
+            {/each}
+          </dl>
+        </section>
       {:else if metric}
-        <div class="bars">
-          {#each Object.entries(metric.utilization).slice(0, inspectorTab === 'configuration' ? 2 : undefined) as [label, value]}
-            <div class="resource-meter" data-tutorial={inspectorTab === 'metrics' && active.id === guideApi && label === 'CPU' ? guideTarget.cpu : undefined}><div><Meter {value} label={t(label)} /></div>
-              {#if metric.database && label !== 'Disk I/O'}
-                <Tooltip label={t('Help with {0}', [t(label)])} text={t('Open the relevant guide article.')} href={guideArticleHref(guideHref, resourceArticle(label))} />
-              {/if}
-            </div>
-          {/each}
-        </div>
+        {#if inspectorTab === 'configuration'}{@render resourceUsage()}{/if}
       {:else if active.kind === 'monitor'}
         {@const coverage = monitors[active.id]}
         {#if coverage}
@@ -644,7 +718,7 @@
           <a class="accent" href={guideArticleHref(guideHref, 'monitoring-setup')}>{t('Monitoring setup')}</a></p>
       {/if}
       {#if connections.length}
-        <div class="stack"><h3>{t("Dependencies")}</h3>
+        <div class="inspector-section stack"><h3>{t("Dependencies")}</h3>
           {#each connections as item (edgeKey(item))}
             {@const peer = topology.nodes.find((node) => node.id === (item.source === selected ? item.target : item.source))}
             {@const rate = game.snapshot.traffic.find((traffic) => edgeKey(traffic) === edgeKey(item))?.rps}
@@ -713,14 +787,9 @@
           <Badge tone="success"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</Badge>
         </div>
         <div class="row wrap">
-          <div class="request-type">
-            <Select label={t('Trace request type')} bind:value={requestType}
-              options={[{ value: '', label: t('All traffic') }, ...Object.keys(game.snapshot.demand).map((operation) => ({ value: operation, label: t(catalog.operations[operation]) }))]} />
-          </div>
           {#if layoutFailed}<Button variant="danger" onclick={retryDiagram}>{t("Retry saving layout")}</Button>{/if}
           <Button aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</Button>
           {#if selection.length > 1}<Button onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</Button>{/if}
-          <Button iconOnly data-tutorial={guideTarget.list} aria-label={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} title={layout === 'canvas' ? t("Show component list") : t("Show topology canvas")} onclick={() => layout = layout === 'canvas' ? 'list' : 'canvas'}>{#if layout === 'canvas'}<List size={16} />{:else}<MousePointer2 size={16} />{/if}</Button>
           {#if layout === 'canvas'}
             <Button iconOnly aria-label={t('Fit view')} title={t('Fit view')} disabled={!placement} onclick={() => placement?.fit()}><Scan size={16} /></Button>
           {/if}
@@ -729,15 +798,16 @@
             disabled={!active && !edge && !group && selection.length < 2} onclick={() => dialog = 'inspector'}>
             {active ? t('Open component') : t('Inspect selection')}
           </Button>
-          <Button href={guideArticleHref(guideHref, 'topology-editing')}>{t('Guide')}</Button>
-          <Button onclick={() => { helpKind = active?.kind ?? 'api'; referenceReturn = undefined; dialog = 'reference'; }}>{t("Connection reference")}</Button>
+          <Button aria-label={t('Map settings')} onclick={() => { helpKind = active?.kind ?? 'api'; dialog = 'map-settings'; }}>
+            <SlidersHorizontal size={16} /> {t('Map settings')}
+          </Button>
         </div>
       </div>
       {#if layout === 'canvas'}
         <div class="canvas" data-tutorial={guideTarget.canvas} bind:this={canvas}>
           {#if canvas}
           {#key compact}
-            <TopologyGraph {guideApi} {topology} {diagram} {game} {catalog} {requestType} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft && !busy}
+            <TopologyGraph {guideApi} {topology} {diagram} {game} {catalog} {requestType} {hiddenConnections} {alignment} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft}
               {compact} {removed} {touchSelect} {select} inspect={inspectComponent} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
               {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => { context = undefined; select(''); }} />
           {/key}
@@ -757,8 +827,8 @@
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
             </Button>
           {/each}
-          {#if topology.edges.length}<p class="eyebrow">{t("Connections")}</p>{/if}
-          {#each topology.edges as item (edgeKey(item))}
+          {#if visibleConnections.length}<p class="eyebrow">{t("Connections")}</p>{/if}
+          {#each visibleConnections as item (edgeKey(item))}
             <Button aria-pressed={selectedEdge === edgeKey(item)} onclick={() => selectEdge(edgeKey(item))}>{t(topology.nodes.find((n) => n.id === item.source)?.name ?? '')} → {t(topology.nodes.find((n) => n.id === item.target)?.name ?? '')}</Button>
           {/each}
         </div>
@@ -774,13 +844,6 @@
         {:else if game.draft}<Button data-tutorial={guideTarget.returnDraft} onclick={() => showProduction = false}>{t('Return to draft')}</Button>
         {:else}<Button data-tutorial={guideTarget.createDraft} disabled={busy} onclick={draft}><GitBranch size={15} /> {t("Create draft")}</Button>{/if}
       </div>
-      <ul class="edge-legend row wrap" aria-label={t('Connection types')}>
-        <li style:--edge-color="#c7f46c">{t('Application requests')}</li>
-        <li style:--edge-color="#5ed5c6">{t('Data dependencies')}</li>
-        <li style:--edge-color="#ffd587">{t('Background jobs')}</li>
-        <li class="dashed" style:--edge-color="#d7aeed">{t('Replication subscription')}</li>
-        <li class="dashed" style:--edge-color="#8cbdf3">{t('Metrics collection')}</li>
-      </ul>
     </div>
   </div>
 </section>
@@ -803,25 +866,43 @@
     <div data-tutorial={guideTarget.compare}><DeploymentComparison comparison={deployed.comparison} /></div>
     {#snippet footer()}<Button variant="primary" data-tutorial={guideTarget.done} onclick={() => dialog = undefined}>{t("Done")}</Button>{/snippet}
   </Modal>
+{:else if dialog === 'map-settings'}
+  <Modal bind:this={drawer} title={t('Map settings')} side="end" close={() => dialog = undefined}>
+    <div class="map-settings stack">
+      <section class="stack">
+        <h3>{t('Map view')}</h3>
+        <Button block data-tutorial={guideTarget.list} onclick={() => { layout = layout === 'canvas' ? 'list' : 'canvas'; changeDialog(); }}>
+          {#if layout === 'canvas'}<List size={16} />{t('Show component list')}{:else}<MousePointer2 size={16} />{t('Show topology canvas')}{/if}
+        </Button>
+        <Switch label={t('Alignment guides')} checked={alignment}
+          onchange={({ currentTarget }) => setMapPreferences(hiddenConnections, currentTarget.checked)} />
+        <small>{t('Snap cards to the edges and centers of nearby components while dragging.')}</small>
+      </section>
+      <section class="stack">
+        <h3>{t('Visible connections')}</h3>
+        <ul class="edge-legend" aria-label={t('Connection types')}>
+          {#each Object.entries(connectionStyles) as [category, style] (category)}
+            <li class:dashed={style.dashed} style:--edge-color={style.color}>
+              <Switch label={t(style.label)} checked={!hiddenConnections.includes(category as ConnectionCategory)}
+                onchange={({ currentTarget }) => toggleConnection(category as ConnectionCategory, currentTarget.checked)} />
+            </li>
+          {/each}
+        </ul>
+        <div class="field">
+          <span>{t('Trace request type')}</span>
+          <Select label={t('Trace request type')} bind:value={requestType}
+            options={[{ value: '', label: t('All traffic') }, ...Object.keys(game.snapshot.demand).map((operation) => ({ value: operation, label: t(catalog.operations[operation]) }))]} />
+        </div>
+      </section>
+      <Disclosure label={t('Connection reference')} variant="panel">
+        {@render connectionReference()}
+      </Disclosure>
+      <Button href={guideArticleHref(guideHref, 'topology-editing')}>{t('Topology guide')}</Button>
+    </div>
+  </Modal>
 {:else if dialog === 'reference'}
   <Modal title={t("Connection reference")} close={() => dialog = referenceReturn}>
-    <div class="stack">
-      <div class="field"><span>{t("Component type")}</span>
-        <Select label={t("Component type")} value={helpKind} onchange={(value) => helpKind = value as Kind}
-          options={Object.entries(catalog.components).map(([value, definition]) => ({ value, label: t(definition.name) }))} />
-      </div>
-      <p>{t(catalog.components[helpKind].description)}</p>
-      <p>{preciseMoney(catalog.components[helpKind].daily)} {t("base daily cost")}</p>
-      <ul>{#each componentNotes[helpKind] as note}<li>{t(note)}</li>{/each}</ul>
-      <h3>{t("Input connections")}</h3>
-      <ul>{#each (Object.keys(catalog.components) as Kind[]).filter((kind) => catalog.connections[kind].includes(helpKind)) as kind}
-        <li>{t(catalog.components[kind].name)} · {t(connectionLabels[connectionKind(catalog, kind, helpKind)])}</li>
-      {:else}<li>{t("None")}</li>{/each}</ul>
-      <h3>{t("Output connections")}</h3>
-      <ul>{#each catalog.connections[helpKind] as kind}
-        <li>{t(catalog.components[kind].name)} · {t(connectionLabels[connectionKind(catalog, helpKind, kind)])}</li>
-      {:else}<li>{t("None")}</li>{/each}</ul>
-    </div>
+    {@render connectionReference()}
   </Modal>
 {:else if dialog === 'group'}
   <Modal title={group ? t("Edit group") : t("Create group")} close={() => dialog = undefined}>
@@ -931,8 +1012,12 @@
 {/if}
 
 <style>
-  .edge-legend { margin: 0; padding: 5px 10px 8px; list-style: none; gap: 6px 14px; color: var(--muted); font-size: 11px; }
-  .edge-legend li::before { content: ''; display: inline-block; width: 15px; margin: 0 5px 3px 0; border-top: 2px solid var(--edge-color); }
+  .map-settings { gap: 18px; }
+  .map-settings section { gap: 9px; }
+  .map-settings small { color: var(--muted); }
+  .edge-legend { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .edge-legend li { display: flex; align-items: center; gap: 9px; }
+  .edge-legend li::before { content: ''; display: block; width: 18px; flex: none; border-top: 2px solid var(--edge-color); }
   .edge-legend li.dashed::before { border-top-style: dashed; }
   .architecture { min-width: 0; display: grid; grid-template-rows: auto minmax(550px, 1fr); min-height: calc(100dvh - 65px); }
   .topology-header { display: grid; grid-template-columns: .95fr 1.1fr; align-items: center; gap: 12px; min-height: 91px; background: var(--background); padding: 12px 26px; }
@@ -942,7 +1027,12 @@
   .service-metrics span { font-size: 10px; }
   .workspace { min-width: 0; display: grid; border-block: 1px solid var(--border); }
   .inspector-help { color: var(--primary); text-decoration: underline; width: fit-content; font-size: 13px; }
-  .resource-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+  .inspector-section { gap: 9px; }
+  .resource-list { display: grid; gap: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+  .resource-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 10px 12px; }
+  .resource-meter + .resource-meter { border-top: 1px solid var(--border); }
+  .resource-meter :global(.meter label) { min-width: 0; overflow-wrap: anywhere; }
+  .resource-meter :global(.meter span) { font: 600 13px var(--mono); font-variant-numeric: tabular-nums; }
   .catalog-group { display: grid; gap: 5px; margin: 17px 0 0; }
   .catalog-group h3 { margin-bottom: 2px; }
   .catalog-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: center; }
@@ -953,10 +1043,8 @@
   .catalog-row :global(.catalog-item span) { min-width: 0; overflow-wrap: anywhere; }
   .search { display: flex; align-items: center; gap: 4px; padding-left: 8px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
   .search :global(input) { border: 0; background: none; min-height: 35px; font-size: 12px; padding-left: 5px; }
-  .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: var(--background); }
+  .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--background); }
   .canvas-bar { z-index: 1; padding: 11px 15px; min-height: 55px; border-bottom: 1px solid var(--border); }
-  .request-type { min-width: 0; }
-  .request-type { max-width: 185px; }
   .canvas-bar.editing { background: #223323; }
   .draft-summary { border-top: 1px solid var(--border); padding-top: 12px; gap: 8px; }
   .draft-summary h2 { margin-top: 4px; }
@@ -969,10 +1057,10 @@
   .edit-bar { z-index: 1; justify-content: flex-end; padding: 10px 15px; border-top: 1px solid var(--border); }
   .component-list { padding: 16px; align-content: start; overflow: auto; }
   .component-list :global(button) { justify-content: space-between; text-align: left; }
-  .identity { padding: 13px; }
-  .identity > :last-child { min-width: 0; }
-  .identity h2 { overflow-wrap: anywhere; }
-  .identity p { margin-top: 3px; }
+  .identity { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; padding-block: 2px 5px; }
+  .identity h2 { overflow-wrap: anywhere; font-size: 22px; line-height: 1.15; margin-block: 3px 8px; }
+  .identity p { color: var(--muted); font-size: 12px; }
+  .identity-meta { gap: 6px 10px; }
   .component-symbol { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; background: var(--tint); color: var(--primary); }
   .switch { display: grid; grid-template-columns: 1fr 1fr; border-radius: 8px; background: var(--surface); }
   .switch :global(button) { border-radius: 8px; min-height: 36px; color: var(--muted); border: 0; background: transparent; font-size: 12px; }
@@ -982,8 +1070,14 @@
   .counter :global(button) { min-height: 32px; }
   .cost { padding-top: 13px; border-top: 1px solid var(--border); }
   .cost strong { font-size: 22px; }
-  .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; font-size: 12px; }
-  .metrics dd { font-family: var(--mono); }
+  .metric-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 92px), 1fr)); gap: 6px; margin: 0; }
+  .metric-overview > div { display: grid; align-content: space-between; gap: 5px; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+  .metric-overview dt, .metric-details dt { color: var(--muted); font-size: 12px; line-height: 1.35; }
+  .metric-overview dd, .metric-details dd { min-width: 0; overflow-wrap: anywhere; font: 600 13px var(--mono); }
+  .metric-details { margin: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+  .metric-details > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 6px 14px; align-items: baseline; padding: 8px 11px; }
+  .metric-details > div + div { border-top: 1px solid var(--border); }
+  .metric-details > div > dd { text-align: end; max-inline-size: 14ch; }
   .context { position: fixed; z-index: 10; width: 175px; padding: 8px; gap: 5px; }
   .mobile-sub, .mobile-heading { display: none; }
   @media (min-width: 851px) and (max-width: 1200px) {
@@ -1003,9 +1097,7 @@
     .canvas { height: clamp(310px, 45dvh, 490px); border: 1px solid var(--border); border-radius: 10px; }
     .canvas-bar, .edit-bar { padding: 8px 0; border: 0; }
     .canvas-bar { min-height: 58px; }
-    .request-type { min-width: 0; }
-  .request-type { max-width: 185px; }
-  .canvas-bar.editing { background: transparent; }
+    .canvas-bar.editing { background: transparent; }
     .edit-bar { padding-bottom: 0; }
     .component-list { border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
   }

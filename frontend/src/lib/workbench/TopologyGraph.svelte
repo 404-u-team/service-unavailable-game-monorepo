@@ -1,6 +1,6 @@
 <script lang="ts">
   import { locale, message, t } from '../i18n.svelte';
-  import { Background, BackgroundVariant, Controls, MarkerType, MiniMap, Position, SvelteFlow,
+  import { Background, BackgroundVariant, Controls, MiniMap, Position, SvelteFlow,
     type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { onDestroy, untrack } from 'svelte';
@@ -10,16 +10,18 @@
   import FlowNode, { type WorkbenchNode } from './FlowNode.svelte';
   import GroupNode, { type GroupFlowNode } from './GroupNode.svelte';
   import RoutedEdge, { type RoutedEdge as DiagramEdge } from './RoutedEdge.svelte';
-  import { labelPosition, routeConnection, segments, type Rect } from './routing';
+  import { connectionPorts, labelPosition, routeConnection, segments, type Rect } from './routing';
   import { num, rps } from '../format';
   import { statusLabel } from '../labels';
   import { groupComponents, nestedGroups } from './groups';
-  import { connectionError, connectionKind, connectionLabels } from './connections';
+  import { alignCard } from './alignment';
+  import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory, type ConnectionKind } from './connections';
   import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
-  let { guideApi, topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
+  let { guideApi, topology, diagram, game, catalog, requestType, hiddenConnections, alignment, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
     select, inspect, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
     guideApi?: string; topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
+    hiddenConnections: ConnectionCategory[]; alignment: boolean;
     edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
     select: (id: string) => void; inspect: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
     selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
@@ -42,6 +44,8 @@
   let routeFrame: ReturnType<typeof setTimeout> | undefined;
   let queuedDrag: Record<string, Point> = {};
   let dragging = $state(false);
+  let guides = $state.raw<Partial<Point>>({});
+  let canvasZoom = 1;
 
   function previewPositions(next: Record<string, Point>) {
     dragging = true;
@@ -58,6 +62,7 @@
     routeFrame = undefined;
     move(next);
     dragPositions = {};
+    guides = {};
     dragging = false;
   }
 
@@ -175,16 +180,17 @@
       const tone = status === 'failed' || status === 'overloaded' ? 'bad' : status === 'warning' ? 'warn' : status === 'healthy' || node.kind === 'source' ? 'good' : 'dim';
       const instances = Number(settings.instances ?? 1);
       const meta = node.kind === 'source' ? rps(graphSnapshot.metrics.rps)
-        : node.kind === 'api' ? `${instances > 1 ? `${instances}× · ` : ''}${t('{0} vCPU · {1} GB', [num(Number(settings.cpu)), num(Number(settings.memory))])}`
-        : node.kind === 'worker' ? `${instances}× · ${t('{0} vCPU', [num(Number(settings.cpu))])}`
-        : node.kind === 'balancer' ? t(String(settings.algorithm)) : t(definition.name);
+        : node.kind === 'api' || node.kind === 'worker'
+          ? `${instances > 1 ? `${instances} × ` : ''}${t('{0} vCPU', [num(Number(settings.cpu))])}`
+          : '';
+
       const compatible = linkStart && linkStart.id !== node.id ? !connectionError(topology, catalog, linkStart.isTarget
         ? { source: node.id, target: linkStart.id } : { source: linkStart.id, target: node.id }, reconnectKey) : undefined;
       const base: WorkbenchNode = {
         id: node.id, type: 'workbench', position: position(node), ...card,
-        data: { name: t(node.name), kind: node.kind, meta: node.kind === 'api' ? `${t(String(settings.role ?? 'Universal'))} · ${meta}` : node.kind === 'database' ? `${t(String(settings.domain ?? 'Shared'))} · ${t(String(settings.partition ?? 'Independent'))}` : meta, tone,
+        data: { name: t(node.name), kind: node.kind, meta, tone,
           health: status ? t(statusLabel[status]) : node.kind === 'source' ? t('Traffic input') : t('Metrics unavailable'),
-          change, use, editable: editable && !pending, vertical: compact, compatible,
+          change, use, editable: editable && !pending, vertical: compact, compatible: pending ? undefined : compatible, matchPort: linkStart?.isTarget ? 'source' : 'target',
           input: Position.Left, output: Position.Right },
         domAttributes: node.id === guideApi && !pending ? { 'data-tutorial': target.api } : undefined,
         selected: selection.includes(node.id), draggable: !pending, deletable: false,
@@ -197,7 +203,7 @@
           next.push({
             id: `${node.id}~${i + 1}`, type: 'workbench', ...card,
             position: { x: p.x + (i % 3) * (card.width + 18), y: p.y + 124 + Math.floor(i / 3) * (card.height + 14) },
-            data: { ...base.data, name: t('Instance {0}', [i + 1]), meta: t('{0} vCPU', [num(Number(settings.cpu))]), health: t('Cluster member'), change: '', use: undefined, editable: false },
+            data: { ...base.data, name: t('Instance {0}', [i + 1]), meta: t('{0} vCPU', [num(Number(settings.cpu))]), health: t('Cluster member'), change: '', use: undefined, editable: false, compatible: undefined },
             selectable: false, focusable: false, draggable: false, deletable: false, connectable: false, zIndex: 1
           });
         }
@@ -208,7 +214,8 @@
       if (!previous) return node;
       if (previous.dragging) return { ...previous, data: node.data } as CanvasNode;
       if (previous.position.x === node.position.x && previous.position.y === node.position.y &&
-          previous.domAttributes?.['data-tutorial'] === node.domAttributes?.['data-tutorial'] && previous.width === node.width && previous.height === node.height && previous.selected === node.selected &&
+          previous.domAttributes?.['data-tutorial'] === node.domAttributes?.['data-tutorial'] && previous.width === node.width && previous.height === node.height && previous.selected === node.selected && previous.connectable === node.connectable &&
+          previous.draggable === node.draggable && previous.selectable === node.selectable &&
           JSON.stringify(previous.data) === JSON.stringify(node.data)) return previous;
       return node;
     });
@@ -216,17 +223,20 @@
   });
 
   const edgeSpecs = $derived.by(() => {
-    const bundles = new Map<string, { key: string; source: string; target: string; originals: Connection[]; kind: ReturnType<typeof connectionKind>; aggregated: boolean }>();
+    type Member = { key: string; edge: Connection; kind: ConnectionKind };
+    const bundles = new Map<string, { key: string; source: string; target: string; originals: Member[]; aggregated: boolean }>();
     for (const edge of topology.edges) {
       const source = collapsedMembers.get(edge.source) ?? edge.source;
       const target = collapsedMembers.get(edge.target) ?? edge.target;
       if (source === target) continue;
-      const aggregated = source !== edge.source || target !== edge.target;
       const kind = connectionKind(catalog, components[edge.source]?.kind, components[edge.target]?.kind);
-      const key = aggregated ? `bundle:${source}:${target}:${kind}` : edgeKey(edge);
+      if (hiddenConnections.includes(connectionCategory(kind))) continue;
+      const aggregated = source !== edge.source || target !== edge.target;
+      const key = aggregated ? `bundle:${source}:${target}` : edgeKey(edge);
+      const member = { key: edgeKey(edge), edge, kind };
       const bundle = bundles.get(key);
-      if (bundle) bundle.originals.push(edge);
-      else bundles.set(key, { key, source, target, kind, originals: [edge], aggregated });
+      if (bundle) bundle.originals.push(member);
+      else bundles.set(key, { key, source, target, originals: [member], aggregated });
     }
     return [...bundles.values()];
   });
@@ -246,53 +256,81 @@
   const paths = $derived.by(() => {
     const { boxes, obstacles } = geometry;
     const occupied: [Point, Point][] = [];
+    const outgoing = connectionPorts(edgeSpecs, boxes, 'source');
+    const incoming = connectionPorts(edgeSpecs, boxes, 'target');
     const paths = edgeSpecs.flatMap((item, index) => {
       const from = boxes[item.source];
       const to = boxes[item.target];
-      if (!from || !to) return [];
-      const waypoints = item.aggregated ? [] : (routes[item.key] ?? []).map((point) => projectWaypoint(point, item.originals[0]));
-      const start = { x: from.x + from.width, y: from.y + from.height / 2 };
-      const end = { x: to.x, y: to.y + to.height / 2 };
+      const sourcePort = outgoing.get(item.key);
+      const targetPort = incoming.get(item.key);
+      if (!from || !to || !sourcePort || !targetPort) return [];
+      const waypoints = item.aggregated ? [] : (routes[item.key] ?? []).map((point) => projectWaypoint(point, item.originals[0].edge));
+      const start = { x: from.x + from.width, y: sourcePort.y };
+      const end = { x: to.x, y: targetPort.y };
+      const gap = end.x - start.x;
+      const leadLimit = gap > 32 ? gap / 2 : gap > 0 ? 16 : Infinity;
+      const sourceLead = Math.min(leadLimit, sourcePort.lead);
+      const targetLead = Math.min(leadLimit, targetPort.lead);
       const preview = dragging && topology.edges.length >= 40;
-      const stops = preview ? [start, ...waypoints, end] : [];
+      const stops = preview ? [start, { x: start.x + sourceLead, y: start.y }, ...waypoints,
+        { x: end.x - targetLead, y: end.y }, end] : [];
       const points = preview
         ? [start, ...segments(stops).flatMap(([a, b]) => [{ x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }, b])]
-        : routeConnection(start, end, obstacles, waypoints, occupied, (index % 7 - 3) * 9);
+        : routeConnection(start, end, obstacles, waypoints, occupied, (index % 7 - 3) * 9, sourceLead, targetLead);
       occupied.push(...segments(points));
-      return [{ ...item, waypoints, points }];
+      return [{ ...item, waypoints, points, separateSource: sourcePort.separate, separateTarget: targetPort.separate }];
     });
     return { paths, obstacles };
   });
 
   $effect(() => {
-    const traffic = new Map(graphSnapshot.traffic.map((item) => [edgeKey(item), requestType ? item.operations?.[requestType] ?? 0 : item.rps]));
+    const traffic = new Map(graphSnapshot.traffic.map((item) => [edgeKey(item), item]));
     const liveEdges = new Set(game.production.edges.map(edgeKey));
     const current = untrack(() => edges);
     const previous = new Map(current.map((edge) => [edge.id, edge]));
     const labels: Rect[] = [];
     const next = paths.paths.map((item): DiagramEdge => {
-      const known = item.originals.flatMap((edge) => traffic.has(edgeKey(edge)) ? [traffic.get(edgeKey(edge))!] : []);
-      const flow = known.length ? known.reduce((sum, value) => sum + value, 0) : undefined;
-      const live = item.originals.every((edge) => liveEdges.has(edgeKey(edge)));
+      const breakdown = new Map<ConnectionKind, { count: number; rate?: number }>();
+      const operations = new Map<string, number>();
+      let flow: number | undefined;
+      for (const member of item.originals) {
+        const row = breakdown.get(member.kind) ?? { count: 0 };
+        row.count++;
+        breakdown.set(member.kind, row);
+        const metric = traffic.get(member.key);
+        if (!metric) continue;
+        const rate = requestType ? metric.operations?.[requestType] ?? 0 : metric.rps;
+        row.rate = (row.rate ?? 0) + rate;
+        flow = (flow ?? 0) + rate;
+        for (const [operation, value] of Object.entries(metric.operations ?? {})) {
+          if (value > 0) operations.set(operation, (operations.get(operation) ?? 0) + value);
+        }
+      }
+      const categories = new Set([...breakdown.keys()].map(connectionCategory));
+      const style = categories.size === 1 ? connectionStyles[connectionCategory(item.originals[0].kind)] : { color: '#afc5ce', dashed: false };
+      const live = item.originals.every((member) => liveEdges.has(member.key));
       const selected = item.key === edgeSelected;
-      const diagnostic = item.kind === 'telemetry' || item.kind === 'replication';
-      const dim = requestType && !diagnostic && (!flow || flow <= 0) && !selected;
-      const color = dim ? '#53636b' : item.kind === 'telemetry' ? '#8cbdf3' : item.kind === 'replication' ? '#d7aeed'
-        : selected || !live ? '#ffb35c' : ['queries', 'reads', 'cache'].includes(item.kind) ? '#5ed5c6'
-        : ['enqueue', 'jobs'].includes(item.kind) ? '#ffd587' : '#c7f46c';
-      const label = flow === undefined || (requestType && !flow) ? (item.aggregated ? `${item.originals.length}×` : undefined) : t('{0}/s', [num(Math.round(flow))]);
-      const width = flow === undefined ? 1.7 : Math.min(3.8, 1.6 + flow / 120);
+      const dim = requestType && !style.dashed && !flow && !selected;
+      const color = selected || !live ? '#ffb35c' : dim ? '#697c85' : style.color;
+      const count = `${num(item.originals.length)}×`;
+      const label = flow === undefined || (requestType && !flow) ? (item.aggregated ? count : undefined)
+        : `${t('{0}/s', [num(flow)])}${item.originals.length > 1 ? ` · ${count}` : ''}`;
+      const width = flow === undefined ? 1.7 : Math.min(2.7, 1.4 + flow / 240);
       const old = previous.get(item.key);
+      const fromName = t(allGroups.get(item.source)?.name ?? components[item.source]?.name ?? '');
+      const toName = t(allGroups.get(item.target)?.name ?? components[item.target]?.name ?? '');
       const value: DiagramEdge = {
         id: item.key, source: item.source, target: item.target, type: 'routed', selected, deletable: false, zIndex: 0,
-        ariaLabel: `${t(components[item.originals[0].source]?.name ?? '')} → ${t(components[item.originals[0].target]?.name ?? '')} · ${t(connectionLabels[item.kind])}`,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color },
+        ariaLabel: `${fromName} → ${toName} · ${[...breakdown.keys()].map((kind) => t(connectionLabels[kind])).join(', ')}`,
         data: { points: item.points, waypoints: item.waypoints, label, color, width,
-          labelAt: label ? labelPosition(item.points, label.length * 7 + 8, paths.obstacles, labels) : undefined,
-          dashed: !live || item.kind === 'telemetry' || item.kind === 'replication',
-          moving: game.speed > 0 && Boolean(flow && flow > 0) && !game.settings.reduced_motion,
+          labelAt: label ? labelPosition(item.points, item.originals.length > 1 && flow !== undefined ? 76 : 48, paths.obstacles, labels) : undefined,
+          breakdown: [...breakdown].map(([kind, row]) => ({ ...row, label: t(connectionLabels[kind]), color: connectionStyles[connectionCategory(kind)].color })),
+          operations: [...operations].sort((a, b) => b[1] - a[1]).map(([op, rate]) => ({ label: t(catalog.operations[op] ?? op), rate })),
+          endpoints: [item.separateSource, item.separateTarget],
+          dashed: !live || style.dashed,
+          rate: game.speed > 0 && !game.settings.reduced_motion ? flow ?? 0 : 0,
           reconnectable: !item.aggregated && editable,
-          update: item.aggregated ? undefined : old?.data?.update ?? ((waypoints, save) => updateRoute(item.key, waypoints.map((point) => projectWaypoint(point, item.originals[0], true)), save)) }
+          update: item.aggregated ? undefined : old?.data?.update ?? ((waypoints, save) => updateRoute(item.key, waypoints.map((point) => projectWaypoint(point, item.originals[0].edge, true)), save)) }
       };
       return old && old.ariaLabel === value.ariaLabel && old.selected === value.selected && JSON.stringify(old.data) === JSON.stringify(value.data) ? old : value;
     });
@@ -323,6 +361,20 @@
     }
     return positions;
   }
+  function alignedDrag(dragged: CanvasNode[], preview: boolean) {
+    const item = dragged[0];
+    if (!alignment || dragged.length !== 1 || item.type !== 'workbench') return trackDrag(dragged);
+    const neighbors = Object.entries(geometry.boxes).filter(([id]) => id !== item.id).map(([, bounds]) => bounds);
+    const { position, guides: lines } = alignCard({ ...item.position, ...card }, neighbors, 8 / canvasZoom);
+    if (preview) {
+      guides = lines;
+      if (position.x !== item.position.x || position.y !== item.position.y) {
+        nodes = nodes.map((node) => node.id === item.id ? { ...node, position } : node);
+      }
+    }
+    return trackDrag([{ ...item, position }]);
+  }
+
   function nudge(event: KeyboardEvent) {
     const delta = { ArrowLeft: [-5, 0], ArrowRight: [5, 0], ArrowUp: [0, -5], ArrowDown: [0, 5] }[event.key];
     const element = event.target;
@@ -418,11 +470,12 @@
     if (chosen.length === 1 && chosen[0].id !== edgeSelected && !next.length) selectEdge(chosen[0].id);
   }}
   onedgeclick={({ edge }) => selectEdge(edge.id)}
-  onnodedrag={({ nodes: dragged }) => previewPositions(trackDrag(dragged))}
-  onnodedragstop={({ nodes: dragged }) => finishMove(trackDrag(dragged))}
-  onselectiondrag={(_, dragged) => previewPositions(trackDrag(dragged))}
-  onselectiondragstop={(_, dragged) => finishMove(trackDrag(dragged))}
+  onnodedrag={({ nodes: dragged }) => previewPositions(alignedDrag(dragged, true))}
+  onnodedragstop={({ nodes: dragged }) => finishMove(alignedDrag(dragged, false))}
+  onselectiondrag={(_, dragged) => previewPositions(alignedDrag(dragged, true))}
+  onselectiondragstop={(_, dragged) => finishMove(alignedDrag(dragged, false))}
   oninit={() => { viewportReady = true; }}
+  onmove={(_, viewport) => { canvasZoom = viewport.zoom; }}
   onmoveend={(event, viewport) => {
     if (event || (viewportReady && !transientMove)) saveViewport(viewport);
   }}
@@ -431,7 +484,7 @@
   onpanecontextmenu={({ event }) => menu(event)}
   onedgecontextmenu={({ event, edge }) => { selectEdge(edge.id); menu(event); }}
   panOnDrag={[0, 1]} panOnScroll zoomOnScroll={false} zoomActivationKey="Control" zoomOnPinch>
-  <CanvasViewport nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
+  <CanvasViewport {guides} nodePosition={(id) => nodes.find((node) => node.id === id)?.position} transientMove={(moving) => transientMove = moving} {container} size={card} obstacles={geometry.obstacles} {bindPlacement} />
   <Background variant={BackgroundVariant.Lines} gap={compact ? 24 : 32} patternColor="#202a30" bgColor="#0c1013" />
   <Controls position={compact ? "top-left" : "bottom-left"} showFitView={false} showLock={false} />
   {#if !compact}<MiniMap position="bottom-right" width={119} height={74} pannable zoomable maskColor="#0c1013a0" nodeColor="#30494c" />{/if}
@@ -447,6 +500,8 @@
   .link-feedback { position: absolute; top: 9px; left: 9px; right: 9px; width: fit-content; max-width: calc(100% - 18px); pointer-events: none; background: var(--surface); }
   :global(.svelte-flow) {
     --xy-background-color: var(--background);
+    --xy-connectionline-stroke: var(--primary);
+    --xy-connectionline-stroke-width: 2;
     --xy-controls-button-background-color: var(--surface);
     --xy-controls-button-background-color-hover: var(--tint);
     --xy-controls-button-color: var(--text);

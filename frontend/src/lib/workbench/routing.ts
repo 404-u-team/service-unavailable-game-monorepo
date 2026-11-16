@@ -17,7 +17,8 @@ function simplify(points: Point[]): Point[] {
     const b = result.at(-1);
     const a = result.at(-2);
     if (b && equal(b, p)) continue;
-    if (a && b && ((a.x === p.x && b.x === p.x) || (a.y === p.y && b.y === p.y))) {
+    if (a && b && ((a.x === p.x && b.x === p.x && (b.y - a.y) * (p.y - b.y) >= 0) ||
+        (a.y === p.y && b.y === p.y && (b.x - a.x) * (p.x - b.x) >= 0))) {
       result[result.length - 1] = p;
     } else result.push(p);
   }
@@ -138,19 +139,44 @@ function routeLeg(start: Point, end: Point, obstacles: Rect[], occupied: ReturnT
   return elbow(start, end);
 }
 
-export function routeConnection(start: Point, end: Point, boxes: Rect[], waypoints: Point[] = [], occupied: Segment[] = [], lane = 0) {
+export function routeConnection(start: Point, end: Point, boxes: Rect[], waypoints: Point[] = [], occupied: Segment[] = [], lane = 0, startOffset = padding + 6, endOffset = padding + 6) {
   const obstacles = boxes.map((r) => ({ x: r.x - padding, y: r.y - padding, width: r.width + padding * 2, height: r.height + padding * 2 }));
-  const offset = padding + 6;
-  const stops = [{ x: start.x + offset, y: start.y }, ...waypoints, { x: end.x - offset, y: end.y }];
+  const stops = [{ x: start.x + startOffset, y: start.y }, ...waypoints, { x: end.x - endOffset, y: end.y }];
   const lanes = occupiedLanes(occupied);
   return simplify([start, ...segments(stops).flatMap(([a, b]) => routeLeg(a, b, obstacles, lanes, lane)), end]);
 }
 
+export function connectionPorts<T extends { key: string; source: string; target: string }>(
+  edges: T[], boxes: Record<string, Rect>, side: 'source' | 'target'
+) {
+  const peer = side === 'source' ? 'target' : 'source';
+  const buckets = new Map<string, T[]>();
+  for (const edge of edges) {
+    if (!boxes[edge.source] || !boxes[edge.target]) continue;
+    const bucket = buckets.get(edge[side]) ?? [];
+    bucket.push(edge);
+    buckets.set(edge[side], bucket);
+  }
+  const ports = new Map<string, { y: number; lead: number; separate: boolean }>();
+  for (const [id, bucket] of buckets) {
+    const box = boxes[id];
+    bucket.sort((a, b) => boxes[a[peer]].y + boxes[a[peer]].height / 2 - boxes[b[peer]].y - boxes[b[peer]].height / 2 ||
+      a[peer].localeCompare(b[peer]));
+    const step = Math.min(16, (box.height - 20) / Math.max(1, bucket.length - 1));
+    for (const [index, edge] of bucket.entries()) {
+      const offset = index - (bucket.length - 1) / 2;
+      ports.set(edge.key, { y: box.y + box.height / 2 + step * offset, lead: 16 + Math.min(30, index * 5), separate: bucket.length > 1 });
+    }
+  }
+  return ports;
+}
+
 export function labelPosition(points: Point[], width: number, boxes: Rect[], labels: Rect[]): Point | undefined {
-  const ordered = segments(points).slice(1, -1).sort(([a, b], [c, d]) =>
+  const parts = segments(points);
+  const internal = parts.slice(1, -1).sort(([a, b], [c, d]) =>
     Math.hypot(d.x - c.x, d.y - c.y) - Math.hypot(b.x - a.x, b.y - a.y));
-  for (const [a, b] of ordered.length ? ordered : segments(points)) {
-    if (Math.hypot(b.x - a.x, b.y - a.y) < 30) continue;
+  for (const [a, b] of parts.length > 1 ? [...internal, parts[0], parts[parts.length - 1]] : parts) {
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 14) continue;
     for (const fraction of [.5, .32, .68]) {
       const center = { x: a.x + (b.x - a.x) * fraction, y: a.y + (b.y - a.y) * fraction };
       for (const side of [-1, 1]) {

@@ -55,6 +55,19 @@ async function connect(page: Page, from: string, to: string) {
   await expect(dialog).toBeHidden();
 }
 
+async function mapSettings(page: Page) {
+  await page.getByRole('button', { name: 'Map settings', exact: true }).click();
+  return page.getByRole('dialog', { name: 'Map settings' });
+}
+
+async function setMapView(page: Page, view: 'list' | 'canvas', touch = false) {
+  const settings = await mapSettings(page);
+  const toggle = settings.getByRole('button', { name: view === 'list' ? 'Show component list' : 'Show topology canvas' });
+  if (touch) await toggle.tap();
+  else await toggle.click();
+  await expect(settings).toBeHidden();
+}
+
 async function openInspector(page: Page, label = 'Open component') {
   await page.getByRole('button', { name: label, exact: true }).click();
   const inspector = page.getByRole('dialog', { name: 'Component inspector' });
@@ -130,7 +143,12 @@ test('A and B · create, run, save, reopen, edit and scale production', async ({
 
   await navigate(page, 'Topology');
   await page.locator('.svelte-flow__node[aria-label="Messenger API"]').click();
-  await openInspector(page);
+  const inspector = await openInspector(page);
+  await inspector.getByRole('button', { name: 'Metrics', exact: true }).click();
+  await expect(inspector.getByRole('heading', { name: 'Resource utilization' })).toBeVisible();
+  const cpu = inspector.getByRole('meter', { name: 'CPU' });
+  await expect(cpu).toHaveAttribute('aria-valuetext', /^[1-9]\d{2,}%$/);
+  if (visualDir) await page.screenshot({ path: `${visualDir}/overloaded-inspector.png` });
   await page.getByRole('button', { name: 'Edit configuration' }).click();
   await choose(page.getByRole('combobox', { name: 'Instance size', exact: true }), { label: 'Performance P4 · 4 vCPU / 8 GB' });
   await page.getByRole('button', { name: 'Save to draft' }).click();
@@ -346,7 +364,7 @@ test.describe('Mobile workbench', () => {
       await expect.poll(transform).toBeGreaterThan(before);
       await cdp.detach();
     }
-    await page.getByRole('button', { name: 'Show component list' }).tap();
+    await setMapView(page, 'list', true);
     await page.getByRole('button', { name: 'Messenger API API server' }).tap();
     await page.getByRole('button', { name: 'Open component' }).tap();
     const inspector = page.getByRole('dialog', { name: 'Component inspector' });
@@ -388,7 +406,7 @@ test.describe('Mobile workbench', () => {
     await reference.getByRole('button', { name: 'Close dialog' }).tap();
     await library.getByRole('button', { name: 'Close dialog' }).tap();
 
-    await page.getByRole('button', { name: 'Show component list' }).tap();
+    await setMapView(page, 'list', true);
     await page.getByRole('button', { name: 'Select multiple' }).tap();
     const api = page.getByRole('button', { name: 'Messenger API API server' });
     if (await api.getAttribute('aria-pressed') !== 'true') await api.tap();
@@ -490,7 +508,7 @@ test('canvas drag, edge selection, and keyboard undo persist valid changes', asy
   await expect.poll(async () => (await state(page, id)).diagram.positions.api?.y).toBeLessThan(145);
   await page.keyboard.press('Control+z');
   await expect.poll(async () => (await state(page, id)).diagram.positions.api).toBeUndefined();
-  await page.getByRole('button', { name: 'Show component list' }).click();
+  await setMapView(page, 'list');
   await page.getByRole('button', { name: 'Messenger API → Primary database' }).click();
   await page.keyboard.press('Delete');
   await expect.poll(async () => (await state(page, id)).draft?.edges.length).toBe(2);
@@ -505,6 +523,55 @@ test('canvas drag, edge selection, and keyboard undo persist valid changes', asy
   expect((await state(page, id)).production.edges).toHaveLength(3);
 });
 
+
+test('alignment guides snap a component and speed changes keep the canvas and controls stable', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  await pause(page);
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  const before = await state(page, id);
+  const settings = await mapSettings(page);
+  await settings.getByRole('switch', { name: 'Alignment guides' }).check();
+  await settings.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(settings).toHaveCount(0);
+
+  const node = page.locator('.svelte-flow__node[data-id="api"]');
+  const neighbor = page.locator('.svelte-flow__node[data-id="db"]');
+  const from = (await node.boundingBox())!;
+  const to = (await neighbor.boundingBox())!;
+  const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+  const horizontal = page.locator('.flow-shell .guide.horizontal');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 32, to.y + to.height / 2 + 5, { steps: 8 });
+  await expect(horizontal).toBeVisible();
+  await expect.poll(async () => Math.abs((await node.boundingBox())!.y - to.y)).toBeLessThan(1);
+  await page.mouse.up();
+  await expect(horizontal).toHaveCount(0);
+  const dbY = before.draft!.nodes.find((item) => item.id === 'db')!.position.y;
+  await expect.poll(async () => (await state(page, id)).diagram.positions.api?.y).toBe(dbY);
+
+  const nodeElement = await node.elementHandle();
+  const speed = page.getByRole('button', { name: 'Fast speed (3×)' });
+  const save = page.getByRole('button', { name: 'Save game', exact: true });
+  let releaseClock!: () => void;
+  const pendingClock = new Promise<void>((resolve) => { releaseClock = resolve; });
+  await page.route(`**/api/games/${id}/clock`, async (route) => {
+    await pendingClock;
+    await route.continue();
+  });
+  try {
+    await speed.click();
+    await expect(speed).toHaveAttribute('aria-disabled', 'true');
+    await expect(speed).toHaveCSS('opacity', '1');
+    await expect(save).toHaveCSS('opacity', '1');
+    await expect(node.locator('.svelte-flow__handle.connectable')).toHaveCount(2);
+  } finally {
+    releaseClock();
+  }
+  await expect(speed).toHaveAttribute('aria-pressed', 'true');
+  expect(await nodeElement?.evaluate((element) => element.isConnected)).toBe(true);
+});
 
 test('layout edits persist without Draft and preserve production', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -666,9 +733,12 @@ test('Russian is persisted across menus, editor, settings, and game screens', as
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
   }
   await page.goto(`${base}?view=build`);
-  await page.getByRole('button', { name: 'Справочник соединений' }).click();
-  await expect(page.getByRole('dialog')).toContainText('Исходящие соединения');
-  await page.getByRole('button', { name: 'Закрыть окно' }).click();
+  await page.getByRole('button', { name: 'Настройки карты', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Настройки карты' });
+  await settings.getByText('Справочник соединений', { exact: true }).click();
+  await expect(settings.getByText('Исходящие соединения', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Закрыть окно' }).click();
+  await expect(settings).toBeHidden();
   await page.getByRole('button', { name: 'Создать черновик' }).click();
   await expect(page.getByRole('button', { name: 'Проверить развёртывание' })).toBeVisible();
   const sourcePort = page.locator('.svelte-flow__node[data-id="traffic"] .svelte-flow__handle.source');
@@ -765,6 +835,23 @@ test('complex topology supports nested groups, telemetry capacity and configurat
   await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(3);
   await expect(page.locator('.svelte-flow__edge')).toHaveCount(18);
   await page.getByRole('button', { name: 'Fit view' }).click();
+  const monitorPorts = page.locator('.svelte-flow__edge[data-id$=":monitor"] circle[data-port="target"]');
+  await expect(monitorPorts).toHaveCount(5);
+  expect(await monitorPorts.evaluateAll((ports) => new Set(ports.map((port) => port.getAttribute('cy'))).size)).toBe(5);
+  const settings = await mapSettings(page);
+  await settings.getByRole('switch', { name: 'Metrics collection', exact: true }).uncheck();
+  await expect(monitorPorts).toHaveCount(0);
+  await settings.getByText('Connection reference', { exact: true }).click();
+  await expect(settings.getByText('Input connections', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Close dialog' }).click();
+  await page.reload();
+  await expect(page.locator('.svelte-flow__edge')).toHaveCount(13);
+  expect((await state(page, id)).production).toEqual(deployed.production);
+  await mapSettings(page);
+  await settings.getByRole('switch', { name: 'Metrics collection', exact: true }).check();
+  await settings.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(monitorPorts).toHaveCount(5);
+  await expect(settings).toHaveCount(0);
   const clipped = await page.locator('.svelte-flow__node-workbench').evaluateAll((nodes) => nodes.some((node) => {
     const content = node.querySelector('.node-status');
     const heading = node.querySelector('strong');
@@ -781,9 +868,28 @@ test('complex topology supports nested groups, telemetry capacity and configurat
   await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(1);
   await expect(page.locator('.svelte-flow__node-workbench')).toHaveCount(7);
   await expect.poll(async () => (await state(page, id)).diagram.groups.find((group) => group.id === 'application-display')?.collapsed).toBe(true);
+  const bundle = page.getByRole('button', { name: 'Connection breakdown for 3×', exact: true });
+  await bundle.hover();
+  await expect(page.getByRole('tooltip')).toContainText('Metrics collection');
+  await page.mouse.move(5, 5);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await bundle.focus();
+  await expect(page.getByRole('tooltip')).toContainText('Metrics collection');
+  await expect(page.getByRole('tooltip')).toContainText('3×');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
   expect((await state(page, id)).snapshot).toEqual(deployed.snapshot);
   await page.getByRole('button', { name: 'Run simulation at normal speed' }).click();
   await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(deployed.tick);
+  const packets = page.locator('.svelte-flow__edge path.traffic').first();
+  await expect(packets).toHaveCSS('animation-name', /flow/);
+  await expect(packets).not.toHaveCSS('animation-duration', '0s');
+  await expect(packets).not.toHaveCSS('stroke-dasharray', 'none');
+  await expect(packets).not.toHaveCSS('display', 'none');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(packets).toHaveCSS('display', 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(page.locator('.svelte-flow__edge path[marker-end]')).toHaveCount(0);
   await subsystem.getByRole('button', { name: 'Expand group' }).click();
   await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(3);
   const running = await state(page, id);
@@ -822,7 +928,7 @@ test('port guidance rejects incompatible links and reconnects endpoints in Draft
   await page.getByRole('button', { name: 'Create draft' }).click();
   await expect(page.getByRole('button', { name: 'Review deployment' })).toBeVisible();
   const node = (id: string) => page.locator(`.svelte-flow__node[data-id="${id}"]`);
-  const drag = async (from: ReturnType<Page['locator']>, to: ReturnType<Page['locator']>) => {
+  const drag = async (from: ReturnType<Page['locator']>, to: ReturnType<Page['locator']>, compatible: boolean) => {
     await expect.poll(() => from.evaluate((element) => {
       const box = element.getBoundingClientRect();
       return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === element;
@@ -832,13 +938,15 @@ test('port guidance rejects incompatible links and reconnects endpoints in Draft
     await page.mouse.down();
     await page.mouse.move(a.x + a.width / 2 + 12, a.y + a.height / 2);
     await expect(page.getByText('Highlighted ports accept this connection.')).toBeVisible();
+    if (compatible) await expect(to).toHaveClass(/valid-port/);
+    else await expect(to).not.toHaveClass(/valid-port/);
     const current = (await to.boundingBox())!;
     await page.mouse.move(current.x + current.width / 2, current.y + current.height / 2, { steps: 8 });
     const stable = (await to.boundingBox())!;
     await page.mouse.move(stable.x + stable.width / 2, stable.y + stable.height / 2);
     await page.mouse.up();
   };
-  await drag(node('traffic').locator('.svelte-flow__handle.source'), node('db').locator('.target'));
+  await drag(node('traffic').locator('.svelte-flow__handle.source'), node('db').locator('.target'), false);
   await expect(page.getByText('Traffic source cannot connect to Database.')).toBeVisible();
   expect((await state(page, id)).draft?.edges).toEqual(initial.production.edges);
 
@@ -847,12 +955,12 @@ test('port guidance rejects incompatible links and reconnects endpoints in Draft
   await page.mouse.click((from.x + from.width + to.x) / 2, from.y + from.height / 2);
   const reconnect = page.locator('.svelte-flow__edgeupdater-target');
   await expect(reconnect).toBeVisible();
-  await drag(reconnect, node('api').locator('.target'));
+  await drag(reconnect, node('api').locator('.target'), true);
   await expect.poll(async () => (await state(page, id)).draft?.edges.some((edge) => edge.source === 'traffic' && edge.target === 'api')).toBe(true);
   expect((await state(page, id)).production).toEqual(initial.production);
-  await page.getByRole('button', { name: 'Show component list' }).click();
+  await setMapView(page, 'list');
   await page.getByRole('button', { name: 'Incoming traffic → Messenger API' }).click();
-  await page.getByRole('button', { name: 'Show topology canvas' }).click();
+  await setMapView(page, 'canvas');
   await addWaypoint(page);
   await expect.poll(async () => (await state(page, id)).diagram.routes['traffic:api']?.length).toBe(1);
   const routeBeforeDeploy = (await state(page, id)).diagram.routes['traffic:api'];
@@ -879,9 +987,9 @@ test('a new API server in a reopened save keeps its links and route through depl
   const added = drafted.draft!.nodes.find((node) => node.kind === 'api' && node.id !== 'api')!;
   expect(drafted.production).toEqual(original.production);
 
-  await page.getByRole('button', { name: 'Show component list' }).click();
+  await setMapView(page, 'list');
   await page.getByRole('button', { name: 'API server → Primary database', exact: true }).click();
-  await page.getByRole('button', { name: 'Show topology canvas' }).click();
+  await setMapView(page, 'canvas');
   await addWaypoint(page);
   const routeKey = `${added.id}:db`;
   await expect.poll(async () => (await state(page, id)).diagram.routes[routeKey]?.length).toBe(1);
@@ -924,7 +1032,7 @@ test('inspector keeps both tabs through live updates and preserves draft values'
   await expect(config).toHaveAttribute('aria-pressed', 'true');
   await expect(inspector.getByText('2', { exact: true })).toBeVisible();
   await closeInspector(page);
-  await page.getByRole('button', { name: 'Show component list' }).click();
+  await setMapView(page, 'list');
   await page.getByRole('button', { name: 'Primary database Database' }).click();
   await openInspector(page);
   await expect(inspector.getByRole('heading', { name: 'Primary database' })).toBeVisible();

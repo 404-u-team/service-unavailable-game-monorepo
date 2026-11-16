@@ -45,6 +45,16 @@
   </div>
 </Story>
 
+<Story name="Tooltip with custom content">
+  <Tooltip label={t('About capacity targets')}>
+    {#snippet trigger()}{t('Capacity target')}{/snippet}
+    {#snippet content()}
+      <strong>{t('Capacity target')}</strong>
+      <p>{t('Capacity is the number of requests that the current topology can serve per second.')}</p>
+    {/snippet}
+  </Tooltip>
+</Story>
+
 <Story name="Toasts">
   <div class="row">
     <Button variant="primary" onclick={() => toasts.add({

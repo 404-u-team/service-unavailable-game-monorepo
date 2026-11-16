@@ -2,6 +2,8 @@ import { parseNumber } from '../src/lib/controls/numeric';
 import { expect, test } from 'bun:test';
 import { applyFrame } from '../src/lib/live';
 import type { Diagram, Game } from '../src/lib/types';
+import { alignCard } from '../src/lib/workbench/alignment';
+import { connectionPorts } from '../src/lib/workbench/routing';
 import { diagramPatch, mergeLayout } from '../src/lib/workbench/diagram';
 import { findPlacement } from '../src/lib/workbench/placement';
 import { spotlightBounds } from '../src/lib/workbench/spotlight';
@@ -55,4 +57,27 @@ test('localized numeric input parses valid separators and rejects malformed valu
   expect(parseNumber('1,2,3', 'en')).toBeUndefined();
   expect(parseNumber('12 34,50', 'ru')).toBeUndefined();
   expect(parseNumber('-', 'en')).toBeUndefined();
+});
+
+test('alignment snaps matching edges or centers independently and leaves distant cards free', () => {
+  const card = { x: 198, y: 34, width: 160, height: 90 };
+  const neighbors = [
+    { x: 200, y: 240, width: 160, height: 90 },
+    { x: 0, y: 36, width: 180, height: 86 }
+  ];
+  expect(alignCard(card, neighbors, 8)).toEqual({ position: { x: 200, y: 34 }, guides: { x: 280, y: 79 } });
+  expect(alignCard({ ...card, x: 180, y: 24 }, neighbors, 4)).toEqual({ position: { x: 180, y: 24 }, guides: {} });
+});
+
+test('incoming ports stay distinct and follow the vertical order of their senders', () => {
+  const boxes = {
+    a: { x: 0, y: 40, width: 60, height: 40 },
+    b: { x: 0, y: 110, width: 60, height: 40 },
+    c: { x: 100, y: 56, width: 60, height: 52 }
+  };
+  const edges = [{ key: 'b:c', source: 'b', target: 'c' }, { key: 'a:c', source: 'a', target: 'c' }];
+  const incoming = connectionPorts(edges, boxes, 'target');
+  expect(incoming.get('a:c')).toEqual({ y: 74, lead: 16, separate: true });
+  expect(incoming.get('b:c')).toEqual({ y: 90, lead: 21, separate: true });
+  expect(connectionPorts(edges.slice(0, 1), boxes, 'target').get('b:c')).toEqual({ y: 82, lead: 16, separate: false });
 });
