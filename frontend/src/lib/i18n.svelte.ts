@@ -46,6 +46,7 @@ const matches: [RegExp, string][] = [
   [/^(.+) disabled$/, '{0} disabled'],
   [/^(.+) enabled$/, '{0} enabled'],
   [/^Connect the required infrastructure: (.+)\.$/, 'Connect the required infrastructure: {0}.'],
+  [/^The draft does not meet the requirements for (.+?)\. (.+)$/, 'The draft does not meet the requirements for {0}. {1}'],
   [/^This action costs (.+)\. Available balance is (.+)\.$/, 'This action costs {0}. Available balance is {1}.'],
   [/^(.+) has no monitoring links\.$/, '{0} has no monitoring links.'],
   [/^(.+) has more monitoring links than available slots\.$/, '{0} has more monitoring links than available slots.'],

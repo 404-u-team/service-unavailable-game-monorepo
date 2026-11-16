@@ -93,6 +93,26 @@ def routed_shards():
     return game
 
 
+def media_migration(*, existing_media: bool = False):
+    game = fixture()
+    unlock(game)
+    game.balance = 100_000
+    game.released.append("images")
+    game.infrastructure_releases.append("images")
+    if existing_media:
+        add_node(game, "media-db", "database", domain="Media")
+        link(game, "api", "media-db")
+        game.storage["media-db"] = 20
+    else:
+        game.storage["db"] = 20
+    destination = routed_shards()
+    add_node(destination, "media-db", "database", domain="Media")
+    link(destination, "api", "media-db")
+    open_draft(game, game.revision)
+    edit_draft(game, game.revision, destination.production)
+    return game
+
+
 class EngineeringTests(TestCase):
     def test_research_cost_time_prerequisites_and_no_automatic_architecture(self):
         game = fixture()
@@ -543,6 +563,54 @@ class EngineeringTests(TestCase):
             sum(game.storage.values()),
         )
         self.assertEqual(game.deployments[-1].cost, result.install)
+
+    def test_migration_reviews_media_headroom_after_copying(self):
+        game = media_migration()
+        self.assertEqual(review(game, game.revision).errors, [])
+        self.assertNotIn("media-db", game.storage)
+        game.storage["db"] = 26
+        errors = review(game, game.revision).errors
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Image attachments", errors[0])
+        self.assertIn("at least 8 GB free", errors[0])
+
+    def test_failed_cutover_preserves_draft_refunds_and_allows_retry(self):
+        game = media_migration(existing_media=True)
+        original = game.production
+        draft = game.draft
+        deploy(game, game.revision, uuid4())
+        pending = game.migration
+        self.assertGreater(pending.cost, 0)
+        advance(game, pending.ready_at - game.tick - 1)
+        game.storage["media-db"] = 26
+        previous_balance = game.balance
+        previous_operating = game.operating
+        previous_revision = game.revision
+        advance(game, 1)
+        self.assertIsNone(game.migration)
+        self.assertEqual(game.production, original)
+        self.assertEqual(game.draft, draft)
+        self.assertEqual(game.revision, previous_revision + 1)
+        self.assertEqual(game.deployments, [])
+        self.assertEqual(game.deployment_spend, 0)
+        self.assertNotIn(0, game.recent_purchases)
+        self.assertAlmostEqual(
+            game.balance + game.operating - previous_operating,
+            previous_balance + pending.cost,
+        )
+        failure = next(event for event in game.incidents if event.kind == "migration-failed")
+        self.assertIn("Image attachments", failure.symptom)
+        self.assertIn("at least 8 GB free", failure.symptom)
+        advance(game, 1)
+        self.assertEqual(sum(event.kind == "migration-failed" for event in game.incidents), 1)
+        self.assertEqual(game.deployment_spend, 0)
+        candidate = draft.model_copy(deep=True)
+        next(node for node in candidate.nodes if node.id == "media-db").config["storage"] = 64
+        edit_draft(game, game.revision, candidate)
+        self.assertEqual(review(game, game.revision).errors, [])
+        deploy(game, game.revision, uuid4())
+        advance(game, game.migration.ready_at - game.tick)
+        self.assertEqual(game.production, candidate)
 
     def test_autoscaling_needs_coverage_reacts_late_and_bills_active_instances(self):
         game = fixture()

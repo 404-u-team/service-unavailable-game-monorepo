@@ -378,11 +378,12 @@ def migrated_storage(
             targets, partition_weights(domain, targets) if targets else []
         ):
             result[primary] += stored * share
+    # Preparation reserves headroom for writes arriving while the old topology runs.
+    fill_limit = 0.85 if validate else 1
     for node in topology.nodes:
         if (
-            validate
-            and node.kind == "database"
-            and result.get(node.id, 0) > config(node)["storage"] * 0.85
+            node.kind == "database"
+            and result.get(node.id, 0) > config(node)["storage"] * fill_limit
         ):
             raise RuleError(
                 "Migration needs spare destination storage. Add storage before moving this dataset."

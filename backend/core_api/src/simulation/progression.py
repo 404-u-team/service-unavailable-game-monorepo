@@ -190,8 +190,7 @@ def advance(game: Game, steps: int) -> None:
                 game,
                 game.revision,
                 pending.request_id,
-                prepared=True,
-                prepaid_cost=pending.cost,
+                prepared=pending,
             )
         for event in game.incidents:
             if (

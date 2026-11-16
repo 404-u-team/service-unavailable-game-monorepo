@@ -10,6 +10,10 @@ from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 from uuid import uuid4
 
+from src.services.games import deploy
+from src.services.save_files import export_file
+from tests.test_engineering import media_migration
+
 API_URL = os.environ.get("TEST_GAME_API_URL")
 
 
@@ -444,3 +448,31 @@ class GameApiTests(TestCase):
             ],
             409,
         )
+
+    def test_export_recovers_paid_migration_that_cannot_cut_over(self):
+        game = media_migration(existing_media=True)
+        deploy(game, game.revision, uuid4())
+        game.storage["media-db"] = 26
+        game.tick = game.migration.ready_at - 1
+        game.speed = 5
+        game.clock_fraction = 0.999999
+        _, portable = export_file(game)
+        status, _, body = file_request(self.client, "/import", portable.model_dump_json().encode())
+        self.assertEqual(status, 201, body)
+        path = "/" + json.loads(body)["id"]
+
+        status, _, body = file_request(self.client, path + "/export")
+        self.assertEqual(status, 200, body)
+        recovered = json.loads(body)["game"]
+        self.assertIsNone(recovered["migration"])
+        self.assertEqual(recovered["draft"], game.draft.model_dump(mode="json"))
+        self.assertEqual(recovered["production"], game.production.model_dump(mode="json"))
+        self.assertEqual(recovered["deployment_spend"], 0)
+        self.assertEqual(recovered["revision"], game.revision + 1)
+        status, current = call(self.client, path)
+        self.assertEqual(status, 200, current)
+        self.assertIsNone(current["migration"])
+        self.assertEqual(current["revision"], recovered["revision"])
+        failures = [event for event in current["incidents"] if event["title"] == "Migration failed"]
+        self.assertEqual(len(failures), 1)
+        self.assertIn("Image attachments", failures[0]["symptom"])

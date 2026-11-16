@@ -343,6 +343,7 @@ def forecast(
     plan: CampaignPlan | None = None,
     *,
     compare_databases: bool = False,
+    projected_storage: dict[str, float] | None = None,
 ) -> Forecast:
     telemetry = evaluate(game).snapshot
     coverage = len(telemetry.components)
@@ -353,6 +354,9 @@ def forecast(
     )
     assumed = game.model_copy(deep=True)
     assumed.incidents = []
+    if projected_storage is not None:
+        assumed.storage = projected_storage
+        assumed.production = topology
     audience = game.audience
     boost = 0.0
     if campaign_id and plan:
@@ -515,30 +519,36 @@ def review(
                 )
             ] = "Messenger API servers receiving live requests must share one primary database."
         errors.extend(issues)
-        for feature_id in game.infrastructure_releases:
-            if feature_id in game.enabled_features:
-                feature = FEATURES[feature_id]
-                if any(
-                    not requirement_met(
-                        REQUIREMENTS[key], graph, game, feature["operation"]
-                    )
-                    for key in feature["infrastructure"]
-                ):
-                    errors.append(
-                        "The draft cannot support a released product feature. Check its infrastructure requirements in Product."
-                    )
         migration_ticks, migration_cost = migration_plan(game, candidate)
+        projected_storage = None
+        projected = game
         if migration_ticks:
-            migrated_storage(game, candidate, validate=not prepared)
+            projected_storage = migrated_storage(game, candidate, validate=not prepared)
+            projected = game.model_copy(update={"storage": projected_storage})
             install += migration_cost
             warnings.append(
                 "Data migration keeps production serving until preparation completes. Copying reserves 10% database capacity."
             )
+        for feature_id in game.infrastructure_releases:
+            if feature_id not in game.enabled_features:
+                continue
+            feature = FEATURES[feature_id]
+            for key in feature["infrastructure"]:
+                rule = REQUIREMENTS[key]
+                if not requirement_met(rule, graph, projected, feature["operation"]):
+                    errors.append(
+                        f"The draft does not meet the requirements for {feature['name']}. {rule.description}"
+                    )
         if game.speed and changes["disconnected"]:
             warnings.append(
                 "Live routing changes can cause a brief interruption while traffic shifts."
             )
-        estimate = forecast(game, candidate, compare_databases=True)
+        estimate = forecast(
+            game,
+            candidate,
+            compare_databases=True,
+            projected_storage=projected_storage,
+        )
         if estimate.availability.low < 0.95:
             warnings.append("Some projected load exceeds the draft's service capacity.")
         if install > 0 and install > game.balance:
@@ -635,8 +645,7 @@ def deploy(
     request_id: UUID,
     rollback: UUID | None = None,
     *,
-    prepared: bool = False,
-    prepaid_cost: float | None = None,
+    prepared: ArchitectureMigration | None = None,
 ) -> None:
     candidate = game.draft
     if rollback:
@@ -648,17 +657,23 @@ def deploy(
         if entry is None:
             raise RuleError("That deployment is outside the rollback history.")
         candidate = entry.topology
-    result = review(game, revision, candidate, prepared=prepared)
+    result = review(game, revision, candidate, prepared=prepared is not None)
     if prepared:
         result.errors = [
             issue
             for issue in result.errors
             if issue != "The game balance cannot cover the deployment cost."
         ]
-    if result.errors:
-        raise RuleError(result.errors[0])
-    if not any(result.changes.values()):
-        raise RuleError("There are no architecture changes to deploy.")
+    if result.errors or not any(result.changes.values()):
+        reason = (
+            result.errors[0]
+            if result.errors
+            else "There are no architecture changes to deploy."
+        )
+        if prepared is None:
+            raise RuleError(reason)
+        reject_migration(game, prepared, reason)
+        return
     if not prepared:
         spend(game, result.install, "deployment")
         if result.migration_ticks:
@@ -679,8 +694,8 @@ def deploy(
                 result.migration_ticks,
             )
             return
-    if prepaid_cost is not None:
-        result.install = prepaid_cost
+    if prepared is not None:
+        result.install = prepared.cost
     transferred = (
         migrated_storage(game, candidate, validate=False)
         if result.migration_ticks
@@ -775,6 +790,29 @@ def deploy(
                     interaction="observed",
                 ),
             )
+
+
+def reject_migration(game: Game, pending: ArchitectureMigration, reason: str) -> None:
+    refund = min(pending.cost, max(0, game.deployment_spend))
+    game.balance += refund
+    game.deployment_spend -= refund
+    # The start event identifies the prepaid purchase in older saves too.
+    for event in reversed(game.incidents):
+        if (
+            event.kind == "migration"
+            and event.end == pending.ready_at
+            and event.resolution is None
+        ):
+            event.end = game.tick
+            event.resolution = "Migration failed"
+            purchase = game.recent_purchases.get(event.start)
+            if purchase is not None:
+                purchase.deployment = max(0, purchase.deployment - refund)
+                if not purchase.total:
+                    del game.recent_purchases[event.start]
+            break
+    game.revision += 1
+    add_event(game, "migration-failed", "Migration failed", reason, "warning", 0)
 
 
 def research_state(game: Game, key: str) -> ResearchView:
