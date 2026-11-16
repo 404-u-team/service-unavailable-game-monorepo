@@ -1,4 +1,5 @@
 import { MAX_SAVE_BYTES } from './save-limit';
+import { downloadFile } from './download';
 import { difficulties, type Catalog, type Game, type Save, type SavePreview } from './types';
 
 export class ApiError extends Error {
@@ -48,14 +49,7 @@ export async function downloadSave(id: string): Promise<void> {
   const response = await fetch(`/api/games/${id}/export`, { cache: 'no-store' });
   if (!response.ok) await throwApiError(response);
   const filename = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1];
-  const url = URL.createObjectURL(await response.blob());
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename ?? 'service-unavailable-save.json';
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(await response.blob(), filename ?? 'service-unavailable-save.json');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

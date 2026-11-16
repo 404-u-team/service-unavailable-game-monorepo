@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Accordion } from '@service-unavailable/ui';
   import { t } from '../i18n.svelte';
   import { minuteClock, num, pct, preciseMoney, rps } from '../format';
   import type { DemandOverview, Market } from '../types';
@@ -9,7 +10,8 @@
   const utc = (minutes: number) => `UTC${minutes < 0 ? '−' : '+'}${minuteClock(Math.abs(minutes))}`;
   let sort = $state('requests');
   const regions = $derived([...demand.regions].sort((a, b) => sort === 'name' ? t(a.name).localeCompare(t(b.name))
-    : sort === 'audience' ? b.audience - a.audience : b.requests - a.requests));
+    : sort === 'audience' ? b.audience - a.audience : b.requests - a.requests)
+    .map((region) => ({ ...region, title: t(region.name) })));
 </script>
 
 <div class="regional-demand">
@@ -29,36 +31,28 @@
     <div class="sort"><Select label={t('Sort regions')} bind:value={sort} options={[
       { value: 'requests', label: t('Request rate') }, { value: 'audience', label: t('Registered users') }, { value: 'name', label: t('Region name') }
     ]} /></div>
-    <div class="regions">
-      {#each regions as region (region.id)}
-        <details>
-          <summary>
-            <strong>{t(region.name)}</strong><span class="muted mono">{minuteClock(region.local_minute)}</span><strong class="mono">{rps(region.requests)}</strong>
-          </summary>
-          <dl>
-            <div><dt>{t('Market status')}</dt><dd>{t(markets.find((market) => market.id === region.id)?.stage === 'active' ? 'Active' : 'Inactive')}</dd></div>
-            <div><dt>{t('Local time')}</dt><dd>{minuteClock(region.local_minute)} ({utc(region.utc_offset)})</dd></div>
-            <div><dt>{t('Registered users')}</dt><dd>{num(region.audience)}</dd></div>
-            <div><dt>{t('Daily active users (DAU)')}</dt><dd>{num(Math.round(region.daily_active_users))}</dd></div>
-            {#if region.earned_ad_revenue}<div><dt>{t('Ad revenue in the last game day')}</dt><dd>{preciseMoney(region.earned_ad_revenue)}</dd></div>{/if}
-          </dl>
-        </details>
-      {/each}
-    </div>
+    <Accordion items={regions}>
+      {#snippet summary(region)}
+        <span class="row wrap mono"><span class="muted">{minuteClock(region.local_minute)}</span><strong>{rps(region.requests)}</strong></span>
+      {/snippet}
+      {#snippet children(region)}
+        <dl>
+          <div><dt>{t('Market status')}</dt><dd>{t(markets.find((market) => market.id === region.id)?.stage === 'active' ? 'Active' : 'Inactive')}</dd></div>
+          <div><dt>{t('Local time')}</dt><dd>{minuteClock(region.local_minute)} ({utc(region.utc_offset)})</dd></div>
+          <div><dt>{t('Registered users')}</dt><dd>{num(region.audience)}</dd></div>
+          <div><dt>{t('Daily active users (DAU)')}</dt><dd>{num(Math.round(region.daily_active_users))}</dd></div>
+          {#if region.earned_ad_revenue}<div><dt>{t('Ad revenue in the last game day')}</dt><dd>{preciseMoney(region.earned_ad_revenue)}</dd></div>{/if}
+        </dl>
+      {/snippet}
+    </Accordion>
   </section>
 </div>
 
 <style>
-  .regional-demand { container-type: inline-size; }
   .regional-demand { display: flex; flex-wrap: wrap; gap: 20px; align-items: start; }
   .regional-demand section { min-width: 0; flex: 1 1 17rem; align-content: start; }
   .sort { max-width: 190px; }
-  .regions { max-height: 280px; overflow-y: auto; overscroll-behavior: contain; }
-  details { border-top: 1px solid var(--border); padding: 8px 3px; font-size: 13px; }
-  summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; cursor: pointer; }
-  summary strong:first-child::before { content: '▸ '; color: var(--muted); }
-  details[open] summary strong:first-child::before { content: '▾ '; }
-  dl { margin: 6px 0 2px 8px; }
+  dl { margin: 0; }
   dl div { display: flex; justify-content: space-between; gap: 10px; padding: 4px 1px; }
   dd { margin: 0; text-align: end; font-family: var(--mono); }
 </style>

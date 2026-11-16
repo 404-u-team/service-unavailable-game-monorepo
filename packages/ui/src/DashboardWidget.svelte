@@ -34,6 +34,6 @@
     border-block-end: 1px solid var(--sui-border); padding-inline: var(--sui-space-3);
   }
   h3 { flex: 1; min-inline-size: 0; margin: 0; padding-block: var(--sui-space-2); font: 700 1rem/1.3 var(--sui-heading); overflow-wrap: anywhere; }
-  .body { min-block-size: 0; min-inline-size: 0; overflow: auto; padding: var(--sui-space-3); overscroll-behavior: contain; }
+  .body { min-block-size: 0; min-inline-size: 0; overflow: auto; padding: var(--sui-space-3); }
   .resizable .body { margin-block-end: 1.5rem; }
 </style>

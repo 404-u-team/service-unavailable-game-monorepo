@@ -32,8 +32,10 @@
   nav[data-variant='dock'] { justify-content: space-between; }
   nav:not([data-variant='bar']) a {
     display: flex; flex-direction: column; justify-content: center; padding: var(--sui-space-1); border: 0;
-    min-inline-size: 0; text-align: center; font-size: 0.6875rem; line-height: 1.2; overflow-wrap: anywhere;
+    min-inline-size: 0; text-align: center; font-size: 0.6875rem; line-height: 1.2;
   }
+  nav[data-variant='rail'] a > span:last-child { max-inline-size: 100%; }
+  nav[data-variant='dock'] a { overflow-wrap: anywhere; }
   nav[data-variant='dock'] a { flex: 1; }
   nav:not([data-variant='bar']) a:is(:hover, [aria-current]) { color: var(--sui-text); }
   nav:not([data-variant='bar']) a:is(:hover, [aria-current]) .icon { background: var(--sui-tint); color: var(--sui-primary); }

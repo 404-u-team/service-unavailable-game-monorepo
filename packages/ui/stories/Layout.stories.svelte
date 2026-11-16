@@ -16,7 +16,7 @@
       {#snippet header()}<h2>{t('Active users')}</h2>{/snippet}
       <strong>18,260</strong>
     </Panel>
-    <Panel inset>
+    <Panel inset padding="compact">
       {#snippet header()}<h2>{t('Queue occupancy')}</h2>{/snippet}
       <strong>12%</strong>
     </Panel>

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import type { Game } from '../src/lib/types';
 
 async function makeGame(page: Page) {
@@ -111,4 +112,186 @@ test('topology drawers preserve keyboard access and save feedback stays below na
   const toast = (await notifications.boundingBox())!;
   expect(toast.y).toBeGreaterThanOrEqual(header.y + header.height);
   expect(toast.x).toBeGreaterThan(header.width / 2);
+});
+
+test('topology opens node details on a double-click, with real motion in both directions', async ({ page }) => {
+  const id = await makeGame(page);
+  await page.goto(`/game/${id}?view=build`);
+  await page.addStyleTag({ content: 'html:root { --sui-motion: 650ms; }' });
+  const panel = page.locator('.sui-overlay');
+  const translation = () => panel.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform === 'none'
+    ? undefined : getComputedStyle(element).transform).m41);
+
+  await page.getByRole('button', { name: 'Add node' }).click();
+  await expect(panel).toHaveAttribute('data-side', 'start');
+  await expect.poll(translation).toBeLessThan(-5);
+  await panel.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(panel).toHaveAttribute('data-state', 'closed');
+  await expect.poll(translation).toBeLessThan(-5);
+  await expect(panel).toHaveCount(0);
+
+  const node = page.locator('.svelte-flow__node[data-id="api"]').getByText('Messenger API', { exact: true });
+  await node.click();
+  await expect(panel).toHaveCount(0);
+  await node.dblclick();
+  await expect(panel).toHaveAttribute('data-side', 'end');
+  await expect.poll(translation).toBeGreaterThan(5);
+  await expect(panel.getByRole('heading', { name: 'Messenger API', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveAttribute('data-state', 'closed');
+  await expect.poll(translation).toBeGreaterThan(5);
+  await expect(panel).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Show component list' }).click();
+  await page.getByRole('button', { name: 'Messenger API API server', exact: true }).dblclick();
+  const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+  await expect(inspector).toBeVisible();
+  await inspector.getByRole('link', { name: 'Component guide' }).click();
+  await expect(panel).toHaveAttribute('data-state', 'closed');
+  await expect(page).toHaveURL(/view=guide/);
+});
+
+test('Russian rail labels wrap between words and fit inside the rail', async ({ page }) => {
+  const id = await makeGame(page);
+  await page.addInitScript(() => localStorage.setItem('workbench-language', 'ru'));
+  await page.setViewportSize({ width: 970, height: 610 });
+  await page.goto(`/game/${id}?view=build`);
+  const rail = page.getByRole('navigation', { name: 'Навигация рабочей области' });
+  for (const text of ['Мониторинг', 'Сохранённые игры']) {
+    const label = rail.getByRole('link', { name: text, exact: true }).getByText(text, { exact: true });
+    await expect(label).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    expect(await label.evaluate((element) => {
+      const link = element.closest('a')!.getBoundingClientRect();
+      const text = element.firstChild!;
+      const range = new Range();
+      return [...(text.textContent ?? '').matchAll(/\S+/g)].every((word) => {
+        range.setStart(text, word.index!);
+        range.setEnd(text, word.index! + word[0].length);
+        const rect = range.getBoundingClientRect();
+        return range.getClientRects().length === 1 && rect.left >= link.left && rect.right <= link.right;
+      });
+    })).toBeTruthy();
+  }
+});
+
+test('growth project rows pack independently and wheel scrolling continues on the dashboard', async ({ page }) => {
+  const id = await makeGame(page);
+  await page.goto(`/game/${id}?view=growth`);
+  const market = page.getByRole('article', { name: 'Market expansion' });
+  const languages = page.getByRole('article', { name: 'Messenger languages' });
+  for (const widget of [market, languages]) {
+    const first = widget.getByRole('listitem').first();
+    const second = widget.getByRole('listitem').nth(1);
+    await expect(second).toBeAttached();
+    const a = (await first.boundingBox())!;
+    const b = (await second.boundingBox())!;
+    expect(b.x).toBe(a.x);
+    expect(b.y - (a.y + a.height)).toBeLessThan(16);
+  }
+  const rows = market.getByRole('listitem');
+  const firstDisclosure = rows.first().locator('summary');
+  const before = (await rows.nth(1).boundingBox())!.y - (await rows.first().boundingBox())!.y;
+  await firstDisclosure.click();
+  await expect.poll(async () => (await rows.nth(1).boundingBox())!.y - (await rows.first().boundingBox())!.y).toBeGreaterThan(before);
+  await firstDisclosure.click();
+
+  const body = market.locator('.body').first();
+  await body.scrollIntoViewIfNeeded();
+  await expect.poll(() => body.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeGreaterThan(80);
+  const box = (await body.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 80);
+  await expect.poll(() => body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  await body.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  const beforeWheel = await page.evaluate(() => scrollY);
+  await expect.poll(async () => {
+    await page.mouse.wheel(0, 280);
+    return page.evaluate(() => scrollY);
+  }, { intervals: [350, 450, 600] }).toBeGreaterThan(beforeWheel);
+});
+
+test('dashboard layouts can be saved, exported, set as default and imported into a different save', async ({ page, browser }) => {
+  test.slow();
+  const source = await makeGame(page);
+  const target = await makeGame(page);
+  const variants = [
+    ['monitor', 'Requests / sec'],
+    ['growth', 'Growth readiness'],
+    ['finance', 'Cash flow']
+  ] as const;
+  const url = (id: string, view: string) => `/game/${id}?view=${view}`;
+  const widget = (name: string) => page.getByRole('article', { name, exact: true });
+  const notification = (text: string, tab = page) => tab.getByRole('region', { name: 'Notifications' }).getByText(text, { exact: true });
+
+  for (const [view, name] of variants) {
+    await page.goto(url(source, view));
+    await expect(widget(name)).toBeVisible();
+    await page.getByRole('button', { name: 'Edit layout' }).click();
+    await page.getByRole('button', { name: 'Widgets', exact: true }).click();
+    const drawer = page.getByRole('dialog', { name: 'Widgets' });
+    await drawer.getByRole('checkbox', { name, exact: true }).uncheck();
+    await drawer.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(widget(name)).toHaveCount(0);
+  }
+
+  await page.goto(url(source, 'settings'));
+  await page.getByRole('tab', { name: 'Dashboard layouts' }).click();
+  await page.getByLabel('Layout name').fill('Operations desk');
+  await page.getByRole('button', { name: 'Save layout', exact: true }).click();
+  await expect(notification('Dashboard layout saved.')).toBeVisible();
+  const current = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export current layout' }).click();
+  const currentFile = JSON.parse(await readFile(await (await current).path(), 'utf8'));
+
+  await page.goto('/?view=settings');
+  await page.getByRole('button', { name: 'Set Operations desk as default for new games' }).click();
+  await expect(page.getByText('Default for new games', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Actions for Operations desk' }).click();
+  const exported = page.waitForEvent('download');
+  await page.getByRole('menuitem', { name: 'Export layout' }).click();
+  const file = await (await exported).path();
+  const exportedFile = JSON.parse(await readFile(file, 'utf8'));
+  expect(exportedFile.name).toBe('Operations desk');
+  expect(exportedFile.layout).toEqual(currentFile.layout);
+  expect(Object.keys(exportedFile.layout).sort()).toEqual(['finance', 'growth', 'monitor']);
+
+  await page.goto(url(target, 'monitor'));
+  await expect(widget('Requests / sec')).toBeVisible();
+  await page.goto('/?view=new');
+  await page.getByRole('button', { name: 'Create game', exact: true }).click();
+  await expect(page).toHaveURL(/\/game\/[^/?]+\?view=build/);
+  const fresh = new URL(page.url()).pathname.split('/').at(-1)!;
+  for (const [view, name] of variants) {
+    await page.goto(url(fresh, view));
+    await expect(page.getByRole('button', { name: 'Edit layout' })).toBeVisible();
+    await expect(widget(name)).toHaveCount(0);
+  }
+
+  await page.goto(url(target, 'settings'));
+  await page.getByRole('tab', { name: 'Dashboard layouts' }).click();
+  const input = page.getByLabel('Import layout into current game');
+  await input.setInputFiles({ name: 'game.json', mimeType: 'application/json', buffer: Buffer.from('{"game":{}}') });
+  await expect(notification('Choose a valid dashboard layout JSON file.')).toBeVisible();
+  await input.setInputFiles(file);
+  await expect(notification('Layout applied to this game.')).toBeVisible();
+  for (const [view, name] of variants) {
+    await page.goto(url(target, view));
+    await expect(page.getByRole('button', { name: 'Edit layout' })).toBeVisible();
+    await expect(widget(name)).toHaveCount(0);
+  }
+
+  await page.goto('/?view=settings');
+  await page.getByRole('button', { name: 'Use built-in default' }).click();
+  await expect(page.getByText('New games use the built-in layout.', { exact: true })).toBeVisible();
+  const separate = await browser.newContext({ baseURL: new URL(page.url()).origin });
+  try {
+    const otherBrowser = await separate.newPage();
+    await otherBrowser.goto('/?view=settings');
+    const presetFile = otherBrowser.getByLabel('Import layout preset');
+    await expect(presetFile).toBeEnabled();
+    await presetFile.setInputFiles(file);
+    await expect(notification('Dashboard layout imported.', otherBrowser)).toBeVisible();
+    await expect(otherBrowser.getByRole('button', { name: 'Set Operations desk as default for new games' })).toBeVisible();
+  } finally { await separate.close(); }
 });

@@ -367,7 +367,7 @@
             focusId={page.url.searchParams.get('component') ?? undefined}
             openConfiguration={page.url.searchParams.get('configure') === '1'} guideHref={link('guide')} />
         {:else}
-          <Dashboard bind:this={workbench} {section} {game} {catalog} {link} {act} {busy} {error} tutorialAction={guide} />
+          <Dashboard bind:this={workbench} {section} {game} {catalog} {link} {act} {busy} {error} {toasts} tutorialAction={guide} />
         {/if}
       {/key}
       {#if engineeringWalkthrough && engineeringStep}
@@ -387,7 +387,7 @@
 </div>
 
 <style>
-  .game { --sui-toast-top: 70px; display: grid; min-height: 100dvh; grid-template: 65px 1fr / 76px minmax(0, 1fr); }
+  .game { --sui-toast-top: 70px; display: grid; min-height: 100dvh; grid-template: 65px 1fr / 100px minmax(0, 1fr); }
   .topbar { grid-column: 1 / -1; position: sticky; top: 0; z-index: var(--layer-workbench-navigation); display: grid; grid-template-columns: clamp(248px, 22.3vw, 350px) 1fr auto; align-items: center; gap: 10px; min-height: 65px; padding: 0 23px; background: var(--background); border-bottom: 1px solid var(--border); }
   .topbar :global(.brand) { font-size: 16px; }
 

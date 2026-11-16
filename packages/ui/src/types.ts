@@ -1,4 +1,4 @@
-import type { HTMLInputAttributes } from 'svelte/elements';
+import type { HTMLAttributes, HTMLInputAttributes } from 'svelte/elements';
 import type { Snippet } from 'svelte';
 
 export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
@@ -32,8 +32,9 @@ export type OverlayProps = {
   description?: string;
   closeLabel: string;
   dismissible?: boolean;
+  onCloseComplete?: () => void;
   returnFocus?: HTMLElement;
-  contentAttributes?: Record<`data-${string}`, string | boolean>;
+  contentAttributes?: Record<`data-${string}`, string | boolean> & Pick<HTMLAttributes<HTMLDivElement>, 'onclick'>;
   closeAttributes?: Record<`data-${string}`, string | boolean>;
   children: Snippet;
   footer?: Snippet;

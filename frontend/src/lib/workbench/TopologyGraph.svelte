@@ -18,10 +18,10 @@
   import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
   let { guideApi, topology, diagram, game, catalog, requestType, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
-    select, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
+    select, inspect, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
     guideApi?: string; topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
     edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
-    select: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
+    select: (id: string) => void; inspect: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
     selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
@@ -379,10 +379,21 @@
     'node.a11yDescription.ariaLiveMessage': ({ x, y }: Point) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
     'edge.a11yDescription.default': t('Use Enter to select a connection.')
   });
+
+  function inspectNode(event: MouseEvent) {
+    if (touchSelect || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !(event.target instanceof Element)
+      || event.target.closest('button, .svelte-flow__handle')) return;
+    const element = event.target.closest<HTMLElement>('.svelte-flow__node-workbench');
+    const id = element?.dataset.id;
+    if (!id || !topology.nodes.some((node) => node.id === id)) return;
+    event.stopPropagation();
+    element?.focus({ preventScroll: true });
+    inspect(id);
+  }
 </script>
 
 {#key locale()}
-<div class="flow-shell" role="presentation" onkeydowncapture={nudge}>
+<div class="flow-shell" role="presentation" onkeydowncapture={nudge} ondblclickcapture={inspectNode}>
 <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView={!initialViewport} {initialViewport} fitViewOptions={{ padding: .12, maxZoom: compact ? 1 : 1.13 }}
   minZoom={0.15} maxZoom={2.5} colorMode="dark" attributionPosition="bottom-right"
   ariaLabelConfig={localizedLabels} elevateNodesOnSelect={false}

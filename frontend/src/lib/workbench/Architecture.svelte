@@ -50,6 +50,7 @@
   let requestType = $state('');
   let inspectorTab = $state<'configuration' | 'metrics'>('configuration');
   let dialog = $state<'deployed' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect'>();
+  let drawer = $state<{ dismiss: (after?: () => void) => void }>();
   let source = $state('');
   let target = $state('');
   let history = $state.raw<Topology[]>([]);
@@ -307,6 +308,17 @@
     if (interaction && guideApi && id === guideApi && !touchSelect) tutorialEvent('component-selected');
   }
 
+  function inspectComponent(id: string) {
+    if (touchSelect) return;
+    select(id);
+    dialog = 'inspector';
+  }
+
+  function changeDialog(next?: typeof dialog) {
+    if (drawer) drawer.dismiss(() => dialog = next);
+    else dialog = next;
+  }
+
   function selectEdge(id: string) {
     selectedEdge = id;
     groupSelected = '';
@@ -367,7 +379,7 @@
     }))) {
       saveDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, [id]: position } });
       select(id);
-      dialog = undefined;
+      if (dialog === 'catalog') changeDialog();
       await tick();
       placement?.reveal(position);
     }
@@ -378,7 +390,7 @@
     replacedEdge = edge ? edgeKey(edge) : '';
     source = edge?.source ?? (active && catalog.connections[active.kind].length ? active.id : 'traffic');
     target = edge?.target ?? '';
-    dialog = 'connect';
+    changeDialog('connect');
   }
 
   async function connect(connection: Connection, replaces = '') {
@@ -424,7 +436,7 @@
       configurationReturn = from === 'inspector' ? from : undefined;
       editError = '';
       changedConfig = false;
-      dialog = 'configuration';
+      changeDialog('configuration');
     }
   }
 
@@ -512,7 +524,7 @@
             <Button class="catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined} disabled={busy} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
             <Tooltip label={t("About {0}", [t(catalog.components[kind].name)])}
               text={t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
-              onclick={() => { helpKind = kind; referenceReturn = 'catalog'; dialog = 'reference'; }} />
+              onclick={() => { helpKind = kind; referenceReturn = 'catalog'; changeDialog('reference'); }} />
           </div>
         {/each}
       </div>
@@ -647,7 +659,7 @@
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
       {#if active.kind !== 'source' && !metric?.database?.diagnostic?.upgrades.length}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
-      {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; dialog = undefined; }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
+      {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; changeDialog(); }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
       {#if viewingDraft}
         <div class="row wrap"><Button onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</Button>
         {#if active.kind !== 'source'}<Button variant="danger" disabled={busy} onclick={remove}><Trash2 size={13} /> {t("Remove")}</Button>{/if}</div>
@@ -726,7 +738,7 @@
           {#if canvas}
           {#key compact}
             <TopologyGraph {guideApi} {topology} {diagram} {game} {catalog} {requestType} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft && !busy}
-              {compact} {removed} {touchSelect} {select} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
+              {compact} {removed} {touchSelect} {select} inspect={inspectComponent} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
               {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => { context = undefined; select(''); }} />
           {/key}
           {/if}
@@ -741,7 +753,7 @@
           {/each}
           {#each [...topology.nodes, ...removed] as node (node.id)}
             {@const Icon = componentIcon[node.kind]}
-            <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)}>
+            <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)} ondblclick={() => inspectComponent(node.id)}>
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
             </Button>
           {/each}
@@ -828,12 +840,12 @@
     {#snippet footer()}<Button variant="primary" form="diagram-group" type="submit" disabled={!groupMembers.length}>{t("Save group")}</Button>{/snippet}
   </Modal>
 {:else if dialog === 'catalog'}
-  <Modal title={t("Component library")} side="start" subtitle={t("Add a component to the architecture draft.")} close={() => dialog = undefined}>
+  <Modal bind:this={drawer} title={t("Component library")} side="start" subtitle={t("Add a component to the architecture draft.")} close={() => dialog = undefined}>
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     {@render catalogList()}
   </Modal>
 {:else if dialog === 'inspector'}
-  <Modal title={t("Component inspector")} side="end" width={inspectorWidth} resize={saveInspectorWidth} footer={compact ? undefined : inspectorFooter} close={() => dialog = undefined}>
+  <Modal bind:this={drawer} title={t("Component inspector")} side="end" width={inspectorWidth} resize={saveInspectorWidth} footer={compact ? undefined : inspectorFooter} close={() => dialog = undefined}>
     <div class="stack">
       {@render inspect()}
       {#if viewingDraft}

@@ -84,6 +84,8 @@
     function update() {
       frame = 0;
       const dialog = openDialog();
+      // A slide changes the panel's position without resizing it.
+      if (dialog?.getAnimations().some((animation) => animation.pending || animation.playState === 'running')) schedule();
       const viewBox = viewport();
       if (root.parentElement !== (dialog ?? document.body)) {
         const focused = document.activeElement;

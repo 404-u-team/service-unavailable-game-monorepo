@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { Dashboard, parseDashboardState, type DashboardState, type DashboardWidgetDefinition } from '@service-unavailable/ui';
+  import { Dashboard, type DashboardState, type DashboardWidgetDefinition } from '@service-unavailable/ui';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import { t } from '../i18n.svelte';
+  import { isGameDashboardChange, readGameDashboardLayout, writeGameDashboard, type DashboardSection } from './dashboard-layouts';
 
   let { gameId, section, title, tools, widgets }: {
-    gameId: string; section: 'monitor' | 'growth' | 'finance'; title: string;
+    gameId: string; section: DashboardSection; title: string;
     tools?: Snippet;
     widgets: DashboardWidgetDefinition[];
   } = $props();
 
-  const key = $derived(`service-unavailable:dashboard:${gameId}:${section}`);
   let snapshot = $state.raw<DashboardState | null>(null);
   let dashboard = $state<{ showWidget: (id: string) => void }>();
 
@@ -19,11 +19,19 @@
   }
 
   onMount(() => {
-    try { snapshot = parseDashboardState(localStorage.getItem(key)); } catch { /* Storage is optional. */ }
+    function reload() {
+      try { snapshot = readGameDashboardLayout(gameId)[section]; } catch { /* Storage is optional. */ }
+    }
+    function update(event: StorageEvent) {
+      if (isGameDashboardChange(gameId, section, event.key)) reload();
+    }
+    reload();
+    window.addEventListener('storage', update);
+    return () => window.removeEventListener('storage', update);
   });
 
   function save(layout: DashboardState) {
-    try { localStorage.setItem(key, JSON.stringify(layout)); } catch { /* The board retains changes in memory. */ }
+    try { writeGameDashboard(gameId, section, layout); } catch { /* The board retains changes in memory. */ }
   }
 </script>
 

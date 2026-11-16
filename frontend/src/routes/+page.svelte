@@ -1,6 +1,6 @@
 <script lang="ts">
   import NumberInput from '#lib/controls/NumberInput.svelte';
-  import { Button, Checkbox, Form, FormField, Switch, TextInput, Toaster, createToasts } from '@service-unavailable/ui';
+  import { Button, Checkbox, FilePicker, Form, FormField, Switch, TextInput, Toaster, createToasts } from '@service-unavailable/ui';
   import { apiMessage, locale, message, t } from '#lib/i18n.svelte.ts';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
@@ -9,6 +9,8 @@
   import Language from '#lib/Language.svelte';
   import Brand from '#lib/Brand.svelte';
   import Guide from '#lib/Guide.svelte';
+  import DashboardLayouts from '#lib/workbench/DashboardLayouts.svelte';
+  import { applyDefaultDashboardLayout } from '#lib/workbench/dashboard-layouts.ts';
   import Modal from '#lib/Modal.svelte';
   import { createGame, downloadSave, importSave, loadCatalog, previewSave, saves as listSaves } from '#lib/api.ts';
   import { money, num, preciseMoney } from '#lib/format.ts';
@@ -68,11 +70,7 @@
     finally { exportId = ''; }
   }
 
-  async function selectSaveFile(event: Event) {
-    const input = event.currentTarget as HTMLInputElement;
-    const selected = input.files?.[0];
-    input.value = '';
-    if (!selected) return;
+  async function selectSaveFile(selected: File) {
     importing = true;
     transferError = undefined;
     try {
@@ -95,6 +93,7 @@
     transferError = undefined;
     try {
       const imported = await importSave(importFile);
+      initializeDashboards(imported.id);
       saves = [imported, ...saves];
       toasts.add({
         title: t('Save imported successfully.'), tone: 'success', duration: 0,
@@ -110,6 +109,10 @@
     localStorage.setItem('workbench-preferences', JSON.stringify(preferences));
   }
 
+  function initializeDashboards(id: string) {
+    try { applyDefaultDashboardLayout(id); } catch { /* The game still opens when browser storage is unavailable. */ }
+  }
+
   async function start(event: SubmitEvent) {
     event.preventDefault();
     if (loading || busy || !starting) return;
@@ -118,6 +121,7 @@
     createId ||= crypto.randomUUID();
     try {
       const game = await createGame({ id: createId, name, scenario: 'messenger', difficulty, seed: showSeed ? seed ?? null : null, settings: preferences });
+      initializeDashboards(game.id);
       await goto(`/game/${game.id}?view=build`);
       createId = '';
     } catch (reason) { error = apiMessage(reason); }
@@ -173,11 +177,10 @@
     {:else if current === 'saves'}
       <div class="intro row spread wrap">
         <div><h1>{t("Saved games")}</h1><p class="muted">{t("Use save files to move a game between browsers or devices.")}</p></div>
-        <label class="sui-button import-file" data-variant="primary">
+        <FilePicker variant="primary" accept=".json,application/json" label={t('Select a save file')}
+          disabled={loading || importing} onchange={selectSaveFile}>
           <Upload size={15} /> {importing && !preview ? t('Checking save…') : t('Import save')}
-          <input type="file" accept=".json,application/json" aria-label={t('Select a save file')}
-            disabled={loading || importing} onchange={selectSaveFile} />
-        </label>
+        </FilePicker>
       </div>
       {#if transferError && !preview}<p class="notice error" role="alert">{apiMessage(transferError)}</p>{/if}
 
@@ -230,10 +233,13 @@
       {#if catalog}<Guide {catalog} />{:else if loading}<p class="muted">{t("Loading guide…")}</p>{/if}
     {:else if current === 'settings'}
       <div class="intro"><h1>{t("Settings")}</h1><p class="muted">{t("Defaults for new games on this browser.")}</p></div>
-      <div class="panel pad stack form">
-        <Switch label={t("Show onboarding prompts")} bind:checked={preferences.show_tutorial} onchange={remember} />
-        <Switch label={t("Reduce motion")} bind:checked={preferences.reduced_motion} onchange={remember} />
-        <Language />
+      <div class="stack settings">
+        <div class="panel pad stack form">
+          <Switch label={t("Show onboarding prompts")} bind:checked={preferences.show_tutorial} onchange={remember} />
+          <Switch label={t("Reduce motion")} bind:checked={preferences.reduced_motion} onchange={remember} />
+          <Language />
+        </div>
+        <DashboardLayouts {toasts} />
       </div>
     {:else}
       <div class="intro menu-title"><h1>Service Unavailable</h1><p class="muted">{t("Infrastructure simulator")}</p></div>
@@ -295,6 +301,7 @@
   .options strong { text-transform: uppercase; }
   small { display: block; margin-top: 3px; }
   .form { max-width: 710px; }
+  .settings { max-width: 980px; }
   .menu-back:hover { color: var(--primary); }
   .setup-title h1 { font-size: clamp(33px, 4vw, 45px); }
   .menu :global(form.setup) { gap: 28px; }
@@ -323,10 +330,6 @@
   .save-row > a { min-width: 0; overflow-wrap: anywhere; }
   .save-row > a:hover { color: var(--primary); }
   .save-row > a :global(svg) { flex-shrink: 0; margin-left: 8px; }
-  .import-file { position: relative; cursor: pointer; }
-  .import-file input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: inherit; }
-  .import-file:has(:focus-visible) { outline: 2px solid var(--primary); outline-offset: 3px; }
-  .import-file:has(:disabled) { opacity: .6; cursor: default; }
   .import-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
   .import-preview dt { color: var(--muted); font-size: 13px; }
   .import-preview dd { overflow-wrap: anywhere; }

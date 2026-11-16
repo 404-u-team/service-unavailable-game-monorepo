@@ -952,12 +952,12 @@ test('monetization controls, revenue history and server time render in both lang
     await expect(item.getByText('Released and enabled')).toBeVisible();
   }
   await navigate(page, 'Growth');
-  await page.getByRole('heading', { name: 'North America', exact: true }).locator('xpath=../..')
-    .getByRole('button', { name: 'Start preparation' }).click();
+  const market = page.getByRole('article', { name: 'Market expansion', exact: true }).getByRole('listitem')
+    .filter({ has: page.getByRole('heading', { name: 'North America', exact: true }) });
+  await market.getByRole('button', { name: 'Start preparation' }).click();
   const update = await page.request.put(`/api/games/${id}/clock`, { data: { request_id: crypto.randomUUID(), speed: 5 } });
   expect(update.ok()).toBeTruthy();
-  await page.getByRole('heading', { name: 'North America', exact: true }).locator('xpath=../..')
-    .getByRole('button', { name: 'Launch market' }).click({ timeout: 20_000 });
+  await market.getByRole('button', { name: 'Launch market' }).click({ timeout: 20_000 });
   await pause(page);
   await navigate(page, 'Product');
   await page.getByRole('tab', { name: 'Product settings' }).click();
@@ -997,7 +997,7 @@ test('monetization controls, revenue history and server time render in both lang
   const time = [Math.floor(clock.utc_minute / 60), clock.utc_minute % 60].map((value) => String(value).padStart(2, '0')).join(':');
   await expect(page.getByTestId('game-utc-time')).toHaveText(`Day ${clock.day} / ${time} UTC`);
   expect(final.day).toBe(clock.day);
-  await expect(page.locator('.regions summary').filter({ hasText: 'North America' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Demand by region', exact: true }).locator('summary').filter({ hasText: 'North America' })).toBeVisible();
 
   await page.goto('/?view=settings');
   await choose(page.getByRole('combobox', { name: 'Interface language', exact: true }), 'ru');

@@ -138,7 +138,7 @@ for (const language of ['en', 'ru'] as const) {
       await expect(inspector).toBeVisible();
       if (mobile) {
         await expect(inspector.getByRole('separator')).toBeHidden();
-        expect((await inspector.boundingBox())?.width).toBe(390);
+        await expect(inspector).toHaveCSS('width', '390px');
       }
       await expect(inspector.getByRole('link', { name: ru ? 'Справка о компоненте' : 'Component guide' })).toBeVisible();
       await inspector.getByRole('button', { name: ru ? 'Метрики' : 'Metrics', exact: true }).click();

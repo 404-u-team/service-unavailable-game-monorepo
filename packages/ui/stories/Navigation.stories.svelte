@@ -48,12 +48,24 @@
   ]} />
 </Story>
 
+<Story name="Navigation rail">
+  <div class="rail">
+    <NavTabs variant="rail" label={t('Workbench sections')} items={[
+      { href: '#monitor', label: t('Monitor'), current: true },
+      { href: '#saves', label: t('Saved games') }
+    ]} />
+  </div>
+</Story>
+
 <Story name="Accordion">
   <div class="list">
     <Accordion initialOpen="capacity" items={[
       { id: 'capacity', title: t('Capacity and demand') },
       { id: 'monitoring', title: t('Monitoring coverage') }
     ]}>
+      {#snippet summary(item)}
+        {#if item.id === 'monitoring'}<Badge tone="success">{t('Monitored')}</Badge>{/if}
+      {/snippet}
       {#snippet children(item)}
         {item.id === 'capacity' ? t('Compare incoming requests with provisioned capacity.') : t('Measurements are available for monitored servers.')}
       {/snippet}
@@ -76,4 +88,5 @@
 
 <style>
   .list { display: grid; gap: var(--sui-space-4); max-inline-size: 32rem; }
+  .rail { inline-size: 6.25rem; padding-inline: var(--sui-space-1); }
 </style>

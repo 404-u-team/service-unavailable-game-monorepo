@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { ActionRow, Badge, Button, Disclosure, PageColumns, Pagination, SearchSelect, Stat, Switch, Tabs, type DashboardSettings, type DashboardWidgetState } from '@service-unavailable/ui';
+  import { ActionRow, Badge, Button, Disclosure, PageColumns, Pagination, SearchSelect, Stat, Switch, Tabs, type DashboardSettings, type DashboardWidgetState, type Toasts } from '@service-unavailable/ui';
   import GameDashboard from './GameDashboard.svelte';
+  import DashboardLayouts from './DashboardLayouts.svelte';
   import ServiceTelemetry from './ServiceTelemetry.svelte';
   import Engineering from './Engineering.svelte';
   import { apiMessage, message, t } from '../i18n.svelte';
@@ -29,12 +30,13 @@
   import { clock, duration, money, ms, num, pct, preciseMoney, rps, when } from '../format';
   import type { Catalog, Feature, Game, Forecast, Incident } from '../types';
 
-  let { section, game, catalog, link, act, busy, error, tutorialAction }: {
+  let { section, game, catalog, link, act, busy, error, tutorialAction, toasts }: {
     section: Section; game: Game; catalog: Catalog; link: (section: Section, focus?: string) => string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
-    busy: boolean; error: string; tutorialAction: (action: TutorialAction) => void;
+    busy: boolean; error: string; tutorialAction: (action: TutorialAction) => void; toasts: Toasts;
   } = $props();
   let dialog = $state<'campaign' | 'feature' | 'incident' | 'rollback' | 'drill'>();
+  let drawer = $state<{ dismiss: (after?: () => void) => void }>();
   let detail = $state('');
   let confirmDisable = $state(false);
   let productTab = $state('features');
@@ -198,7 +200,10 @@
   }
 
   async function confirm(path: string, body?: object) {
-    if (await act(path, body)) dialog = undefined;
+    if (await act(path, body)) {
+      if (drawer) drawer.dismiss();
+      else dialog = undefined;
+    }
   }
 
   function openFeature(id: string) {
@@ -208,7 +213,7 @@
   }
 
   function openIncident(item: Incident) { detail = item.id; dialog = 'incident'; }
-  const settingsTabs = { general: 'General', accessibility: 'Accessibility', storage: 'Storage' } as const;
+  const settingsTabs = { general: 'General', accessibility: 'Accessibility', dashboards: 'Dashboard layouts', storage: 'Storage' } as const;
 
   const statuses = { locked: 'Locked', available: 'Available', developing: 'In development', ready: 'Ready to release' };
   function featureStatus(feature: Feature) {
@@ -292,7 +297,7 @@
 
 {#snippet incidentActions(item: Incident)}
   <div class="row spread wrap">
-    <Button variant="primary" href={item.target ? link('build', item.target) : link('monitor')} onclick={() => dialog = undefined}>{item.target ? t("Open in topology") : t("Open telemetry")} <ArrowRight size={14} /></Button>
+    <Button variant="primary" href={item.target ? link('build', item.target) : link('monitor')}>{item.target ? t("Open in topology") : t("Open telemetry")} <ArrowRight size={14} /></Button>
     {#if !item.acknowledged}<Button disabled={busy} onclick={() => act(`/incidents/${item.id}/acknowledge`)}>{t("Acknowledge")}</Button>{/if}
   </div>
 {/snippet}
@@ -659,6 +664,8 @@
           <h2>{t("Accessibility")}</h2>
           <Switch label={t("Reduce motion")} description={t("Reduce animation and transitions.")} checked={game.settings.reduced_motion} disabled={busy} onchange={({ currentTarget }) => act('/settings', { settings: { ...game.settings, reduced_motion: currentTarget.checked } }, 'PUT')} />
 
+        {:else if item.value === 'dashboards'}
+          <DashboardLayouts gameId={game.id} {toasts} />
         {:else}
           <div><h2>{t("Save management")}</h2><p class="muted">{t("The server saves progress as you play.")}</p></div>
           <div class="row wrap"><Button variant="primary" disabled={busy} onclick={() => act('/save')}>{t("Save game")}</Button><Button href="/?view=saves">{t("Saved games")}</Button><Button href="/">{t("Main menu")}</Button></div>
@@ -736,7 +743,7 @@
   </Modal>
 {:else if dialog === 'feature' && currentFeature}
   {@const definition = catalog.features[detail]}
-  <Modal title={t("Feature details")} side="end" subtitle={t(definition.name)} close={() => dialog = undefined}>
+  <Modal bind:this={drawer} title={t("Feature details")} side="end" subtitle={t(definition.name)} close={() => dialog = undefined}>
     <div class="stack">
       <p class:warning={currentFeature.state === 'ready' && !currentFeature.can_release}>{featureStatus(currentFeature)}</p>
       <dl class="breakdown">
@@ -760,7 +767,7 @@
       {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     </div>
     {#snippet footer()}
-      <div class="row spread"><Button onclick={() => dialog = undefined}>{t("Close")}</Button>
+      <div class="row spread"><Button onclick={() => drawer?.dismiss()}>{t("Close")}</Button>
         {#if currentFeature.state === 'available'}<Button variant="primary" disabled={busy || game.balance < definition.cost} onclick={() => confirm(`/features/${detail}`, { action: 'develop' })}>{t("Start development")}</Button>
         {:else if currentFeature.state === 'ready'}<Button variant="primary" disabled={busy || !currentFeature.can_release} onclick={() => confirm(`/features/${detail}`, { action: 'release' })}>{t("Release feature")}</Button>
         {:else if currentFeature.state === 'released' && !currentFeature.enabled}
@@ -772,7 +779,7 @@
     {/snippet}
   </Modal>
 {:else if dialog === 'incident' && incident}
-  <Modal title={t("Incident details")} side="end" subtitle={message(incident.title)} close={() => dialog = undefined}>
+  <Modal bind:this={drawer} title={t("Incident details")} side="end" subtitle={message(incident.title)} close={() => dialog = undefined}>
     {@render incidentDetails(incident)}
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     {#snippet footer()}{@render incidentActions(incident)}{/snippet}

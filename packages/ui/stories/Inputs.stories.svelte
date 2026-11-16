@@ -1,7 +1,7 @@
 <script module lang="ts">
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import { CircleHelp } from '@lucide/svelte';
-  import { Button, Checkbox, Form, FormField, LocalizedNumberInput, NumberInput, SearchSelect, Select, Slider, Switch, Textarea, TextInput } from '@service-unavailable/ui';
+  import { Button, Checkbox, FilePicker, Form, FormField, LocalizedNumberInput, NumberInput, SearchSelect, Select, Slider, Switch, Textarea, TextInput } from '@service-unavailable/ui';
   import { locale, stepLabels, t } from './copy.svelte';
   import { parseNumber } from '../../../frontend/src/lib/controls/numeric';
 
@@ -17,8 +17,23 @@
   let traffic = $state(45);
   let email = $state('');
   let saved = $state('');
+  let fileName = $state('');
   let mixed = $state(true);
 </script>
+
+<Story name="File picker">
+  <div class="fields">
+    <div class="row">
+      <FilePicker label={t('Import layout preset')} accept=".json,application/json" onchange={(file) => fileName = file.name}>
+        {t('Import layout preset')}
+      </FilePicker>
+      <FilePicker label={t('Import layout into current game')} disabled onchange={() => {}}>
+        {t('Import layout into current game')}
+      </FilePicker>
+    </div>
+    <output>{fileName}</output>
+  </div>
+</Story>
 
 <Story name="Localized number">
   <div class="fields">

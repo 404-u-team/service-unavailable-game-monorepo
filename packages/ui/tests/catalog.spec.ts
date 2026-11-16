@@ -134,12 +134,13 @@ test('overlays constrain focus and restore it on close', async ({ page }) => {
   await expect(review).toBeFocused();
 });
 
-test('slideover resizes by keyboard and drag and animates out', async ({ page }) => {
+test('slideover slides in and out and resizes by keyboard and drag', async ({ page }) => {
   await page.goto(story('overlays-feedback-and-overlays--slideover'));
   await page.addStyleTag({ content: ':root { --sui-motion: 650ms; }' });
   const opener = page.getByRole('button', { name: 'Open server settings' });
   await opener.click();
   const panel = page.getByRole('dialog');
+  await expect.poll(() => panel.evaluate((element) => element.getBoundingClientRect().right - innerWidth)).toBeGreaterThan(5);
   const handle = panel.getByRole('separator', { name: 'Resize side panel' });
   await expect(handle).toHaveAttribute('aria-valuenow', '448');
   await handle.press('ArrowLeft');

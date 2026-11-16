@@ -9,6 +9,7 @@ export { default as Dashboard } from './Dashboard.svelte';
 export { default as DashboardWidget } from './DashboardWidget.svelte';
 export { default as Disclosure } from './Disclosure.svelte';
 export { default as Dropdown } from './Dropdown.svelte';
+export { default as FilePicker } from './FilePicker.svelte';
 export { default as Form } from './Form.svelte';
 export { default as FormField } from './FormField.svelte';
 export { default as LocalizedNumberInput } from './LocalizedNumberInput.svelte';

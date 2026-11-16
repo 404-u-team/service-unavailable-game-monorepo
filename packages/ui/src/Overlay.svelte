@@ -4,7 +4,7 @@
   import type { Snippet } from 'svelte';
   import type { OverlayProps } from './types';
 
-  let { open = $bindable(false), title, description, closeLabel, dismissible = true, returnFocus,
+  let { open = $bindable(false), title, description, closeLabel, dismissible = true, returnFocus, onCloseComplete,
     contentAttributes, closeAttributes, side, wide = false, children, footer, width, panelId, handle }: OverlayProps & {
       side?: 'start' | 'end'; wide?: boolean; width?: number; panelId?: string; handle?: Snippet;
     } = $props();
@@ -12,7 +12,7 @@
   let opener: HTMLElement | undefined;
 </script>
 
-<Dialog.Root bind:open>
+<Dialog.Root bind:open onOpenChangeComplete={(opened) => { if (!opened) onCloseComplete?.(); }}>
   <Dialog.Portal>
     <Dialog.Overlay class="sui-scrim" data-side={side} />
     <Dialog.Content {...contentAttributes} id={panelId} class="sui-overlay" data-side={side} data-wide={wide || undefined} inert={!open}
@@ -54,17 +54,22 @@
     font: var(--sui-body); overflow: clip; overflow-wrap: anywhere;
   }
   :global(.sui-overlay[data-wide]) { inline-size: min(51rem, calc(100% - 1.5rem)); }
-  :global(.sui-scrim[data-side]) { transition: opacity var(--sui-motion) ease; }
-  :global(.sui-scrim[data-side]:is([data-starting-style], [data-ending-style])) { opacity: 0; }
+  :global(.sui-scrim[data-side][data-state='open']) { animation: scrim-in var(--sui-motion) ease; }
+  :global(.sui-scrim[data-side][data-state='closed']) { animation: scrim-out var(--sui-motion) ease both; }
   :global(.sui-overlay[data-side]) {
     --slide-from: 100%;
     inset: 0; inset-inline-start: auto; margin: 0; inline-size: min(var(--sui-drawer-width, 28rem), 100%); block-size: 100dvh;
-    max-block-size: 100dvh; border-radius: 0; transition: transform var(--sui-motion) ease;
+    max-block-size: 100dvh; border-radius: 0;
   }
-  :global(.sui-overlay[data-side]:is([data-starting-style], [data-ending-style])) { transform: translateX(var(--slide-from)); }
+  :global(.sui-overlay[data-side][data-state='open']) { animation: slide-in var(--sui-motion) ease-out; }
+  :global(.sui-overlay[data-side][data-state='closed']) { animation: slide-out var(--sui-motion) ease-in both; }
   :global(.sui-overlay[data-side='start']) { --slide-from: -100%; inset-inline: 0 auto; }
   :global(.sui-overlay[data-side='end']:dir(rtl)) { --slide-from: -100%; }
   :global(.sui-overlay[data-side='start']:dir(rtl)) { --slide-from: 100%; }
+  @keyframes slide-in { from { transform: translateX(var(--slide-from)); } }
+  @keyframes slide-out { to { transform: translateX(var(--slide-from)); } }
+  @keyframes scrim-in { from { opacity: 0; } }
+  @keyframes scrim-out { to { opacity: 0; } }
 
   header, footer { padding: var(--sui-space-3) var(--sui-space-5); }
   header { display: flex; align-items: start; justify-content: space-between; gap: var(--sui-space-2); border-block-end: 1px solid var(--sui-border); }
