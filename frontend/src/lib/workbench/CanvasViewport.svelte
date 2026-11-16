@@ -40,6 +40,11 @@
       revealNode: (id) => {
         const point = nodePosition(id);
         if (point) reveal(point, false);
+      },
+      revealNodes: (ids) => {
+        transientMove(true);
+        void fitView({ nodes: ids.map((id) => ({ id })), padding: .2, maxZoom: 1 })
+          .finally(() => transientMove(false));
       }
     });
     return () => bindPlacement();

@@ -55,6 +55,7 @@ export type FinancePoint = { tick: number; revenue: RevenueSources; expenses: Op
 export type AdIntensity = 'low' | 'moderate' | 'high';
 export type ProductSettings = {
   ad_intensity: AdIntensity; premium_price: number; premium_fast_sync: boolean;
+  premium_high_quality_media: boolean;
   sync_frequency: 'relaxed' | 'standard' | 'frequent';
   media_quality: 'compressed' | 'standard' | 'high';
   north_america: boolean;

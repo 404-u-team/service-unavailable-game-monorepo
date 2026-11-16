@@ -27,13 +27,16 @@
   let tooltip = $state<HTMLElement>();
   let content = $state<HTMLDivElement>();
   let hole = $state.raw<ReturnType<typeof visibleTarget>>();
+  let destination = $state.raw<ReturnType<typeof visibleTarget>>();
   let bounds = $state.raw({ left: 0, right: 0, top: 0, bottom: 0 });
-  let origin = $state.raw({ x: 0, y: 0 });
   let position = $state.raw({ x: 10, y: 10, maxHeight: 360 });
   let tooltipWidth = $state(330);
   let modal = $state<HTMLElement>();
   let modalTarget = $state(false);
   let visible = $state(false);
+  let menuOpen = $state(false);
+  let menuCovered = $state(false);
+  const needsAction = $derived(Boolean(view.open || (modal && !modalTarget) || (!view.allowed && !replay)));
   let reposition: (() => void) | undefined;
   let focusedControlStep = '';
   const explanationId = 'tutorial-explanation';
@@ -90,13 +93,14 @@
       if (root.parentElement !== (dialog ?? document.body)) {
         const focused = document.activeElement;
         (dialog ?? document.body).append(root);
+        root.showPopover();
         if (focused instanceof HTMLElement && root.contains(focused)) focused.focus({ preventScroll: true });
       }
       modal = dialog;
       const currentKey = view.target;
       const desired = findTarget(currentKey, dialog);
-      modalTarget = !dialog || Boolean(desired);
-      const key = dialog && !desired ? target.close : currentKey;
+      modalTarget = !dialog || !currentKey || Boolean(desired);
+      const key = dialog && !modalTarget ? target.close : currentKey;
       const node = desired ?? findTarget(key, dialog);
       const currentStep = step?.id ?? '';
       const viewKey = JSON.stringify(viewBox);
@@ -111,13 +115,20 @@
       }
       const watch = new Set<Element>([inner, document.documentElement]);
       if (dialog) watch.add(dialog);
+      const menu = document.querySelector<HTMLElement>('.sui-menu[data-state="open"]');
+      if (menu) watch.add(menu);
       for (let element: HTMLElement | null | undefined = node; element && element !== document.body; element = element.parentElement) watch.add(element);
       for (const element of observed) if (!watch.has(element)) resize.unobserve(element);
       for (const element of watch) if (!observed.has(element)) resize.observe(element);
       observed = watch;
       if (scroll && node) revealTarget(node, dialog);
       const highlight = node && visibleTarget(node, dialog);
-      if (!highlight && scroll && key === target.api && !dialog && !attemptedReveal) {
+      const linkedPort = key === target.linkOrigin ? findTarget(target.linkDestination) : undefined;
+      const highlightedPort = linkedPort && visibleTarget(linkedPort);
+      const connectButton = key === target.linkOrigin ? findTarget(target.connect) : undefined;
+      const connectBounds = connectButton && visibleTarget(connectButton);
+      if (scroll && !dialog && !attemptedReveal && ((!highlight && key === target.api) ||
+        (key === target.linkOrigin && (!highlight || !highlightedPort)))) {
         attemptedReveal = true;
         recover(key);
       }
@@ -132,17 +143,23 @@
         }
       }
       hole = highlight;
+      destination = highlightedPort;
       const dialogBox = dialog?.getBoundingClientRect();
       bounds = dialogBox ? intersection(viewBox, dialogBox) : viewBox;
-      // Bits UI contains layout inside the dialog, so its tutorial layer has a local origin.
-      origin = dialog && dialogBox ? { x: dialogBox.left + dialog.clientLeft, y: dialogBox.top + dialog.clientTop } : { x: 0, y: 0 };
-      const preferred = bounds;
-      const width = Math.min(360, Math.max(0, preferred.right - preferred.left - 20));
+      const width = Math.min(360, Math.max(0, viewBox.right - viewBox.left - 20));
       tooltipWidth = width;
-      const footer = dialog?.querySelector(':scope > footer')?.getBoundingClientRect();
-      const aboveFooter = footer && footer.top - preferred.top > 190 && (!highlight || highlight.bottom < footer.top);
-      const chrome = popover.offsetHeight - popover.clientHeight + 22;
-      position = placeTooltip(preferred, highlight, width, inner.scrollHeight + chrome, aboveFooter ? footer : undefined);
+      const height = inner.scrollHeight + popover.offsetHeight - popover.clientHeight + 22;
+      const menuBox = menu?.getBoundingClientRect();
+      const avoid = [highlight, highlightedPort, connectBounds, menuBox].reduce<typeof highlight>((area, next) => area && next ? {
+        left: Math.min(area.left, next.left), right: Math.max(area.right, next.right),
+        top: Math.min(area.top, next.top), bottom: Math.max(area.bottom, next.bottom)
+      } : area ?? next, undefined);
+      position = placeTooltip(viewBox, avoid, width, height, dialogBox);
+      menuOpen = Boolean(menu);
+      const overlap = menuBox && intersection(menuBox, {
+        left: position.x, right: position.x + width, top: position.y, bottom: position.y + Math.min(height, position.maxHeight)
+      });
+      menuCovered = Boolean(overlap && overlap.right > overlap.left && overlap.bottom > overlap.top);
 
       if (focusedControlStep && focusedControlStep !== currentStep && (document.activeElement === document.body || root.contains(document.activeElement))) {
         focusedControlStep = currentStep;
@@ -187,17 +204,23 @@
   }
 </script>
 
-<div class="tutorial-layer" class:in-dialog={!!modal} data-spotlight-ui bind:this={layer}>
+<!-- Keep the guide in the dialog's focus scope while displaying it above the dialog's clipping and animation. -->
+<div class="tutorial-layer" popover="manual" data-spotlight-ui bind:this={layer}>
   {#if hole}
     <div class="mask" aria-hidden="true"
-      style:left="{bounds.left - origin.x}px" style:top="{bounds.top - origin.y}px" style:width="{bounds.right - bounds.left}px" style:height="{bounds.bottom - bounds.top}px">
-      <div class="spotlight" data-tutorial-highlight={modal && !modalTarget ? target.close : view.target}
+      style:left="{bounds.left}px" style:top="{bounds.top}px" style:width="{bounds.right - bounds.left}px" style:height="{bounds.bottom - bounds.top}px">
+      <div class="spotlight" class:port={view.target === target.linkOrigin} class:menu-open={menuOpen} data-tutorial-highlight={modal && !modalTarget ? target.close : view.target}
         style:left="{hole.left - bounds.left}px" style:top="{hole.top - bounds.top}px"
         style:width="{hole.right - hole.left}px" style:height="{hole.bottom - hole.top}px"></div>
+      {#if destination}
+        <div class="spotlight port" data-tutorial-highlight={target.linkDestination}
+          style:left="{destination.left - bounds.left}px" style:top="{destination.top - bounds.top}px"
+          style:width="{destination.right - destination.left}px" style:height="{destination.bottom - destination.top}px"></div>
+      {/if}
     </div>
   {/if}
-  <aside class="panel tutorial" bind:this={tooltip} tabindex="-1" aria-label={t('Guided onboarding')}
-    style:left="{position.x - origin.x}px" style:top="{position.y - origin.y}px" style:max-height="{position.maxHeight}px" style:width="{tooltipWidth}px">
+  <aside class="panel tutorial" class:menu-covered={menuCovered} bind:this={tooltip} tabindex="-1" aria-label={t('Guided onboarding')}
+    style:left="{position.x}px" style:top="{position.y}px" style:max-height="{position.maxHeight}px" style:width="{tooltipWidth}px">
     <div class="tutorial-content" bind:this={content}>
       {#if step}
         <header>
@@ -208,6 +231,7 @@
           {#each chapters as chapter, i (chapter)}<span class:past={i < step.chapter} class:current={i === step.chapter}></span>{/each}
         </div>
         <div class="copy" id={explanationId} aria-live="polite" aria-atomic="true">
+          <small class="step-type" class:action={needsAction}>{t(needsAction ? 'Action required' : 'Review and continue')}</small>
           <h2>{t(step.title)}</h2>
           {#if modal && !modalTarget && view.target}
             <p>{t('Close this dialog to continue the tutorial.')}</p>
@@ -216,8 +240,6 @@
           {/if}
           {#if waiting}<p class="status">{t('Waiting for the server…')}</p>
           {:else if view.target && !visible && !modal}<p class="status">{t('The highlighted control is out of view. Try showing it again, or skip this step.')}</p>
-          {:else if ('mode' in step || view.instruction) && !view.allowed && !replay && visible && !view.open}
-            <p class="status">{t('Use the highlighted control to continue.')}</p>
           {/if}
         </div>
         <div class="row wrap tutorial-actions">
@@ -246,12 +268,15 @@
 </div>
 
 <style>
-  .tutorial-layer { position: fixed; inset: 0; z-index: var(--layer-tutorial); pointer-events: none; }
-  .tutorial-layer.in-dialog { position: absolute; overflow: clip; }
+  .tutorial-layer { position: fixed; inset: 0; width: auto; height: auto; max-width: none; max-height: none;
+    margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); pointer-events: none; overflow: clip; }
   .mask { position: absolute; overflow: hidden; pointer-events: none; }
   .spotlight { position: absolute; border-radius: 8px; color: #d9ff8c; box-shadow: inset 0 0 0 2px currentColor, 0 0 0 2px #11190e, 0 0 0 160vmax #06090bbf; }
+  .spotlight.menu-open { box-shadow: inset 0 0 0 2px currentColor; }
+  .spotlight.port { border-radius: 50%; box-shadow: inset 0 0 0 2px currentColor, 0 0 10px 2px #c7f46c88; }
   .tutorial { position: absolute; pointer-events: auto; background: var(--raised); border-color: #839d59; padding: 10px; overflow: auto;
     overscroll-behavior: contain; scrollbar-width: thin; box-shadow: 0 10px 35px #000c; }
+  .tutorial.menu-covered { visibility: hidden; pointer-events: none; }
   .tutorial-content { display: grid; gap: 7px; overflow-wrap: anywhere; }
   header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1px 8px; color: var(--muted); }
   header small { font-size: 11px; }
@@ -260,6 +285,8 @@
   .progress .past { background: #77944d; }
   .progress .current { background: var(--primary); }
   .copy { display: grid; gap: 4px; }
+  .step-type { color: var(--muted); font-weight: 650; font-size: 11px; }
+  .step-type.action { color: var(--primary); }
   h2 { font-size: 16px; }
   p { font-size: 13px; }
   .status { color: var(--primary); font-size: 11px; }

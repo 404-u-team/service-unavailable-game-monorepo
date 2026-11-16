@@ -9,6 +9,8 @@ from src.simulation.catalog import (
     BUSINESS,
     CAMPAIGNS,
     FEATURES,
+    MEDIA_OPERATIONS,
+    MEDIA_QUALITY,
     MINUTES_PER_TICK,
     OPERATIONS,
     REGION_LANGUAGE_WEIGHTS,
@@ -33,6 +35,17 @@ SECONDS_PER_DAY = MINUTES_PER_DAY * 60
 def product_settings(game: Game) -> ProductSettings:
     return game.product or ProductSettings(
         premium_price=BUSINESS["premium_default_price"]
+    )
+
+
+def premium_media_gain(game: Game, product: ProductSettings) -> float:
+    if not any(
+        FEATURES[key]["operation"] in MEDIA_OPERATIONS for key in game.enabled_features
+    ):
+        return 0
+    return (
+        MEDIA_QUALITY["high"]["satisfaction"]
+        - MEDIA_QUALITY[product.media_quality]["satisfaction"]
     )
 
 

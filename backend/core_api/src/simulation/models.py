@@ -319,6 +319,7 @@ class ProductSettings(Model):
     # Existing terms are held by the paid cohort. This price applies at checkout.
     premium_price: float
     premium_fast_sync: bool = True
+    premium_high_quality_media: bool = False
     sync_frequency: SyncFrequency = "standard"
     media_quality: MediaQuality = "standard"
     north_america: bool = False
@@ -329,6 +330,7 @@ class SubscriptionTerm(Model):
     subscribers: float
     price: float
     fast_sync: bool = True
+    high_quality_media: bool = False
 
 
 class Onboarding(Model):

@@ -749,7 +749,7 @@
       <dl class="breakdown">
         <div><dt>{t("Development cost")}</dt><dd>{money(definition.cost)}</dd></div>
         <div><dt>{t("Development duration")}</dt><dd>{duration(definition.duration)}</dd></div>
-        <div><dt>{t("Generated demand")}</dt><dd>{detail === 'premium' ? t('Additional synchronization for subscribers') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger operations")}</dd></div>
+        <div><dt>{t("Generated demand")}</dt><dd>{detail === 'premium' ? t('Optional faster synchronization and larger media uploads') : definition.operation ? t(catalog.operations[definition.operation]) : t("Base messenger operations")}</dd></div>
         {#if currentFeature.state !== 'released' && currentFeature.demand_change > 0}<div><dt>{t("Additional request load")}</dt><dd>+{pct(currentFeature.demand_change, 1)}</dd></div>{/if}
         <div><dt>{t("Appeal contribution")}</dt><dd>+{pct(definition.appeal)}</dd></div>
       </dl>

@@ -1,7 +1,7 @@
 <script module lang="ts">
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import { CircleHelp } from '@lucide/svelte';
-  import { Button, Checkbox, FilePicker, Form, FormField, LocalizedNumberInput, NumberInput, SearchSelect, Select, Slider, Switch, Textarea, TextInput } from '@service-unavailable/ui';
+  import { Button, Checkbox, FilePicker, Form, FormField, LocalizedNumberInput, NumberInput, SearchSelect, Select, Slider, Switch, Textarea, TextInput, Tooltip } from '@service-unavailable/ui';
   import { locale, stepLabels, t } from './copy.svelte';
   import { parseNumber } from '../../../frontend/src/lib/controls/numeric';
 
@@ -82,6 +82,7 @@
 <Story name="Number input">
   <div class="fields">
     <FormField label={t('Server capacity')} hint={t('Use the arrow keys to change the value.')}>
+      {#snippet help()}<Tooltip label={t('Help with server capacity')} text={t('Sets the maximum requests the server can handle per second.')} />{/snippet}
       {#snippet children(control)}
         <NumberInput {...control} bind:value={capacity} min={20} max={1200} step={10} stepLabels={stepLabels(t('Server capacity'))} unit={t('req/s')} />
       {/snippet}

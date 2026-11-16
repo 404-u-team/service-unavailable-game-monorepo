@@ -159,6 +159,56 @@ class BusinessSimulationTests(TestCase):
         self.assertFalse(game.subscriptions[-1].fast_sync)
         self.assertTrue(game.subscriptions[0].fast_sync)
 
+    def test_premium_media_changes_paid_upload_size_without_adding_requests(self):
+        game = fixture()
+        monitor(game, "api")
+        release(game, "images")
+        enabled = product_settings(game).model_copy(
+            update={"premium_high_quality_media": True}
+        )
+        with self.assertRaisesRegex(RuleError, "Release the feature"):
+            change_product(game, enabled)
+
+        release(game, "premium")
+        game.tick = TICKS_PER_DAY
+        game.premium_quality = 0.97
+        standard = game.model_copy(deep=True)
+        update_subscriptions(standard, 1, game.audience)
+        change_product(game, enabled)
+        update_subscriptions(game, 1, game.audience)
+        self.assertGreater(game.subscribers, standard.subscribers)
+        self.assertTrue(game.subscriptions[-1].high_quality_media)
+        self.assertGreater(
+            view(game, datetime.now(UTC)).economy.premium_satisfaction,
+            view(standard, datetime.now(UTC)).economy.premium_satisfaction,
+        )
+
+        # Compare the same audience and paid cohort at the same instant.
+        standard.subscriptions = [
+            term.model_copy(update={"high_quality_media": False})
+            for term in game.subscriptions
+        ]
+        before = evaluate(standard)
+        after = evaluate(game)
+        self.assertEqual(after.snapshot.demand, before.snapshot.demand)
+        self.assertGreater(after.storage["db"], before.storage["db"])
+        self.assertGreater(
+            after.snapshot.components["api"].utilization["Network"],
+            before.snapshot.components["api"].utilization["Network"],
+        )
+
+        change_product(
+            game, enabled.model_copy(update={"premium_high_quality_media": False})
+        )
+        self.assertEqual(evaluate(game).snapshot, after.snapshot)
+        game.tick = 2 * TICKS_PER_DAY
+        update_subscriptions(game, 1, game.audience)
+        self.assertTrue(game.subscriptions[0].high_quality_media)
+        self.assertFalse(game.subscriptions[-1].high_quality_media)
+        game.tick = game.subscriptions[0].expires
+        update_subscriptions(game, 1, game.audience)
+        self.assertFalse(any(term.high_quality_media for term in game.subscriptions))
+
     def test_disabling_preserves_development_and_data_and_respects_dependencies(self):
         game = fixture()
         release(game, "groups")

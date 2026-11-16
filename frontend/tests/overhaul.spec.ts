@@ -133,6 +133,29 @@ test('Russian configuration and deployment use localized controls, actual costs 
   }
 });
 
+test('higher-quality media is saved independently of Premium synchronization', async ({ page }) => {
+  const id = await setup(page, []);
+  const save = await (await page.request.get(`/api/games/${id}/export`)).json();
+  save.game.released.push('premium', 'images');
+  const loaded = await page.request.post('/api/games/import', { data: save });
+  expect(loaded.ok()).toBeTruthy();
+  const game: Game = await loaded.json();
+  await page.goto(`/game/${game.id}?view=product`);
+  await page.getByRole('tab', { name: 'Product settings' }).click();
+  const media = page.getByRole('switch', { name: 'Offer higher-quality media' });
+  const sync = page.getByRole('switch', { name: 'Offer faster synchronization' });
+  await expect(media).not.toBeChecked();
+  await expect(sync).toBeChecked();
+  await media.click();
+  const saveSettings = page.getByRole('button', { name: 'Save product settings' });
+  await saveSettings.click();
+  await expect(saveSettings).toBeDisabled();
+  await page.reload();
+  await page.getByRole('tab', { name: 'Product settings' }).click();
+  await expect(media).toBeChecked();
+  await expect(sync).toBeChecked();
+});
+
 test.describe('compact campaign planning', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 

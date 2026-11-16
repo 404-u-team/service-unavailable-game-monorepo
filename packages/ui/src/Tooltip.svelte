@@ -18,6 +18,10 @@
 
   let open = $state(false);
   let anchor = $state<HTMLElement>();
+
+  function showFloatingTooltip(element: HTMLElement) {
+    element.showPopover();
+  }
 </script>
 
 {#snippet triggerContent()}{#if trigger}{@render trigger()}{:else}<CircleHelp size={18} aria-hidden="true" />{/if}{/snippet}
@@ -38,7 +42,13 @@
       {/snippet}
     </Tooltip.Trigger>
     <Tooltip.Portal to={anchor?.closest<HTMLElement>('.sui-overlay') ?? undefined}>
-      <Tooltip.Content role="tooltip" class="sui-tooltip" {side} sideOffset={6} collisionPadding={12}>{#if content}{@render content()}{:else}{text}{/if}</Tooltip.Content>
+      <Tooltip.Content role="tooltip" class="sui-tooltip" {side} sideOffset={6} collisionPadding={12} strategy="fixed" hideWhenDetached>
+        {#snippet child({ props, wrapperProps })}
+          <div {...wrapperProps} class="floating-tooltip" popover="manual" use:showFloatingTooltip>
+            <div {...props}>{#if content}{@render content()}{:else}{text}{/if}</div>
+          </div>
+        {/snippet}
+      </Tooltip.Content>
     </Tooltip.Portal>
   </Tooltip.Root>
 </Tooltip.Provider>
@@ -46,5 +56,6 @@
 
 <style>
   .anchor { display: inline-flex; flex: none; }
+  .floating-tooltip { inset: auto; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; }
 </style>
 

@@ -4,7 +4,8 @@
   import NumberInput from '../controls/NumberInput.svelte';
   import Select from '../controls/Select.svelte';
   import Slider from '../controls/Slider.svelte';
-  import { Button, Checkbox, Form, FormField, TextInput, Tooltip } from '@service-unavailable/ui';
+  import { Alert, Badge, Button, Checkbox, Form, FormField, Panel, Stat, TextInput, Tooltip } from '@service-unavailable/ui';
+  import { tick } from 'svelte';
   import { target } from './onboarding';
   import Forecast from './Forecast.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
@@ -23,6 +24,7 @@
   let estimate = $state<Review>();
   let previewError = $state('');
   let estimating = $state(false);
+  let summary = $state<HTMLElement>();
   let previewVersion = 0;
   let includeLegacy = $state(true);
   let values = $state<Record<string, Setting>>({});
@@ -51,7 +53,11 @@
     previewError = '';
     try {
       const result = await preview(name, nextValues());
-      if (version === previewVersion) estimate = result;
+      if (version === previewVersion) {
+        estimate = result;
+        await tick();
+        if (version === previewVersion) summary?.scrollIntoView({ block: 'nearest' });
+      }
     } catch (reason) {
       if (version === previewVersion) previewError = apiMessage(reason);
     } finally {
@@ -59,6 +65,7 @@
     }
   }
   const unlocks: Record<string, string> = { role: 'decomposition', domain: 'domains', partition: 'sharding', query_plan: 'queries', autoscale: 'autoscaling', min_instances: 'autoscaling', max_instances: 'autoscaling', target_utilization: 'autoscaling' };
+  const engineeringArticles: Record<string, string> = { decomposition: 'service-decomposition', domains: 'data-domains', sharding: 'database-sharding', queries: 'query-optimization', autoscaling: 'api-autoscaling' };
   const unlocked = (key: string) => !unlocks[key] || engineering.some((r) => r.id === unlocks[key] && r.state === 'completed');
   const supported = $derived(serviceRoles[String(values.role ?? 'Universal')] ?? []);
   const eligibleDemand = $derived(supported.reduce((sum, op) => sum + (workloads[op] ?? 0), 0));
@@ -67,6 +74,11 @@
   const sliderFields = new Set(['cpu', 'memory', 'connections', 'network', 'concurrency', 'slots', 'capacity', 'limit']);
   const storageTier = $derived(storage?.[String(values.disk)]);
   const valid = $derived(!!name.trim() && Object.values(values).every((value) => typeof value !== 'number' || Number.isFinite(value)));
+  const fields = $derived(Object.entries(definition.fields).filter(([key]) =>
+    !['min_instances', 'max_instances', 'target_utilization'].includes(key) || values.autoscale === 'Enabled'));
+  const resources = $derived(fields.filter(([key, field]) => key === 'disk' || (field.min != null && !unlocks[key])));
+  const behavior = $derived(fields.filter(([key, field]) => key !== 'disk' && (field.min == null || unlocks[key])));
+  let forecastSection = $state<HTMLElement>();
 
   function setValue(key: string, next: Setting) {
     values[key] = next;
@@ -76,98 +88,183 @@
 
 <Modal title={t("Component configuration")} subtitle={t(component.name)} {close} wide>
   <div class="configuration-grid">
-  <Form id="configure-component" class="stack" oninput={resetPreview}
-    onsubmit={(event) => { event.preventDefault(); if (valid) apply(name, nextValues()); }}>
-    {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
-    <FormField label={t('Component name')}>
-      {#snippet children(field)}<TextInput {...field} bind:value={name} maxlength={60} required />{/snippet}
-    </FormField>
-    {#if presets.length}
-      {@const label = t(component.kind === 'api' ? 'Instance size' : 'Preset')}
-      <div class="field"><span>{label}</span>
-        <Select data-tutorial={component.kind === 'api' ? target.instance : undefined} {label} value={String(activePreset)}
-          options={[{ value: '-1', label: t('Custom') }, ...presets.map(([preset], index) => ({ value: String(index), label: t(preset) }))]}
-          onchange={(value) => {
-            const preset = presets[Number(value)];
-            if (preset) { values = { ...values, ...preset[1] }; resetPreview(); }
-          }} />
-      </div>
-    {/if}
-    {#if component.kind === 'api'}
-      <p class="notice">{t('Instances share one role and all dependencies. Separate API nodes can have different roles, resources and routes.')}</p>
-      <p>{t('Supported operations')}: {supported.map((op) => t(operationNames[op] ?? op)).join(', ')} · <a href={guideArticleHref(guideHref, 'service-routing')} target="_blank" rel="noreferrer">{t('Routing and dependencies')}</a></p>
-      <p>{t('Eligible demand before routing')}: {rps(eligibleDemand)}</p>
-      {#if values.role === 'Media'}<p>{t('Media needs released image, voice or file features to receive their traffic.')}</p>{/if}
-      {#if values.role === 'Search'}<p>{t('Search needs the Message search feature and an indexed primary.')}</p>{/if}
-      {#if !['Universal', 'Accounts'].includes(String(values.role ?? 'Universal'))}<p class="notice warn">{t('Connect this service to an Accounts API for identity checks and to its data domain.')}</p>{/if}
-    {/if}
-    <div class="form-grid">
-      {#each Object.entries(definition.fields).filter(([key]) => !['min_instances', 'max_instances', 'target_utilization'].includes(key) || values.autoscale === 'Enabled') as [key, field] (key)}
-        <div class="field">
-          <div class="row spread"><label for={`config-${key}`}>{t(field.label)}</label>{#if fieldNotes[key]}<Tooltip label={t("Help with {0}", [t(field.label)])} text={t(fieldNotes[key])} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}</div>
-          {#if !unlocked(key)}
-            <p class="muted">{t('Unlock this setting through Engineering in Product.')}</p>
-            <a href={guideArticleHref(guideHref, key === 'role' ? 'service-decomposition' : key === 'domain' ? 'data-domains' : key === 'partition' ? 'database-sharding' : key === 'query_plan' ? 'query-optimization' : 'api-autoscaling')} target="_blank" rel="noreferrer">{t('Engineering Guide')}</a>
-          {:else if field.options}
-            <Select id={`config-${key}`} label={t(field.label)} value={String(values[key])}
-              options={field.options.map((option) => ({ value: option, label: t(option) }))} onchange={(value) => setValue(key, value)} />
-          {:else if field.min != null && field.max != null}
-            <NumberInput id={`config-${key}`} label={t(field.label)} min={field.min} max={field.max} step={field.step ?? 1}
-              precision={['instances', 'slots'].includes(key) ? 0 : 4} value={Number(values[key])}
-              onchange={(value) => setValue(key, value ?? NaN)} required />
-            {#if sliderFields.has(key)}
-              <Slider label={t('Adjust {0}', [t(field.label)])} min={field.min} max={field.max} step={field.step ?? 1}
-                value={Number.isFinite(values[key]) ? Number(values[key]) : Number(field.default)} onchange={(value) => setValue(key, value)} />
+    <Form id="configure-component" oninput={resetPreview}
+      onsubmit={(event) => { event.preventDefault(); if (!busy && valid) apply(name, nextValues()); }}>
+      {#if error}<Alert tone="danger" announce="assertive">{message(error)}</Alert>{/if}
+
+      <Panel aria-label={t('Component settings')}>
+        {#snippet header()}<h3>{t('Component settings')}</h3>{/snippet}
+        <div class="form-grid">
+          <FormField label={t('Component name')}>
+            {#snippet children(field)}<TextInput {...field} bind:value={name} maxlength={60} required />{/snippet}
+          </FormField>
+          {#if presets.length}
+            {@const label = t(component.kind === 'api' ? 'Instance size' : 'Preset')}
+            <FormField {label}>
+              {#snippet children(field)}
+                <Select {...field} data-tutorial={component.kind === 'api' ? target.instance : undefined} {label} value={String(activePreset)}
+                  options={[{ value: '-1', label: t('Custom'), disabled: true }, ...presets.map(([preset], index) => ({ value: String(index), label: t(preset) }))]}
+                  onchange={(value) => {
+                    const preset = presets[Number(value)];
+                    if (preset) { values = { ...values, ...preset[1] }; resetPreview(); }
+                  }} />
+              {/snippet}
+            </FormField>
+          {/if}
+        </div>
+      </Panel>
+
+      {#if resources.length}
+        <Panel aria-label={t('Resources and capacity')}>
+          {#snippet header()}<h3>{t('Resources and capacity')}</h3>{/snippet}
+          <div class="form-grid">
+            {#each resources as [key, field] (key)}{@render setting(key, field)}{/each}
+          </div>
+        </Panel>
+      {/if}
+      {#if behavior.length}
+        <Panel aria-label={t('Component behavior')}>
+          {#snippet header()}<h3>{t('Component behavior')}</h3>{/snippet}
+          <div class="stack">
+            <div class="form-grid">
+              {#each behavior as [key, field] (key)}{@render setting(key, field)}{/each}
+            </div>
+            {#if component.kind === 'api'}
+              <div class="routing stack">
+                <dl>
+                  <div><dt>{t('Supported operations')}</dt><dd>{supported.map((op) => t(operationNames[op] ?? op)).join(', ')}</dd></div>
+                  <div><dt>{t('Eligible demand before routing')}</dt><dd>{rps(eligibleDemand)}</dd></div>
+                </dl>
+                <p class="muted">{t('Instances share one role and all dependencies. Separate API nodes can have different roles, resources and routes.')}</p>
+                {#if values.role === 'Media'}<p>{t('Media needs released image, voice or file features to receive their traffic.')}</p>{/if}
+                {#if values.role === 'Search'}<p>{t('Search needs the Message search feature and an indexed primary.')}</p>{/if}
+                {#if !['Universal', 'Accounts'].includes(String(values.role ?? 'Universal'))}
+                  <Alert tone="warning">{t('Connect this service to an Accounts API for identity checks and to its data domain.')}</Alert>
+                {/if}
+                <a href={guideArticleHref(guideHref, 'service-routing')} target="_blank" rel="noreferrer">{t('Routing and dependencies')}</a>
+              </div>
+            {/if}
+          </div>
+        </Panel>
+      {/if}
+      {#if Object.keys(legacy).length}
+        <Panel padding="compact"><Checkbox bind:checked={includeLegacy} onchange={resetPreview} label={t("Keep throughput throttles from this save")} /></Panel>
+      {/if}
+    </Form>
+
+    <aside class="preview" aria-label={t('Cost and capacity')} bind:this={summary}>
+      <Panel inset>
+        {#snippet header()}<h3>{t('Cost and capacity')}</h3>{/snippet}
+        <div class="stack">
+          <Stat label={t('Configured daily cost')} value={preciseMoney(daily)} />
+          <p class="muted">{t("Settings take effect after deployment.")}</p>
+          {#if previewError}<Alert tone="danger" announce="assertive">{message(previewError)}</Alert>{/if}
+          {#if estimate}
+            {@const dailyChange = estimate.daily_after - estimate.daily_before}
+            <dl class="costs" aria-live="polite">
+              <div>
+                <dt>{t('Daily infrastructure ·')}</dt>
+                <dd>{preciseMoney(estimate.daily_before)} → {preciseMoney(estimate.daily_after)}</dd>
+                <dd><Badge tone={dailyChange > 0 ? 'warning' : dailyChange < 0 ? 'success' : 'neutral'}>{dailyChange > 0 ? '+' : ''}{preciseMoney(dailyChange)}</Badge></dd>
+              </div>
+              <div><dt>{t('One-time deployment cost')}</dt><dd>{preciseMoney(estimate.install)}</dd></div>
+            </dl>
+            {#if estimate.forecast || estimate.errors.length || estimate.warnings.length}
+              <Button variant="ghost" block onclick={() => { forecastSection?.focus({ preventScroll: true }); forecastSection?.scrollIntoView({ block: 'start' }); }}>
+                {t('View forecast details')}
+              </Button>
             {/if}
           {/if}
-          {#if key === 'disk' && storageTier}
-            <small>{t('{0} modeled IOPS · +{1} base cost', [num(storageTier.read_capacity), pct(storageTier.base_cost_surcharge)])}</small>
-          {/if}
-          <small class="muted">{field.options ? '' : `${num(field.min ?? 0)}–${num(field.max ?? 0)} · `}{t("Default")} {t(String(field.default))}{#if values[key] !== initial.values[key]} {t("· Current")} {t(String(initial.values[key]))}{/if}</small>
         </div>
-      {/each}
-    </div>
-    {#if Object.keys(legacy).length}<Checkbox bind:checked={includeLegacy} onchange={resetPreview} label={t("Keep throughput throttles from this save")} />{/if}
-  </Form>
-  <aside class="preview stack">
-    <h3>{t('Cost and capacity')}</h3>
-    <p class="muted">{t("Settings take effect after deployment.")}</p>
-    <p>{t('Configured daily cost: {0}', [preciseMoney(daily)])}</p>
-    <Button type="button"  disabled={estimating || busy || !valid} onclick={getPreview}>
-      {estimating ? t("Estimating…") : t("Preview cost and capacity")}
-    </Button>
-    {#if previewError}<p class="notice error" role="alert">{message(previewError)}</p>{/if}
-    {#if estimate}
-      {@const dailyChange = estimate.daily_after - estimate.daily_before}
-      <p>{t('Daily infrastructure ·')} {preciseMoney(estimate.daily_before)} → {preciseMoney(estimate.daily_after)}
-        ({dailyChange > 0 ? '+' : ''}{preciseMoney(dailyChange)})</p>
-      <p>{t("Deployment cost ·")} {preciseMoney(estimate.install)}</p>
-      {#each estimate.errors as issue}<p class="notice error">{message(issue)}</p>{/each}
-      {#each estimate.warnings as issue}<p class="notice warn">{message(issue)}</p>{/each}
-      {#if estimate.forecast}
-        {@const database = estimate.forecast.databases?.[component.id]}
-        <Forecast forecast={estimate.forecast} />
-        {#if database}
-          <DatabaseForecast {database} {guideHref} />
-        {:else if ['database', 'replica'].includes(component.kind)}
-          <p class="muted">{t('Database forecasts require current and draft monitoring coverage.')}</p>
-        {/if}
-      {/if}
+      </Panel>
+    </aside>
+
+    {#if estimate && (estimate.forecast || estimate.errors.length || estimate.warnings.length)}
+      <section class="forecast" tabindex="-1" bind:this={forecastSection} aria-label={t('Forecast details')}>
+        <Panel>
+          {#snippet header()}<h3>{t('Forecast details')}</h3>{/snippet}
+          <div class="stack">
+            {#each estimate.errors as issue}<Alert tone="danger">{message(issue)}</Alert>{/each}
+            {#each estimate.warnings as issue}<Alert tone="warning">{message(issue)}</Alert>{/each}
+            {#if estimate.forecast}
+              {@const database = estimate.forecast.databases?.[component.id]}
+              <Forecast forecast={estimate.forecast} />
+              {#if database}
+                <DatabaseForecast {database} {guideHref} />
+              {:else if ['database', 'replica'].includes(component.kind)}
+                <p class="muted">{t('Database forecasts require current and draft monitoring coverage.')}</p>
+              {/if}
+            {/if}
+          </div>
+        </Panel>
+      </section>
     {/if}
-  </aside>
   </div>
+
   {#snippet footer()}
-    <div class="row spread">
+    <div class="row spread wrap">
       <Button onclick={close}>{t("Cancel")}</Button>
+      <Button aria-label={t("Preview cost and capacity")} disabled={estimating || busy || !valid} onclick={getPreview}>
+        {estimating ? t("Estimating…") : t("Preview")}
+      </Button>
       <Button type="submit" form="configure-component" data-tutorial={target.save} variant="primary" disabled={busy || !valid}>{t("Save to draft")}</Button>
     </div>
   {/snippet}
 </Modal>
 
+{#snippet setting(key: string, field: Definition['fields'][string])}
+  {@const label = t(field.label)}
+  {@const note = fieldNotes[key]}
+  {@const changed = values[key] !== initial.values[key] && (typeof values[key] !== 'number' || Number.isFinite(values[key]))}
+  {@const range = field.min != null && field.max != null ? t('Range {0}–{1}', [num(field.min), num(field.max)]) : undefined}
+  {@const hint = !unlocked(key) ? undefined : [range, changed ? t('Saved value {0}', [t(String(initial.values[key]))]) : undefined].filter(Boolean).join(' · ') || undefined}
+  {#if unlocked(key)}
+    <FormField id={'config-' + key} {label} {hint}>
+      {#snippet help()}
+        {#if note}<Tooltip label={t("Help with {0}", [label])} text={t(note)} href={guideArticleHref(guideHref, fieldArticle(component.kind, key))} newTab />{/if}
+      {/snippet}
+      {#snippet children(control)}
+        {#if field.options}
+          <Select {...control} {label} value={String(values[key])}
+            options={field.options.map((option) => ({ value: option, label: t(option) }))} onchange={(value) => setValue(key, value)} />
+        {:else if field.min != null && field.max != null}
+          <NumberInput id={control.id} aria-describedby={control['aria-describedby']} {label} min={field.min} max={field.max} step={field.step ?? 1}
+            precision={['instances', 'slots'].includes(key) ? 0 : 4} value={Number(values[key])}
+            onchange={(value) => setValue(key, value ?? NaN)} required />
+          {#if sliderFields.has(key)}
+            <Slider label={t('Adjust {0}', [label])} min={field.min} max={field.max} step={field.step ?? 1}
+              value={Number.isFinite(values[key]) ? Number(values[key]) : Number(field.default)} onchange={(value) => setValue(key, value)} />
+          {/if}
+        {/if}
+        {#if key === 'disk' && storageTier}
+          <small class="muted">{t('{0} modeled IOPS · +{1} base cost', [num(storageTier.read_capacity), pct(storageTier.base_cost_surcharge)])}</small>
+        {/if}
+      {/snippet}
+    </FormField>
+  {:else}
+    <div class="locked">
+      <strong>{label}</strong>
+      <p>{t('Unlock this setting through Engineering in Product.')}</p>
+      <a href={guideArticleHref(guideHref, engineeringArticles[unlocks[key]])} target="_blank" rel="noreferrer">{t('Engineering Guide')}</a>
+    </div>
+  {/if}
+{/snippet}
+
 <style>
-  .configuration-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 22px; align-items: start; }
-  .preview { min-width: 0; background: var(--raised); border-radius: 8px; border: 1px solid var(--border); padding: 14px; }
-  .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-  @media (max-width: 670px) { .configuration-grid { grid-template-columns: 1fr; } }
-  @media (max-width: 420px) { .form-grid { grid-template-columns: 1fr; } }
+  .configuration-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sui-space-4); align-items: start; }
+  .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sui-space-4); align-items: start; }
+  .preview { position: sticky; top: 0; min-width: 0; }
+  .forecast { grid-column: 1 / -1; scroll-margin-block: var(--sui-space-3); }
+  .routing { padding-block-start: var(--sui-space-4); border-block-start: 1px solid var(--sui-border); }
+  .routing dl, .costs { display: grid; gap: var(--sui-space-3); margin: 0; }
+  dt { color: var(--sui-muted); }
+  dd { margin: 0; }
+  .costs dd { font-family: var(--sui-mono); }
+  .locked { display: grid; gap: var(--sui-space-1); padding: var(--sui-space-3); border-radius: var(--sui-radius); background: var(--sui-inset); }
+  .locked p { color: var(--sui-muted); font-size: 0.8125rem; }
+  @media (max-width: 740px), (max-height: 520px) {
+    .configuration-grid { grid-template-columns: minmax(0, 1fr); }
+    .preview { position: static; }
+  }
+  @media (max-width: 520px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

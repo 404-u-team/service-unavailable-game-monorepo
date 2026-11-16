@@ -65,8 +65,8 @@
 {#snippet purchases()}<Stat value={currency(economy.daily_total_expenses - economy.daily_operating)} compact />{/snippet}
 
 {#snippet revenue()}
-  <div class="stack" data-tutorial={target.finance}>
-    <div class="ledger">
+  <div class="stack">
+    <div class="ledger" data-tutorial={target.finance}>
       <table>
         <thead><tr><th scope="col">{t('Source')}</th><th scope="col">{t('Per game day')}</th><th scope="col">{t('To date')}</th></tr></thead>
         <tbody>
@@ -93,8 +93,8 @@
 {/snippet}
 
 {#snippet expensesWidget()}
-  <div class="stack" data-tutorial={target.expenses}>
-    <div class="ledger">
+  <div class="stack">
+    <div class="ledger" data-tutorial={target.expenses}>
       <table>
         <thead><tr><th scope="col">{t('Expense')}</th><th scope="col">{t('Per game day')}</th><th scope="col">{t('To date')}</th></tr></thead>
         <tbody>

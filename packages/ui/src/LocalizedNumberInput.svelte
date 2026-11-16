@@ -3,10 +3,12 @@
   import type { NumberStepLabels } from './types';
 
   let { id, label, value = $bindable(), min = -Infinity, max = Infinity, step = 1, precision = 0,
-    unit, locale, parse, invalidMessage, stepLabels, onchange, required = false, disabled = false }: {
+    unit, locale, parse, invalidMessage, stepLabels, onchange, required = false, disabled = false,
+    'aria-describedby': description }: {
     id?: string; label: string; value?: number; min?: number; max?: number; step?: number; precision?: number;
     unit?: string; locale: string; parse: (text: string) => number | undefined; invalidMessage: string;
     stepLabels: NumberStepLabels; onchange?: (value: number | undefined) => void; required?: boolean; disabled?: boolean;
+    'aria-describedby'?: string;
   } = $props();
   const uid = $props.id();
   let input: HTMLInputElement;
@@ -42,7 +44,7 @@
 <div class="number sui-control">
   <button class="sui-focus" type="button" aria-label={stepLabels.decrease} disabled={disabled || (value ?? Infinity) <= min} onclick={() => increment(-1)}><Minus size={13} /></button>
   <input class="sui-focus" bind:this={input} id={id ?? uid} aria-label={label} aria-invalid={invalid && (required || !!draft.trim())}
-    aria-describedby={invalid && (required || !!draft.trim()) ? `${uid}-error` : undefined}
+    aria-describedby={[description, invalid && (required || !!draft.trim()) && `${uid}-error`].filter(Boolean).join(' ') || undefined}
     type="text" role="spinbutton" aria-valuemin={Number.isFinite(min) ? min : undefined} aria-valuemax={Number.isFinite(max) ? max : undefined}
     aria-valuenow={Number.isFinite(value) ? value : undefined} inputmode={precision ? 'decimal' : 'numeric'} {required} {disabled} value={editing || invalid ? draft : display(value)}
     onfocus={() => { if (!invalid) draft = display(value); editing = true; }}

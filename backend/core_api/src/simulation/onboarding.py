@@ -22,6 +22,7 @@ class TutorialStep(StrEnum):
     MONITOR_DEPLOY = "monitor-deploy"
     OPEN_TELEMETRY = "open-telemetry"
     TELEMETRY = "telemetry"
+    DASHBOARD_LAYOUT = "dashboard-layout"
     API_UTILIZATION = "api-utilization"
     API_THROUGHPUT = "api-throughput"
     INFRASTRUCTURE = "infrastructure"

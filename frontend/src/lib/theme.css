@@ -1,6 +1,5 @@
 :root {
   --layer-workbench-navigation: 12;
-  --layer-tutorial: calc(var(--layer-workbench-navigation) + 1);
   color-scheme: dark;
   --background: var(--sui-background);
   --page: var(--sui-page);

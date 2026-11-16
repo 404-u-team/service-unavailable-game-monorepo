@@ -51,6 +51,7 @@ from src.simulation.demand import (
     acquire,
     ad_forecast,
     arrival_weight,
+    premium_media_gain,
     product_settings,
     workload,
 )
@@ -970,6 +971,7 @@ def change_product(game: Game, product: ProductSettings) -> None:
         ("ad_intensity", "advertising"),
         ("premium_price", "premium"),
         ("premium_fast_sync", "premium"),
+        ("premium_high_quality_media", "premium"),
     ):
         if (
             getattr(product, field) != getattr(previous, field)
@@ -992,6 +994,7 @@ def change_product(game: Game, product: ProductSettings) -> None:
 
 
 def finance(game: Game, active_users: float) -> Economy:
+    product = product_settings(game)
     sources = RevenueSources(
         advertising=game.advertising_revenue,
         subscriptions=game.subscription_revenue,
@@ -1096,7 +1099,18 @@ def finance(game: Game, active_users: float) -> Economy:
                 sum(term.subscribers for term in game.subscriptions if term.fast_sync)
                 / game.subscribers
                 if game.subscribers
-                else int(product_settings(game).premium_fast_sync)
+                else int(product.premium_fast_sync)
+            )
+            + premium_media_gain(game, product)
+            * (
+                sum(
+                    term.subscribers
+                    for term in game.subscriptions
+                    if term.high_quality_media
+                )
+                / game.subscribers
+                if game.subscribers
+                else int(product.premium_high_quality_media)
             )
             + (
                 BUSINESS["premium_ad_free_satisfaction"]
@@ -1202,11 +1216,12 @@ TUTORIAL_INFORMATION = {
     TutorialStep.BALANCE,
     TutorialStep.TOPOLOGY,
     TutorialStep.COMPONENTS,
+    TutorialStep.CONFIGURATION,
     TutorialStep.CAPACITY,
     TutorialStep.METRICS_COVERAGE,
-    TutorialStep.MONITORING,
     TutorialStep.MONITOR_COSTS,
     TutorialStep.TELEMETRY,
+    TutorialStep.DASHBOARD_LAYOUT,
     TutorialStep.API_UTILIZATION,
     TutorialStep.API_THROUGHPUT,
     TutorialStep.INFRASTRUCTURE,

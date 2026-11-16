@@ -61,6 +61,18 @@ async function visibility(page: Page, key: string) {
   }).toBeTruthy();
 }
 
+async function connectPorts(page: Page) {
+  await visibility(page, target.linkOrigin);
+  await visibility(page, target.linkDestination);
+  const from = await control(page, target.linkOrigin).locator('.svelte-flow__handle.source').boundingBox();
+  const to = await control(page, target.linkDestination).locator('.svelte-flow__handle.target').boundingBox();
+  expect(from && to).toBeTruthy();
+  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 12 });
+  await page.mouse.up();
+}
+
 async function saveVisual(page: Page, label: string, browserName: string) {
   const dir = process.env.VISUAL_OUTPUT_DIR;
   if (!dir) return;
@@ -75,6 +87,7 @@ for (const layout of ['desktop', 'compact']) {
     await page.setViewportSize(compact ? { width: 390, height: 700 } : { width: 1440, height: 900 });
     await start(page);
     await step(page, 'Game time');
+    await expect(tutorial(page)).toContainText('Review and continue');
     await visibility(page, target.clock);
     await saveVisual(page, 'clock', browserName);
     await next(page);
@@ -84,16 +97,18 @@ for (const layout of ['desktop', 'compact']) {
     await next(page);
     await step(page, 'From traffic to storage');
     await next(page, 'Continue chapter');
-    await step(page, 'Select the API');
+    await step(page, 'Open the API inspector');
+    await expect(tutorial(page)).toContainText('Action required');
     await visibility(page, target.api);
     await saveVisual(page, 'node', browserName);
-    await button(tutorial(page), 'Focus target').click();
-    await expect(control(page, target.api)).toBeFocused();
-    await page.keyboard.press('Enter');
+    if (compact) {
+      await button(tutorial(page), 'Focus target').click();
+      await expect(control(page, target.api)).toBeFocused();
+      await page.keyboard.press('Enter');
+    } else await control(page, target.api).dblclick();
 
-    await step(page, 'Open Configuration');
-    await clickTarget(page, target.openInspector);
-    await clickTarget(page, target.configuration);
+    await step(page, 'Find the configuration');
+    await next(page);
     await step(page, 'Read the capacity settings');
     await visibility(page, target.capacity);
     await next(page);
@@ -107,9 +122,8 @@ for (const layout of ['desktop', 'compact']) {
 
     await step(page, 'Set up monitoring coverage');
     await clickTarget(page, target.close);
-    await next(page, 'Continue chapter');
-    await step(page, 'Add a Monitoring collector');
     await clickTarget(page, target.add);
+    await step(page, 'Add a Monitoring collector');
     await expect(page.getByRole('dialog').locator('[data-spotlight-ui]')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -120,13 +134,16 @@ for (const layout of ['desktop', 'compact']) {
 
     await step(page, 'Link the API and database');
     for (const source of ['api', 'db']) {
-      await clickTarget(page, target.connect);
-      await expect(highlight(page, target.source)).toBeVisible();
-      await choose(control(page, target.source), source);
-      await expect(highlight(page, target.destination)).toBeVisible();
-      await choose(control(page, target.destination), { label: 'Monitoring' });
-      await clickTarget(page, target.saveLink);
-      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(control(page, target.linkOrigin)).toHaveAttribute('data-id', source);
+      if (compact) {
+        await button(page, 'Connect').click();
+        await expect(highlight(page, target.source)).toBeVisible();
+        await choose(control(page, target.source), source);
+        await expect(highlight(page, target.destination)).toBeVisible();
+        await choose(control(page, target.destination), { label: 'Monitoring' });
+        await clickTarget(page, target.saveLink);
+        await expect(page.getByRole('dialog')).toHaveCount(0);
+      } else await connectPorts(page);
     }
 
     await step(page, 'Review monitoring changes');
@@ -147,8 +164,13 @@ for (const layout of ['desktop', 'compact']) {
     await step(page, 'Check who is reporting');
     await visibility(page, target.coverage);
     await next(page);
+    await step(page, 'Make the dashboard your own');
+    await visibility(page, target.dashboard);
+    await expect(tutorial(page)).toContainText('Review and continue');
+    await next(page);
     await tutorial(page).getByRole('link', { name: 'Open Topology' }).click();
-    await clickTarget(page, target.openInspector);
+    await expect(highlight(page, target.api)).toBeVisible();
+    await control(page, target.api).dblclick();
     await clickTarget(page, target.metrics);
     await step(page, 'Read live API utilization');
     await visibility(page, target.cpu);
@@ -166,8 +188,8 @@ for (const layout of ['desktop', 'compact']) {
     await step(page, 'Create a draft');
     await clickTarget(page, target.createDraft);
     await step(page, 'Open the API settings');
-    await clickTarget(page, target.openInspector);
-    await clickTarget(page, target.configuration);
+    await expect(highlight(page, target.api)).toBeVisible();
+    await control(page, target.api).dblclick();
     await expect(control(page, target.edit)).toBeInViewport();
     await expect.poll(() => page.getByRole('dialog').evaluate((node) => node.scrollLeft)).toBe(0);
     await clickTarget(page, target.edit);
@@ -186,8 +208,14 @@ for (const layout of ['desktop', 'compact']) {
     await step(page, 'Confirm the deployment');
     await clickTarget(page, target.deploy);
     await step(page, 'Compare before and after');
-    await visibility(page, target.compare);
+    if (compact) await page.setViewportSize({ width: 492, height: 377 });
+    await expect(highlight(page, target.compare)).toBeVisible();
+    await expect.poll(() => tutorial(page).evaluate((node) => node.scrollHeight - node.clientHeight)).toBeLessThan(2);
+    const [popup, comparison] = await Promise.all([tutorial(page).boundingBox(), page.getByRole('dialog').boundingBox()]);
+    if (!compact) expect(popup!.x + popup!.width < comparison!.x || popup!.x > comparison!.x + comparison!.width).toBeTruthy();
+    await saveVisual(page, 'comparison', browserName);
     await next(page);
+    if (compact) await page.setViewportSize({ width: 390, height: 700 });
     await step(page, 'Follow the money');
     await clickTarget(page, target.close);
     await next(page, 'Continue chapter');
@@ -233,15 +261,14 @@ test('tutorial survives reload, navigation, skip and restart in Russian at 390px
   await saveVisual(page, 'canvas-ru', browserName);
   await next(page, 'Далее');
   await next(page, 'Продолжить главу');
-  await clickTarget(page, target.api);
-  await step(page, 'Откройте конфигурацию');
-  await clickTarget(page, target.openInspector);
+  await control(page, target.api).dblclick();
+  await step(page, 'Найдите настройки компонента');
   await visibility(page, target.configuration);
   await saveVisual(page, 'mobile-inspector-ru', browserName);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await clickTarget(page, target.openInspector);
-  await clickTarget(page, target.configuration);
+  await control(page, target.api).dblclick();
+  await next(page, 'Далее');
   await step(page, 'Параметры мощности');
 
   await page.setViewportSize({ width: 768, height: 900 });
@@ -272,15 +299,15 @@ test('a panned or unmounted API is revealed and resize keeps the modal control c
       viewports: { wide: { x: -1200, y: -800, zoom: 1 } } }
   };
   await start(page, state);
-  await step(page, 'Select the API');
+  await step(page, 'Open the API inspector');
   await visibility(page, target.api);
   await saveVisual(page, 'list-fallback', browserName);
   await clickTarget(page, target.api);
-  await step(page, 'Open Configuration');
   await page.setViewportSize({ width: 390, height: 700 });
   await clickTarget(page, target.openInspector);
+  await step(page, 'Find the configuration');
   await visibility(page, target.configuration);
-  await clickTarget(page, target.configuration);
+  await next(page);
   await step(page, 'Read the capacity settings');
 });
 

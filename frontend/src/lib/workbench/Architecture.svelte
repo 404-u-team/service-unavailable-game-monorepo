@@ -25,10 +25,10 @@
   import { ms, num, pct, preciseMoney, rps } from '../format';
   import type { Catalog, Component, Connection, Diagram, DiagramViewport, Game, Kind, Point, Review, Setting, Topology } from '../types';
 
-  let { game, catalog, act, busy, error, tutorial, tutorialSelect, tutorialState, tutorialEvent, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
+  let { game, catalog, act, busy, error, tutorial, tutorialSelect, tutorialLink, tutorialState, tutorialEvent, focusId, openConfiguration, guideHref, savedDiagram, saveDiagram, layoutFailed, retryDiagram }: {
     game: Game; catalog: Catalog; busy: boolean; error: string;
     act: (path: string, body?: object, method?: string) => Promise<Game | null>;
-    tutorial: boolean; tutorialSelect: boolean; tutorialState: (state: TutorialArchitecture) => void; tutorialEvent: (event: TutorialEvent) => void; focusId?: string; openConfiguration?: boolean; guideHref: string;
+    tutorial: boolean; tutorialSelect: boolean; tutorialLink?: Connection; tutorialState: (state: TutorialArchitecture) => void; tutorialEvent: (event: TutorialEvent) => void; focusId?: string; openConfiguration?: boolean; guideHref: string;
     savedDiagram: Diagram; saveDiagram: (diagram: Diagram) => void;
     layoutFailed: boolean; retryDiagram: () => void;
   } = $props();
@@ -94,6 +94,10 @@
       return;
     }
     placement?.revealNode(guideApi);
+  }
+
+  export function revealTutorialLink() {
+    if (tutorialLink) placement?.revealNodes([tutorialLink.source, tutorialLink.target]);
   }
 
   function saveViewport(viewport: DiagramViewport) {
@@ -308,6 +312,7 @@
   $effect(() => {
     tutorialState({
       api: guideApi, selected, missingDraftApi, inspector: dialog === 'inspector', tab: inspectorTab, dialog, layout,
+      hiddenNodes: diagram.groups.filter((group) => group.collapsed).flatMap((group) => groupComponents(group, diagram.groups)),
       viewingDraft, connectSource: source, connectTarget: target, changedConfig, reviewReady: Boolean(review), reviewPending: reviewing, hasForecast: Boolean(review?.forecast),
       reviewValid: Boolean(review && !review.errors.length && Object.values(review.changes).some((items) => items.length)),
       comparison: dialog === 'deployed' && Boolean(deployed?.comparison),
@@ -336,6 +341,7 @@
   function inspectComponent(id: string) {
     if (touchSelect) return;
     select(id);
+    inspectorTab = 'configuration';
     dialog = 'inspector';
   }
 
@@ -807,7 +813,7 @@
         <div class="canvas" data-tutorial={guideTarget.canvas} bind:this={canvas}>
           {#if canvas}
           {#key compact}
-            <TopologyGraph {guideApi} {topology} {diagram} {game} {catalog} {requestType} {hiddenConnections} {alignment} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft}
+            <TopologyGraph {guideApi} {tutorialLink} {topology} {diagram} {game} {catalog} {requestType} {hiddenConnections} {alignment} {selected} {selection} {groupSelected} edgeSelected={selectedEdge} editable={viewingDraft}
               {compact} {removed} {touchSelect} {select} inspect={inspectComponent} {selectEdge} selectGroup={chooseGroup} {selectMany} {connect} {move} {toggleGroup} {updateRoute}
               {cluster} container={canvas} {bindPlacement} {saveViewport} menu={openMenu} clear={() => { context = undefined; select(''); }} />
           {/key}

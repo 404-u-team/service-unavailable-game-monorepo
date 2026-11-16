@@ -1,3 +1,5 @@
+import { target } from './onboarding';
+
 type Box = Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>;
 const inset = 10;
 
@@ -28,7 +30,9 @@ export function openDialog() {
 export function findTarget(key: string | undefined, dialog?: HTMLElement) {
   if (!key) return;
   const root = dialog ?? document;
-  return [...root.querySelectorAll<HTMLElement>(`[data-tutorial="${key}"]`)]
+  const port = key === target.linkOrigin ? ' .svelte-flow__handle.source'
+    : key === target.linkDestination ? ' .svelte-flow__handle.target' : '';
+  return [...root.querySelectorAll<HTMLElement>(`[data-tutorial="${key}"]${port}`)]
     .find((node) => node.getClientRects().length && getComputedStyle(node).visibility === 'visible' && !node.closest('[inert]'));
 }
 
@@ -114,16 +118,19 @@ export function visibleTarget(node: HTMLElement, dialog?: HTMLElement): Box | un
   return spotlightBounds(rect, box);
 }
 
-export function placeTooltip(view: Box, hole: Box | undefined, width: number, height: number, keepClear?: Box) {
+export function placeTooltip(view: Box, hole: Box | undefined, width: number, height: number, dialog?: Box) {
   const safe = { left: view.left + inset, top: view.top + inset, right: view.right - inset, bottom: view.bottom - inset };
-  if (keepClear) safe.bottom = Math.min(safe.bottom, keepClear.top - inset);
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(min, max), Math.max(min, value));
   const alignX = (value: number) => clamp(value, safe.left, safe.right - width);
   const alignY = (value: number) => clamp(value, safe.top, safe.bottom - height);
   const bottom = { x: alignX(safe.right - width), y: alignY(safe.bottom - height), maxHeight: safe.bottom - safe.top };
-  if (!hole) return bottom;
-
   const gap = 10;
+  if (dialog) {
+    const y = alignY(hole?.top ?? dialog.top);
+    if (dialog.right + gap + width <= safe.right) return { ...bottom, x: dialog.right + gap, y };
+    if (dialog.left - gap - width >= safe.left) return { ...bottom, x: dialog.left - gap - width, y };
+  }
+  if (!hole) return bottom;
   const x = alignX((hole.left + hole.right - width) / 2);
   const y = alignY(hole.top);
   const above = hole.top - safe.top - gap;
@@ -132,10 +139,7 @@ export function placeTooltip(view: Box, hole: Box | undefined, width: number, he
   if (height <= above) return { ...bottom, x, y: hole.top - gap - height };
   if (hole.right + gap + width <= safe.right) return { ...bottom, x: hole.right + gap, y };
   if (hole.left - gap - width >= safe.left) return { ...bottom, x: hole.left - gap - width, y };
-  if (Math.max(above, below) > 0) {
-    return below >= above
-      ? { x, y: hole.bottom + gap, maxHeight: below }
-      : { x, y: Math.max(safe.top, hole.top - gap - height), maxHeight: above };
-  }
-  return bottom;
+  // Large targets can fill most of the viewport. Keep the guide readable at the edge with more room.
+  if (dialog && hole.bottom - hole.top > height) return { ...bottom, x };
+  return { ...bottom, x, y: below >= above ? bottom.y : safe.top };
 }

@@ -203,7 +203,7 @@ export const articles: Record<string, Article> = {
   },
   "premium": { category: "business", title: "Premium subscriptions",
     sections: [
-      { id: "benefits", title: "Premium benefits", body: ["Develop and enable Premium subscriptions. Choose a monthly price and any enabled benefits in Product. Ad-free premium removes ad delivery for subscribers. Faster sync adds load from premium users."] },
+      { id: "benefits", title: "Premium benefits", body: ["Develop and enable Premium subscriptions. Set the monthly price and benefits in Product. Premium is ad-free. Faster sync generates more requests. Higher-quality media increases bandwidth and storage use when the standard plan uses lower quality. Benefit changes apply to new subscriptions and renewals."] },
       { id: "renewals", title: "Adoption and renewal", body: ["Service quality, recent reliability and price affect subscription adoption and renewal. Compare subscriber count and fees in Finance after a price change."] }
     ],
     related: ["advertising", "satisfaction", "finances"]
@@ -238,7 +238,7 @@ export const articles: Record<string, Article> = {
   },
   "topology-editing": { category: "interface", title: "Topology editing",
     sections: [
-      { id: "edit", title: "Nodes and connections", body: ["Use Add node and Connect in a draft. On the canvas, draw from a source port to a valid target. Use the connection reference to check allowed types. Select a node to open Configuration or Metrics."] },
+      { id: "edit", title: "Nodes and connections", body: ["Choose Add node and select a component in the library to add it to your draft. Double-click a node to open its configuration in the inspector. Draw from an output port to a highlighted input, or use Connect to choose the endpoints."] },
       { id: "layout", title: "Canvas and inspector", body: ["Drag the divider beside the inspector to resize it on desktop. Focus it and use Left or Right to resize, Home or End for the limits, or Enter to reset. On mobile, open the component panel from its card."] }
     ],
     related: ["deployment", "routing", "groups", "edge-routing", "shortcuts"]
@@ -257,7 +257,11 @@ export const articles: Record<string, Article> = {
   },
   "monitoring-charts": { category: "interface", title: "Monitoring charts",
     sections: [
-      { id: "history", title: "Service and component history", body: ["In Telemetry, choose a time range and a component. Compare incoming and successful requests and peak resource load at the same game time. Component history requires service history coverage at the time of collection."] }
+      { id: "history", title: "Service and component history", body: ["In Telemetry, choose a time range and a component. Compare incoming and successful requests and peak resource load at the same game time. Component history requires service history coverage at the time of collection."] },
+      { id: "dashboard", title: "Dashboard layouts", body: [
+        "Choose Edit layout in Telemetry, Finance, or Growth. Use the handles or arrow keys to move and resize widgets. On a narrow screen, reorder widgets in the single column. Use Widgets to show, hide, or reset widgets.",
+        "Open Dashboard layouts in Settings to save the current layout or import and export a layout file. You can set a saved layout as the default for new games."
+      ] }
     ],
     related: ["monitoring-setup", "bottlenecks", "availability"]
   },

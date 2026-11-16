@@ -10,6 +10,7 @@ from src.simulation.catalog import (
 from src.simulation.demand import (
     SECONDS_PER_DAY,
     daily_active_users,
+    premium_media_gain,
     product_settings,
     regional_audience,
 )
@@ -69,6 +70,11 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
     benefits = (
         1 if product.premium_fast_sync else BUSINESS["premium_standard_adoption_factor"]
     )
+    media_benefit = (
+        BUSINESS["premium_media_adoption_multiplier"]
+        if product.premium_high_quality_media and premium_media_gain(game, product)
+        else 1
+    )
     renewals = (
         sum(term.subscribers for term in expiring)
         * BUSINESS["premium_renewal"]
@@ -83,6 +89,7 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
             BUSINESS["premium_daily_adoption"]
             * adoption_factor
             * benefits
+            * media_benefit
             * (1 + BUSINESS["premium_ad_free_adoption"] * ad_free_value),
         )
         * reliability
@@ -96,6 +103,7 @@ def update_subscriptions(game: Game, quality: float, active_users: float) -> flo
                 subscribers=subscribers,
                 price=product.premium_price,
                 fast_sync=product.premium_fast_sync,
+                high_quality_media=product.premium_high_quality_media,
             )
         )
     return subscribers * product.premium_price

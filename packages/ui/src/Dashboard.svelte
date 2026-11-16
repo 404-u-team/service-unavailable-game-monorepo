@@ -1,6 +1,7 @@
 <script lang="ts">
   import { GripVertical, LayoutGrid, MoveDiagonal2, Pencil, Settings2 } from '@lucide/svelte';
   import { onDestroy, tick, untrack } from 'svelte';
+  import type { HTMLButtonAttributes } from 'svelte/elements';
   import type { Snippet } from 'svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -13,11 +14,12 @@
     type DashboardWidgetState
   } from './dashboard';
 
-  let { title, headingLevel = 2, tools, widgets, snapshot, onchange, t, columns: requestedColumns = 12, rowHeight = 56,
+  let { title, headingLevel = 2, tools, editButtonAttributes, widgets, snapshot, onchange, t, columns: requestedColumns = 12, rowHeight = 56,
     compactWidth = 720, readonly = false }: {
     title: string;
     headingLevel?: 1 | 2;
     tools?: Snippet;
+    editButtonAttributes?: Pick<HTMLButtonAttributes, `data-${string}`>;
     widgets: readonly DashboardWidgetDefinition[];
     snapshot?: unknown;
     onchange?: (snapshot: DashboardState) => void;
@@ -277,7 +279,7 @@
       {@render tools?.()}
       {#if !readonly}
         {#if editable}<Button onclick={() => manage = true}><LayoutGrid size={16} aria-hidden="true" />{t('Widgets')}</Button>{/if}
-        <Button variant={editable ? 'primary' : 'secondary'} onclick={() => editing = !editing}>
+        <Button {...editButtonAttributes} variant={editable ? 'primary' : 'secondary'} onclick={() => editing = !editing}>
           {#if !editable}<Pencil size={16} aria-hidden="true" />{/if}
           {editable ? t('Done editing') : t('Edit layout')}
         </Button>

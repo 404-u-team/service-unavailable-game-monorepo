@@ -75,7 +75,7 @@
   let currentId = '';
   let mounted = $state(false);
   let compact = $state(false);
-  let architecture = $state<{ revealTutorialApi: () => void }>();
+  let architecture = $state<{ revealTutorialApi: () => void; revealTutorialLink: () => void }>();
   let workbench = $state<{ revealTutorialWidget: (key: Target) => void }>();
   let tutorialUi = $state.raw<TutorialArchitecture>();
   let tutorialEvent = $state<{ step: StepId; name: TutorialEvent }>();
@@ -305,11 +305,13 @@
   function recoverTutorial(key?: Target) {
     rejected = undefined;
     if (key === target.api) architecture?.revealTutorialApi();
+    else if (key === target.linkOrigin) architecture?.revealTutorialLink();
     else if (key) workbench?.revealTutorialWidget(key);
   }
 
   $effect(() => {
     if (!tutorialVisible || !currentView.observed || pendingTutorial || busy || rejected === tutorialStep) return;
+    if (game?.onboarding.furthest_id && game.onboarding.furthest_id !== tutorialStep) return;
     const modal = openDialog();
     if (currentView.target && modal && !modal.querySelector(`[data-tutorial="${currentView.target}"]`)) return;
     untrack(() => void guide('observed'));
@@ -370,6 +372,7 @@
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture bind:this={architecture} {game} {catalog} {act} {busy} {error} tutorial={tutorialEnabled} tutorialSelect={currentView.target === target.api}
+            tutorialLink={tutorialVisible ? currentView.connection : undefined}
             tutorialState={(state) => tutorialUi = state} tutorialEvent={recordTutorial} {saveDiagram} {layoutFailed}
             retryDiagram={() => { if (game) void layout?.retry(game.diagram); }} savedDiagram={pendingDiagram ?? game.diagram}
             focusId={page.url.searchParams.get('component') ?? undefined}

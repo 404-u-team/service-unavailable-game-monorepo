@@ -738,6 +738,7 @@ BUSINESS = {
     "premium_ad_free_satisfaction": 0.018,
     "premium_sync_multiplier": 1.30,
     "premium_sync_satisfaction": 0.012,
+    "premium_media_adoption_multiplier": 1.15,
     "premium_standard_adoption_factor": 0.80,
     "premium_ad_free_adoption": 4.0,
     "premium_max_daily_adoption": 0.025,

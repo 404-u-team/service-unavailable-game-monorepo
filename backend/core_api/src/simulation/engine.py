@@ -76,12 +76,21 @@ def evaluate(
     activity = workload(game, audience, boost, overview=overview)
     workloads = {key: rate * load_scale for key, rate in activity.operations.items()}
     media = MEDIA_QUALITY[product_settings(game).media_quality]
+    premium_media_users = sum(
+        term.subscribers for term in game.subscriptions if term.high_quality_media
+    )
+    population = game.audience if audience is None else audience
+    media_share = min(1, premium_media_users / max(1, population))
+    # Subscribers generate the same media requests with a different payload and encoding cost.
+    high_quality = MEDIA_QUALITY["high"]
+    media_size = media["size"] + media_share * (high_quality["size"] - media["size"])
+    media_cpu = media["cpu"] + media_share * (high_quality["cpu"] - media["cpu"])
     operations = {
         key: {
             **operation,
-            "cpu": operation["cpu"] * media["cpu"],
-            "mb": operation["mb"] * media["size"],
-            "storage": operation["storage"] * media["size"],
+            "cpu": operation["cpu"] * media_cpu,
+            "mb": operation["mb"] * media_size,
+            "storage": operation["storage"] * media_size,
         }
         if key in MEDIA_OPERATIONS
         else operation

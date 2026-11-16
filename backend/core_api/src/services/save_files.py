@@ -28,7 +28,9 @@ from src.simulation.models import (
     Metrics,
     Model,
     Onboarding,
+    ProductSettings,
     RegionalCampaign,
+    SubscriptionTerm,
 )
 from src.simulation.topology import RuleError, deployment_warnings, inspect_graph
 
@@ -109,6 +111,10 @@ def require_complete(value: object) -> None:
             allowed_omissions = {"regional_ads"}
         elif isinstance(value, Onboarding):
             allowed_omissions = {"step_id", "furthest_id"}
+        elif isinstance(value, ProductSettings):
+            allowed_omissions = {"premium_high_quality_media"}
+        elif isinstance(value, SubscriptionTerm):
+            allowed_omissions = {"high_quality_media"}
         elif isinstance(value, HistoryPoint):
             allowed_omissions = {"resource_utilization"}
         elif isinstance(value, Incident):

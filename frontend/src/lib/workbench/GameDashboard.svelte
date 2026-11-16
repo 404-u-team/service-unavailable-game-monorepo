@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import { t } from '../i18n.svelte';
+  import { target } from './onboarding';
   import { isGameDashboardChange, readGameDashboardLayout, writeGameDashboard, type DashboardSection } from './dashboard-layouts';
 
   let { gameId, section, title, tools, widgets }: {
@@ -35,4 +36,5 @@
   }
 </script>
 
-<Dashboard bind:this={dashboard} {title} {tools} {widgets} {snapshot} {t} headingLevel={1} rowHeight={42} onchange={save} />
+<Dashboard bind:this={dashboard} {title} {tools} {widgets} {snapshot} {t} headingLevel={1} rowHeight={42} onchange={save}
+  editButtonAttributes={{ 'data-tutorial': target.dashboard }} />

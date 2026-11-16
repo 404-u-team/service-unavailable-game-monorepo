@@ -51,7 +51,10 @@
         </div>
         <p class="muted">{t('Higher prices reduce adoption. Price changes apply to new subscriptions and renewals.')}</p>
         <Switch label={t('Offer faster synchronization')} checked={product.premium_fast_sync} onchange={({ currentTarget }) => edits.premium_fast_sync = currentTarget.checked} />
-        <p class="muted">{t('Premium is ad-free. Faster synchronization adds load and makes the plan more attractive. Existing terms retain their benefits.')}</p>
+        <Switch label={t('Offer higher-quality media')} checked={product.premium_high_quality_media}
+          onchange={({ currentTarget }) => edits.premium_high_quality_media = currentTarget.checked} />
+        <p class="muted">{t('Faster synchronization increases requests. Higher-quality media uses more bandwidth and storage when the standard plan uses lower quality.')}</p>
+        <p class="muted">{t('Premium is ad-free. Benefit changes apply to new subscriptions and renewals. Paid terms keep their benefits until they expire.')}</p>
         <p class="muted">{t('Reliability and latency affect renewals.')}</p>
         <dl class="estimate">
           <div><dt>{t('Paying subscribers')}</dt><dd>{num(game.economy.subscribers)}</dd></div>

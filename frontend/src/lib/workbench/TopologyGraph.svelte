@@ -19,9 +19,9 @@
   import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory, type ConnectionKind } from './connections';
   import type { Catalog, Component, Connection, Diagram, DiagramGroup, Game, Point, Topology } from '../types';
 
-  let { guideApi, topology, diagram, game, catalog, requestType, hiddenConnections, alignment, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
+  let { guideApi, tutorialLink, topology, diagram, game, catalog, requestType, hiddenConnections, alignment, selected, edgeSelected, groupSelected, selection, editable, compact, removed, touchSelect,
     select, inspect, selectEdge, selectGroup, selectMany, connect, move, toggleGroup, updateRoute, menu, clear, cluster, container, bindPlacement, saveViewport }: {
-    guideApi?: string; topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
+    guideApi?: string; tutorialLink?: Connection; topology: Topology; diagram: Diagram; game: Game; catalog: Catalog; requestType: string; selected: string;
     hiddenConnections: ConnectionCategory[]; alignment: boolean;
     edgeSelected: string; groupSelected: string; selection: string[]; editable: boolean; compact: boolean; removed: Component[]; touchSelect: boolean;
     select: (id: string) => void; inspect: (id: string) => void; selectEdge: (id: string) => void; selectGroup: (id: string) => void;
@@ -189,13 +189,15 @@
 
       const compatible = linkStart && linkStart.id !== node.id ? !connectionError(topology, catalog, linkStart.isTarget
         ? { source: node.id, target: linkStart.id } : { source: linkStart.id, target: node.id }, reconnectKey) : undefined;
+      const marker = node.id === tutorialLink?.source ? target.linkOrigin : node.id === tutorialLink?.target ? target.linkDestination
+        : node.id === guideApi ? target.api : undefined;
       const base: WorkbenchNode = {
         id: node.id, type: 'workbench', position: position(node), ...card,
         data: { name: t(node.name), kind: node.kind, meta, tone,
           health: status ? t(statusLabel[status]) : node.kind === 'source' ? t('Traffic input') : t('Metrics unavailable'),
           change, use, editable: editable && !pending, vertical: compact, compatible: pending ? undefined : compatible, matchPort: linkStart?.isTarget ? 'source' : 'target',
           input: Position.Left, output: Position.Right },
-        domAttributes: node.id === guideApi && !pending ? { 'data-tutorial': target.api } : undefined,
+        domAttributes: marker && !pending ? { 'data-tutorial': marker } : undefined,
         selected: selection.includes(node.id), draggable: !pending, deletable: false,
         selectable: !pending, connectable: editable && !pending, ariaLabel: t(node.name), zIndex: 1
       };
@@ -390,7 +392,7 @@
     if ((event.key === 'Enter' || event.key === ' ') && element.dataset.id === guideApi && guideApi) {
       event.preventDefault();
       event.stopPropagation();
-      select(guideApi);
+      inspect(guideApi);
       return;
     }
     if (!delta) return;

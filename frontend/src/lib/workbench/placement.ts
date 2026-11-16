@@ -6,6 +6,7 @@ export type CanvasTools = {
   place: () => Point;
   reveal: (point: Point) => void;
   revealNode: (id: string) => void;
+  revealNodes: (ids: string[]) => void;
 };
 
 const gap = 16;

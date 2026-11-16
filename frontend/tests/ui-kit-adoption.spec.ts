@@ -152,6 +152,35 @@ test('topology opens node details on a double-click, with real motion in both di
   await expect(page).toHaveURL(/view=guide/);
 });
 
+test('component library help can extend past the drawer and remains accessible on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 850 });
+  const id = await makeGame(page);
+  await page.goto(`/game/${id}?view=build`);
+  await page.getByRole('button', { name: 'Add node' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Component library' });
+  await drawer.getByRole('searchbox', { name: 'Search components' }).fill('Load balancer');
+  const help = drawer.getByRole('button', { name: 'About Load balancer' });
+  const tooltip = drawer.getByRole('tooltip');
+  await help.hover();
+  await expect(tooltip).toContainText('Base cost');
+  const edge = (await drawer.boundingBox())!.width;
+  await expect.poll(() => tooltip.evaluate((node, drawerRight) => {
+    const box = node.getBoundingClientRect();
+    return box.right > drawerRight + 10 && node.contains(document.elementFromPoint(drawerRight + 5, box.top + box.height / 2));
+  }, edge)).toBeTruthy();
+
+  await page.mouse.move(900, 400);
+  await expect(tooltip).toBeHidden();
+  await page.setViewportSize({ width: 360, height: 640 });
+  await help.focus();
+  await expect(tooltip).toBeVisible();
+  await expect.poll(() => tooltip.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight &&
+      node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight;
+  })).toBeTruthy();
+});
+
 test('Russian rail labels wrap between words and fit inside the rail', async ({ page }) => {
   const id = await makeGame(page);
   await page.addInitScript(() => localStorage.setItem('workbench-language', 'ru'));

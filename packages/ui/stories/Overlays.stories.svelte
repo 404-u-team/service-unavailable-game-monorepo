@@ -33,6 +33,10 @@
         {#snippet children(control)}<TextInput {...control} value="api-eu-01" />{/snippet}
       </FormField>
       <Switch checked label={t('Enable monitoring')} />
+      <div class="help drawer-help">
+        {t('Capacity target')}
+        <Tooltip label={t('About capacity targets')} side="left" text={t('Capacity is the number of requests that the current topology can serve per second.')} />
+      </div>
     </div>
     {#snippet footer()}<Button block variant="primary" onclick={() => slideoverOpen = false}>{t('Save settings')}</Button>{/snippet}
   </Slideover>
@@ -79,5 +83,6 @@
   .row { display: flex; flex-wrap: wrap; gap: var(--sui-space-2); }
   .fields { display: grid; gap: var(--sui-space-4); }
   .help { display: flex; align-items: center; gap: var(--sui-space-1); }
+  .drawer-help { justify-content: space-between; }
   p { margin: 0; }
 </style>

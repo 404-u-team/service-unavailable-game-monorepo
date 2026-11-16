@@ -88,7 +88,7 @@ test('domain, partition, query and autoscaling settings preview and persist inde
   expect(changed.config).toMatchObject({ domain: 'Messages', partition: 'Partition', query_plan: 'History indexes' });
   expect(updated.production).toEqual(game.production);
   await page.goto(`/game/${game.id}?view=build&component=api&configure=1`);
-  await expect(dialog.getByText('Eligible demand before routing:', { exact: false })).toBeVisible();
+  await expect(dialog.getByText('Eligible demand before routing', { exact: true })).toBeVisible();
   await choose(dialog.getByRole('combobox', { name: 'Autoscaling', exact: true }), 'Enabled');
   await expect(dialog.getByRole('spinbutton', { name: 'Minimum instances', exact: true })).toBeVisible();
   await expect(dialog.getByRole('spinbutton', { name: 'Maximum instances', exact: true })).toBeVisible();

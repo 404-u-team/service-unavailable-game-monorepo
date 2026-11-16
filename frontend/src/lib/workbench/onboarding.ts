@@ -1,5 +1,5 @@
 import type { Section } from '../labels';
-import type { Game, Topology } from '../types';
+import type { Component, Game, Topology } from '../types';
 
 export const chapters = [
   'Interface', 'Components', 'Monitoring', 'Infrastructure changes', 'Economy'
@@ -14,12 +14,14 @@ export const target = {
   capacity: 'inspector.capacity', missingMetrics: 'inspector.missing-metrics',
   cpu: 'inspector.cpu-metric', throughput: 'inspector.throughput', edit: 'inspector.edit-configuration',
   add: 'topology.component-catalog', catalogSearch: 'catalog.search', collector: 'catalog.monitoring',
+  linkOrigin: 'topology.link-origin', linkDestination: 'topology.link-destination',
   connect: 'topology.connect', source: 'connection.source', destination: 'connection.target',
   saveLink: 'connection.confirm', createDraft: 'topology.create-draft', returnDraft: 'topology.return-draft', viewProduction: 'topology.view-production',
   instance: 'configuration.instance-size', save: 'configuration.save',
   review: 'deployment.review-button', forecast: 'deployment.costs', capacityForecast: 'deployment.forecast', deploy: 'deployment.confirm',
   compare: 'deployment.comparison', done: 'deployment.done', eventComparison: 'events.latest-comparison',
   coverage: 'monitoring.coverage', finance: 'finance.revenue', expenses: 'finance.expenses',
+  dashboard: 'dashboard.edit-layout',
   monetization: 'product.monetization', premium: 'product.premium', growth: 'growth.readiness', close: 'dialog.close'
 } as const;
 
@@ -33,20 +35,21 @@ export const onboarding = [
   { id: 'balance', chapter: 0, title: 'Cash and daily profit', text: 'The top figure is cash on hand. The figure below is your net profit or loss per game day.', target: target.balance },
   { id: 'topology', chapter: 0, title: 'Navigate the topology', text: 'Drag to pan and use the canvas controls to zoom or fit the diagram. You can also switch to a component list.', section: 'build', target: target.canvas },
   { id: 'components', chapter: 1, title: 'From traffic to storage', text: 'Nodes are infrastructure components. The arrows show how requests reach the API through the balancer and how the API reads and writes to the database.', section: 'build', target: target.canvas },
-  { id: 'select-api', chapter: 1, title: 'Select the API', text: 'Select the highlighted API server, then choose Open component to see its details.', mode: 'action', section: 'build', target: target.api },
-  { id: 'configuration', chapter: 1, title: 'Open Configuration', text: 'Choose Configuration in the component inspector to see the resources assigned to the API.', mode: 'action', section: 'build', target: target.configuration },
+  { id: 'select-api', chapter: 1, title: 'Open the API inspector', text: 'Double-click the highlighted API server to open its inspector. You can also select it and choose Open component.', mode: 'action', section: 'build', target: target.api },
+  { id: 'configuration', chapter: 1, title: 'Find the configuration', text: 'The inspector opens on Configuration. Here you can see the resources assigned to the API and open the editor to change them.', section: 'build', target: target.configuration },
   { id: 'capacity', chapter: 1, title: 'Read the capacity settings', text: 'vCPU determines compute capacity. RAM holds active data and connections. Replicas share traffic, and concurrency limits how many requests each instance can handle at once.', section: 'build', target: target.capacity },
   { id: 'metrics', chapter: 1, title: 'Switch to Metrics', text: 'Choose Metrics to see throughput, latency and resource utilization when this component is covered by Monitoring.', mode: 'action', section: 'build', target: target.metrics },
   { id: 'metrics-coverage', chapter: 1, title: 'Check for component metrics', text: 'Incoming shows requests arriving per second. Processed shows what the component handled. If these readings are missing, deploy a linked Monitoring collector to see them.', section: 'build' },
   { id: 'return-configuration', chapter: 1, title: 'Return to Configuration', text: 'Choose Configuration in the inspector to go back to the component settings.', mode: 'action', section: 'build', target: target.configuration },
-  { id: 'monitoring', chapter: 2, title: 'Set up monitoring coverage', text: 'Monitoring collects metrics through links from components. Each link uses one collection slot. Service history reserves two additional slots.', section: 'build', target: target.add },
+  { id: 'monitoring', chapter: 2, title: 'Set up monitoring coverage', text: 'Choose Add node to open the component library. Monitoring uses one collection slot per linked component and reserves two more for service history.', mode: 'action', section: 'build', target: target.add },
   { id: 'add-collector', chapter: 2, title: 'Add a Monitoring collector', text: 'Choose Monitoring in the component library. The collector is added to a draft for review before it costs anything.', mode: 'server', section: 'build', target: target.collector },
-  { id: 'link-coverage', chapter: 2, title: 'Link the API and database', text: 'Create a metrics collection link from each highlighted source to Monitoring.', mode: 'server', section: 'build', target: target.connect },
+  { id: 'link-coverage', chapter: 2, title: 'Link the API and database', text: 'Create a metrics collection link from each highlighted source to Monitoring.', mode: 'server', section: 'build', target: target.linkOrigin },
   { id: 'monitor-review', chapter: 2, title: 'Review monitoring changes', text: 'Open Deployment review to check the links and see how much the collector will cost.', mode: 'action', section: 'build', target: target.review },
   { id: 'monitor-costs', chapter: 2, title: 'Check the monitoring costs', text: 'Review the new daily infrastructure cost and the one-time installation charge before deploying.', section: 'build', target: target.forecast },
   { id: 'monitor-deploy', chapter: 2, title: 'Deploy monitoring coverage', text: 'Check the one-time and daily costs, then choose Deploy changes to start collecting metrics. You can skip if you want to keep the draft.', mode: 'server', section: 'build', target: target.deploy },
   { id: 'open-telemetry', chapter: 2, title: 'Open Telemetry', text: 'Use the highlighted navigation link to see what Monitoring collects across your service.', mode: 'action', target: nav('monitor') },
   { id: 'telemetry', chapter: 2, title: 'Check who is reporting', text: 'Monitoring coverage lists the connected components and available slots. Node health and Diagnostics below show the resource load and possible bottlenecks.', section: 'monitor', target: target.coverage },
+  { id: 'dashboard-layout', chapter: 2, title: 'Make the dashboard your own', text: 'Telemetry, Finance, and Growth have editable dashboards. In Edit layout, drag widgets by their handles or use the arrow keys to move or resize them. Use Widgets to show, hide, or restore tiles. Settings lets you save, import, and export layouts.', section: 'monitor', target: target.dashboard },
   { id: 'api-utilization', chapter: 2, title: 'Read live API utilization', text: 'CPU utilization compares current demand with available compute. Around 100% means little spare capacity.', section: 'build', target: target.cpu },
   { id: 'api-throughput', chapter: 2, title: 'Compare incoming and processed requests', text: 'The Metrics tab shows how many requests arrive and how many the API processes each second. A sustained gap can indicate a capacity limit or a struggling dependency.', section: 'build', target: target.throughput },
   { id: 'infrastructure', chapter: 3, title: 'Plan an infrastructure change', text: 'A draft lets you change components while production keeps running. You can stop here and resume from Settings or the Guide.', section: 'build', target: target.canvasTools },
@@ -64,7 +67,7 @@ export const onboarding = [
   { id: 'expenses', chapter: 4, title: 'Read the expense breakdown', text: 'Operating costs include infrastructure, traffic and payment fees. Deployments and development appear separately as one-time purchases.', section: 'finance', target: target.expenses },
   { id: 'open-product', chapter: 4, title: 'Open Product', text: 'Open Product to see how to develop and release features, including monetization.', mode: 'action', target: nav('product') },
   { id: 'product', chapter: 4, title: 'Explore advertising', text: 'Advertising earns revenue from served ads after release. Check the additional request load and the effect of ad intensity on players.', section: 'product', target: target.monetization },
-  { id: 'premium', chapter: 4, title: 'Explore premium subscriptions', text: 'Premium earns recurring revenue after release. Its faster synchronization can increase request load. Review the requirements before starting development.', section: 'product', target: target.premium },
+  { id: 'premium', chapter: 4, title: 'Explore premium subscriptions', text: 'Premium earns recurring revenue after release. Faster synchronization increases requests and higher-quality media can increase bandwidth and storage use.', section: 'product', target: target.premium },
   { id: 'open-growth', chapter: 4, title: 'Open Growth', text: 'Open Growth to see how a campaign could change demand.', mode: 'action', target: nav('growth') },
   { id: 'growth', chapter: 4, title: 'Check capacity before growing', text: 'Campaigns can bring more users and more requests. Compare projected load with current capacity and budget for any infrastructure you need to add.', section: 'growth', target: target.growth }
 ] as const satisfies readonly Step[];
@@ -94,13 +97,17 @@ export function monitored(game: Game) {
   return required.length > 0 && required.every((node) => game.snapshot.components[node.id]);
 }
 
+function collectorCapacity(collector: Component, fallbackSlots: number) {
+  const slots = Number(collector.config.slots ?? fallbackSlots);
+  return slots - (slots >= 3 && collector.config.detail === 'Service history' ? 2 : 0);
+}
+
 export function draftCoverage(game: Game, fallbackSlots: number) {
   const topology = game.draft ?? game.production;
   const collectors = topology.nodes.filter((node) => node.kind === 'monitor');
   const linked = new Set(collectors.flatMap((collector) => {
-    const slots = Number(collector.config.slots ?? fallbackSlots);
-    const capacity = slots - (slots >= 3 && collector.config.detail === 'Service history' ? 2 : 0);
-    return topology.edges.filter((edge) => edge.target === collector.id).map((edge) => edge.source).sort().slice(0, capacity);
+    return topology.edges.filter((edge) => edge.target === collector.id).map((edge) => edge.source).sort()
+      .slice(0, collectorCapacity(collector, fallbackSlots));
   }));
   const missing = coverageNodes(game.production).filter((node) => !linked.has(node.id));
   return { collectors, missing };
@@ -117,10 +124,11 @@ export function apiConfigChanged(before: Topology, after: Topology, defaults: Re
 export type TutorialArchitecture = {
   api?: string; missingDraftApi: boolean; selected: string; inspector: boolean; tab: 'configuration' | 'metrics';
   dialog?: string; layout: 'canvas' | 'list'; viewingDraft: boolean; connectSource: string; connectTarget: string;
+  hiddenNodes: string[];
   changedConfig: boolean; reviewReady: boolean; reviewPending: boolean; reviewValid: boolean; comparison: boolean; hasForecast: boolean; collectorVisible: boolean;
 };
 
-type View = { target?: Target; instruction?: string; args?: string[]; open?: Section; observed?: boolean; allowed?: boolean };
+type View = { target?: Target; instruction?: string; args?: string[]; open?: Section; observed?: boolean; allowed?: boolean; connection?: { source: string; target: string } };
 type Context = {
   game: Game; section: Section; ui?: TutorialArchitecture; event?: { step: StepId; name: TutorialEvent };
   apiDefaults: Record<string, unknown>; monitorSlots: number; compact: boolean;
@@ -134,7 +142,10 @@ export function tutorialView(step: Step, context: Context): View {
   const close = { target: target.close, instruction: 'Close this dialog to continue the tutorial.' };
   const go = (destination: Section, control = nav(destination)): View => section === destination
     ? { observed: true }
-    : { target: control, open: destination, allowed: true };
+    : { target: control, open: destination };
+  const openInspector = (): View => ui?.selected === ui?.api && did('component-selected') && ui?.layout === 'list'
+    ? { target: target.openInspector, instruction: 'Choose Open component to show the inspector.' }
+    : { target: target.api, instruction: 'Double-click the highlighted API server to open its inspector. You can also select it and choose Open component.' };
 
   if (id === 'open-telemetry') {
     if (ui?.dialog === 'deployed') return { target: target.done, instruction: 'Choose Done, then open Telemetry.' };
@@ -164,9 +175,11 @@ export function tutorialView(step: Step, context: Context): View {
   if (inspectApi && ui?.missingDraftApi && (id !== 'edit-api' && id !== 'save-capacity')) return ui.dialog ? close : {
     target: target.viewProduction, instruction: 'The API is missing from this draft. View production to inspect the live component.'
   };
-  if (id === 'select-api') return ui?.dialog ? close : ui?.api
-    ? { target: target.api, observed: ui.selected === ui.api && did('component-selected') }
-    : { instruction: 'There is no API server in the current topology. You can skip this step.' };
+  if (id === 'select-api') {
+    if (ui?.inspector && ui.selected === ui.api) return { observed: true };
+    if (ui?.dialog) return close;
+    return ui?.api ? openInspector() : { instruction: 'There is no API server in the current topology. You can skip this step.' };
+  }
 
   if (inspectApi) {
     if (id === 'save-capacity' && game.draft && apiConfigChanged(game.production, game.draft, apiDefaults) && ui?.dialog !== 'configuration') {
@@ -184,11 +197,13 @@ export function tutorialView(step: Step, context: Context): View {
       return close;
     }
     if (ui.dialog && ui.dialog !== 'inspector') return close;
-    if (ui.selected !== ui.api) return ui.dialog === 'inspector' ? close
-      : { target: target.api, instruction: 'Select the highlighted API server to continue.' };
-    if (!ui.inspector) return { target: target.openInspector, instruction: 'Choose Open component to show the full inspector.' };
+    if (ui.dialog === 'inspector' && ui.selected !== ui.api) return close;
+    if (!ui.inspector) return openInspector();
 
-    if (id === 'configuration' || id === 'return-configuration') {
+    if (id === 'configuration') return ui.tab === 'configuration'
+      ? { target: target.configuration, allowed: true }
+      : { target: target.configuration, instruction: 'Choose Configuration in the inspector to continue.' };
+    if (id === 'return-configuration') {
       return { target: target.configuration, observed: ui.tab === 'configuration' && did('configuration-opened') };
     }
     if (id === 'metrics') return { target: target.metrics, observed: ui.tab === 'metrics' && did('metrics-opened') };
@@ -205,6 +220,10 @@ export function tutorialView(step: Step, context: Context): View {
     return { target: target.edit, instruction: id === 'save-capacity' ? 'Reopen Edit configuration to change the API settings.' : undefined };
   }
 
+  if (id === 'monitoring') {
+    if (ui?.dialog === 'catalog' || (!ui?.dialog && (coverage().collectors.length || monitored(game)))) return { observed: true };
+    return ui?.dialog ? close : { target: target.add };
+  }
   if (id === 'add-collector') {
     if (coverage().collectors.length || monitored(game)) return { observed: true };
     if (ui?.dialog === 'catalog') return {
@@ -222,8 +241,15 @@ export function tutorialView(step: Step, context: Context): View {
     if (!next) return { instruction: 'There is no API server in the current topology. You can skip this step.' };
     if (!collectors.length) return { instruction: 'Add a Monitoring collector first, or go Back to the previous step.' };
 
-    if (ui?.dialog !== 'connect' && game.draft && collectors.every((collector) =>
-      game.draft!.edges.some((edge) => edge.source === next.id && edge.target === collector.id))) {
+    const topology = game.draft ?? game.production;
+    if (!topology.nodes.some((node) => node.id === next.id)) return {
+      instruction: '{0} is missing from the draft. Restore the component or skip this step.', args: [next.name]
+    };
+    const available = collectors.filter((collector) => {
+      const links = topology.edges.filter((edge) => edge.target === collector.id);
+      return links.length < collectorCapacity(collector, monitorSlots) && !links.some((edge) => edge.source === next.id);
+    });
+    if (ui?.dialog !== 'connect' && !available.length) {
       return { instruction: 'There is no free collection slot for this component. Edit the collector to add capacity, or skip this step.' };
     }
     if (!ui?.viewingDraft) return {
@@ -231,7 +257,16 @@ export function tutorialView(step: Step, context: Context): View {
       instruction: 'Open the draft so you can add monitoring links.'
     };
     const args = [next.name];
-    if (ui.dialog !== 'connect') return { target: target.connect, instruction: 'Choose Connect to create a collection link for {0}.', args };
+    if (ui.dialog !== 'connect') {
+      const collector = available.find((node) => !ui.hiddenNodes.includes(node.id));
+      if (ui.layout === 'canvas' && collector && !ui.hiddenNodes.includes(next.id)) return {
+        target: target.linkOrigin,
+        instruction: 'Drag from the highlighted output on {0} to the highlighted input on {1}. You can also tap the two ports or use Connect.',
+        args: [next.name, collector.name],
+        connection: { source: next.id, target: collector.id }
+      };
+      return { target: target.connect, instruction: 'Choose Connect to create a collection link for {0}.', args };
+    }
     if (ui.connectSource !== next.id) return { target: target.source, instruction: 'Choose {0} as the source component.', args };
     if (!collectors.some((node) => node.id === ui.connectTarget)) return {
       target: target.destination, instruction: 'Choose Monitoring as the target component. A collection slot is needed for each link.'

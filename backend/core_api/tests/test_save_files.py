@@ -20,8 +20,9 @@ from src.services.markets import (
     targeted_campaign,
 )
 from src.services.save_files import MAX_SAVE_BYTES, export_file, parse_save_file
+from src.simulation.demand import product_settings
 from src.simulation.engine import evaluate
-from src.simulation.models import Diagram, Game, Onboarding
+from src.simulation.models import Diagram, Game, Onboarding, SubscriptionTerm
 from src.simulation.onboarding import TutorialStep
 from src.simulation.progression import advance, drill
 from src.simulation.topology import RuleError
@@ -150,6 +151,22 @@ class SaveFileTests(TestCase):
             furthest_id=TutorialStep.OPEN_TELEMETRY,
         )
         self.roundtrip(game)
+
+    def test_premium_media_save_defaults_and_paid_terms(self):
+        game = fixture()
+        game.released.append("premium")
+        game.product = product_settings(game)
+        game.subscriptions = [SubscriptionTerm(expires=4320, subscribers=10, price=4)]
+        _, exported = export_file(game)
+        payload = exported.model_dump(mode="json")
+        del payload["game"]["product"]["premium_high_quality_media"]
+        del payload["game"]["subscriptions"][0]["high_quality_media"]
+        restored = parse_save_file(json.dumps(payload).encode()).game
+        self.assertFalse(restored.product.premium_high_quality_media)
+        self.assertFalse(restored.subscriptions[0].high_quality_media)
+        restored.product.premium_high_quality_media = True
+        restored.subscriptions[0].high_quality_media = True
+        self.roundtrip(restored)
 
     def test_rejects_invalid_files(self):
         _, save = export_file(fixture())
