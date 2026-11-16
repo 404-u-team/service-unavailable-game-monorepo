@@ -4,6 +4,7 @@
     type Connection as FlowConnection, type IsValidConnection, type OnConnectEnd, type OnConnectStart, type Viewport } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { onDestroy, untrack } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { target } from './onboarding';
   import type { CanvasTools } from './placement';
   import CanvasViewport from './CanvasViewport.svelte';
@@ -80,6 +81,8 @@
   const initialViewport = untrack(restoreViewport);
   let viewportReady = false;
   let transientMove = false;
+  const reducedMotion = new MediaQuery('prefers-reduced-motion: reduce');
+  const trafficSpeed = $derived(game.settings.reduced_motion || reducedMotion.current ? 0 : game.speed);
   const card = $derived({ width: compact ? 156 : 167, height: compact ? 86 : 101 });
   let graphSnapshot = $state.raw(untrack(() => game.snapshot));
   $effect(() => { if (!dragging) graphSnapshot = game.snapshot; });
@@ -213,11 +216,16 @@
       const previous = stable.get(node.id);
       if (!previous) return node;
       if (previous.dragging) return { ...previous, data: node.data } as CanvasNode;
-      if (previous.position.x === node.position.x && previous.position.y === node.position.y &&
-          previous.domAttributes?.['data-tutorial'] === node.domAttributes?.['data-tutorial'] && previous.width === node.width && previous.height === node.height && previous.selected === node.selected && previous.connectable === node.connectable &&
-          previous.draggable === node.draggable && previous.selectable === node.selectable &&
+      const sameSize = previous.width === node.width && previous.height === node.height;
+      if (sameSize && previous.position.x === node.position.x && previous.position.y === node.position.y &&
+          previous.domAttributes?.['data-tutorial'] === node.domAttributes?.['data-tutorial'] && previous.selected === node.selected &&
+          previous.connectable === node.connectable && previous.draggable === node.draggable && previous.selectable === node.selectable &&
           JSON.stringify(previous.data) === JSON.stringify(node.data)) return previous;
-      return node;
+      const samePorts = node.type === 'workbench'
+        ? previous.type === 'workbench' && node.data.kind === previous.data.kind
+        : previous.type === 'groupCard' && node.data.collapsed === previous.data.collapsed;
+      // Svelte Flow drops connected edges until it can remeasure nodes that lose their handle bounds.
+      return sameSize && samePorts ? { ...node, measured: previous.measured } : node;
     });
     if (resolved.length !== current.length || resolved.some((node, index) => node !== current[index])) nodes = resolved;
   });
@@ -328,7 +336,7 @@
           operations: [...operations].sort((a, b) => b[1] - a[1]).map(([op, rate]) => ({ label: t(catalog.operations[op] ?? op), rate })),
           endpoints: [item.separateSource, item.separateTarget],
           dashed: !live || style.dashed,
-          rate: game.speed > 0 && !game.settings.reduced_motion ? flow ?? 0 : 0,
+          rate: flow ?? 0, speed: trafficSpeed,
           reconnectable: !item.aggregated && editable,
           update: item.aggregated ? undefined : old?.data?.update ?? ((waypoints, save) => updateRoute(item.key, waypoints.map((point) => projectWaypoint(point, item.originals[0].edge, true)), save)) }
       };

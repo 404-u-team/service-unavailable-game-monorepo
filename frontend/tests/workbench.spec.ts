@@ -884,46 +884,72 @@ test('complex topology supports nested groups, telemetry capacity and configurat
   expect((await state(page, id)).snapshot).toEqual(deployed.snapshot);
   await page.getByRole('button', { name: 'Run simulation at normal speed' }).click();
   await expect.poll(async () => (await state(page, id)).tick).toBeGreaterThan(deployed.tick);
-  const packet = page.locator('.svelte-flow__edge[data-id="traffic:limit"] circle.traffic').first();
+  const trafficEdge = page.locator('.svelte-flow__edge[data-id="traffic:limit"]');
+  const packet = trafficEdge.locator('circle.traffic').first();
   await expect(packet).toBeVisible();
-  const movesRight = await packet.evaluate(async (element) => {
-    const circle = element as SVGCircleElement;
-    let previous = circle.getCTM()!.e;
-    for (let frame = 0; frame < 12; frame++) {
-      await new Promise(requestAnimationFrame);
-      const current = circle.getCTM()!.e;
-      if (current - previous > .3) return true;
-      previous = current;
+  const measureMotion = () => trafficEdge.evaluate(async (edge) => {
+    const samples = new Map<Element, { startX: number; startTime: number; x: number; time: number }>();
+    let rewound = false;
+    const intervals: number[] = [];
+    let detached = false;
+    let lastFrame: number | undefined;
+    for (let frame = 0; frame < 40; frame++) {
+      const time = await new Promise<number>(requestAnimationFrame);
+      if (lastFrame !== undefined) intervals.push(time - lastFrame);
+      lastFrame = time;
+      if (!edge.isConnected) detached = true;
+      for (const circle of edge.querySelectorAll('circle.traffic')) {
+        const x = Number(circle.getAttribute('cx'));
+        const sample = samples.get(circle);
+        if (!sample) samples.set(circle, { startX: x, startTime: time, x, time });
+        else {
+          if (x < sample.x - .01) rewound = true;
+          sample.x = x;
+          sample.time = time;
+        }
+      }
     }
-    return false;
+
+    let travel = 0;
+    let elapsed = 0;
+    for (const sample of samples.values()) {
+      travel += sample.x - sample.startX;
+      elapsed += sample.time - sample.startTime;
+    }
+    return { speed: travel / elapsed * 1000, rewound, detached, maxFrame: Math.max(...intervals) };
   });
-  expect(movesRight).toBe(true);
+  const normalMotion = await measureMotion();
+  expect(normalMotion.detached).toBe(false);
+  expect(normalMotion.rewound).toBe(false);
+  expect(normalMotion.speed).toBeGreaterThan(30);
+  await page.getByRole('button', { name: 'Fast speed (5×)' }).click();
+  await expect(page.getByRole('button', { name: 'Fast speed (5×)' })).toHaveAttribute('aria-pressed', 'true');
+  const tickBeforeMotion = (await state(page, id)).tick;
+  const fastMotion = await measureMotion();
+  expect(fastMotion.detached).toBe(false);
+  expect(fastMotion.rewound).toBe(false);
+  expect(fastMotion.speed / normalMotion.speed, JSON.stringify(fastMotion)).toBeGreaterThan(4.5);
+  expect(fastMotion.speed / normalMotion.speed).toBeLessThan(5.5);
+  expect((await state(page, id)).tick).toBeGreaterThan(tickBeforeMotion);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(packet).toBeHidden();
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(page.locator('.svelte-flow__edge path[marker-end]')).toHaveCount(0);
   await subsystem.getByRole('button', { name: 'Expand group' }).click();
   await expect(page.locator('.svelte-flow__node-groupCard')).toHaveCount(3);
-  const bentPacket = page.locator('.svelte-flow__edge[data-id="api:cache"] circle.traffic').first();
-  await expect(bentPacket).toBeVisible();
-  const distanceFromRoute = await bentPacket.evaluate((element) => {
-    const circle = element as SVGCircleElement;
-    const svg = circle.ownerSVGElement!;
-    const animation = circle.querySelector('animateMotion') as SVGAnimationElement;
-    const path = svg.querySelector<SVGPathElement>('.svelte-flow__edge-path')!;
-    svg.pauseAnimations();
-    try {
-      return [.2, .7].map((progress) => {
-        svg.setCurrentTime(animation.getStartTime() + animation.getSimpleDuration() * progress);
-        const position = new DOMPoint().matrixTransform(circle.getCTM()!).matrixTransform(path.getCTM()!.inverse());
-        const expected = path.getPointAtLength(path.getTotalLength() * progress);
-        return Math.hypot(position.x - expected.x, position.y - expected.y);
-      });
-    } finally {
-      svg.unpauseAnimations();
-    }
+  const bentEdge = page.locator('.svelte-flow__edge[data-id="api:cache"]');
+  await expect(bentEdge.locator('circle.traffic').first()).toBeVisible();
+  const distanceFromRoute = await bentEdge.evaluate((edge) => {
+    const path = edge.querySelector<SVGPathElement>('.svelte-flow__edge-path')!;
+    const length = path.getTotalLength();
+    const points = Array.from({ length: Math.ceil(length) + 1 }, (_, distance) => path.getPointAtLength(distance));
+    return Math.max(...[...edge.querySelectorAll('circle.traffic')].map((circle) => {
+      const x = Number(circle.getAttribute('cx'));
+      const y = Number(circle.getAttribute('cy'));
+      return Math.min(...points.map((point) => Math.hypot(x - point.x, y - point.y)));
+    }));
   });
-  expect(Math.max(...distanceFromRoute)).toBeLessThan(1);
+  expect(distanceFromRoute).toBeLessThan(1);
   const running = await state(page, id);
   expect(running.production).toEqual(deployed.production);
   expect(running.revision).toBe(deployed.revision);

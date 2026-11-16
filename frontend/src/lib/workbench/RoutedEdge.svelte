@@ -1,6 +1,6 @@
 <script lang="ts" module>
   import type { Edge } from '@xyflow/svelte';
-  import type { Point } from '../types';
+  import type { Point, Speed } from '../types';
 
   export type RoutedEdge = Edge<{
     points: Point[];
@@ -11,6 +11,7 @@
     width: number;
     dashed: boolean;
     rate: number;
+    speed: Speed;
     endpoints: [boolean, boolean];
     breakdown: { label: string; color: string; count: number; rate?: number }[];
     operations: { label: string; rate: number }[];
@@ -23,7 +24,7 @@
   import { Tooltip } from '@service-unavailable/ui';
   import { num } from '../format';
   import { t } from '../i18n.svelte';
-  import { segments } from './routing';
+  import TrafficPackets from './TrafficPackets.svelte';
   import { BaseEdge, EdgeLabel, EdgeReconnectAnchor, useSvelteFlow, useStore, type EdgeProps } from '@xyflow/svelte';
   let { data, selected, sourceX, sourceY, targetX, targetY }: EdgeProps<RoutedEdge> = $props();
   const store = useStore();
@@ -32,14 +33,6 @@
   const path = $derived(points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '));
   const start = $derived(points[0]);
   const end = $derived(points.at(-1));
-  const length = $derived(segments(points).reduce((sum, [a, b]) => sum + Math.hypot(b.x - a.x, b.y - a.y), 0));
-  const traffic = $derived.by(() => {
-    const rate = data?.rate ?? 0;
-    if (rate <= 0 || !length) return;
-    const speed = rate >= 300 ? 100 : rate >= 60 ? 64 : 40;
-    const spacing = rate >= 300 ? 26 : rate >= 60 ? 44 : 80;
-    return { duration: length / speed, count: Math.min(6, Math.ceil(length / spacing)) };
-  });
   function dragWaypoint(event: PointerEvent, index: number) {
     if (event.button !== 0 || !data?.update) return;
     event.preventDefault();
@@ -78,17 +71,8 @@
 {#if data && end}
   <path d={path} stroke="#0c1013" stroke-width={data.width + 5} fill="none" pointer-events="none" />
   <BaseEdge {path} interactionWidth={20}
-    style={`stroke:${data.color};stroke-width:${data.width};stroke-opacity:${data.rate > 0 ? '.72' : '1'};${data.dashed ? 'stroke-dasharray:5 4;' : ''}`} />
-  {#if traffic}
-    <g class="traffic-packets" aria-hidden="true" pointer-events="none" stroke={data.color}>
-      {#each { length: traffic.count } as _, index (index)}
-        <circle class="traffic" r="3.6" fill="#f5fff0" stroke-width="1">
-          <animateMotion {path} dur={`${traffic.duration}s`} begin={`${-traffic.duration * index / traffic.count}s`}
-            repeatCount="indefinite" calcMode="paced" />
-        </circle>
-      {/each}
-    </g>
-  {/if}
+    style={`stroke:${data.color};stroke-width:${data.width};stroke-opacity:${data.speed > 0 && data.rate > 0 ? '.72' : '1'};${data.dashed ? 'stroke-dasharray:5 4;' : ''}`} />
+  <TrafficPackets {points} rate={data.rate} speed={data.speed} color={data.color} />
   {#if data.endpoints[0]}
     <line data-port="source" x1={start.x + 5} x2={start.x + 5} y1={start.y - 3} y2={start.y + 3} stroke={data.color} stroke-width="1.6" pointer-events="none" />
   {/if}
@@ -164,5 +148,4 @@
   .waypoint { pointer-events: auto; touch-action: none; cursor: grab; display: block; border-radius: 50%; width: 19px; height: 19px;
     padding: 0; border: 3px solid var(--background); background: var(--warning); outline-offset: 2px; }
   .waypoint:active { cursor: grabbing; }
-  @media (prefers-reduced-motion: reduce) { .traffic-packets { display: none; } }
 </style>
