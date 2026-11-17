@@ -8,6 +8,7 @@ export const connectionLabels = {
   cache: 'Cache lookups',
   enqueue: 'Queue submission',
   jobs: 'Background jobs',
+  objects: 'Attachment transfer',
   replication: 'Replication subscription',
   telemetry: 'Metrics collection'
 };
@@ -23,7 +24,7 @@ export const connectionStyles = {
 
 export type ConnectionCategory = keyof typeof connectionStyles;
 const categories: Record<ConnectionKind, ConnectionCategory> = {
-  request: 'application', identity: 'application', queries: 'data', reads: 'data', cache: 'data',
+  request: 'application', identity: 'application', queries: 'data', reads: 'data', objects: 'data', cache: 'data',
   enqueue: 'background', jobs: 'background', replication: 'replication', telemetry: 'monitoring'
 };
 
@@ -50,6 +51,9 @@ export function connectionError(topology: Topology, catalog: Catalog, candidate:
   if (source.kind === 'api' && target.kind === 'api' &&
       (['Universal', 'Accounts'].includes(String(source.config.role ?? 'Universal')) || target.config.role !== 'Accounts')) {
     return 'Identity dependencies must connect a specialized service to an Accounts API.';
+  }
+  if (target.kind === 'object_storage' && !['Universal', 'Media'].includes(String(source.config.role ?? 'Universal'))) {
+    return 'Connect Object Storage to a Universal or Media API.';
   }
   if (source.kind === 'replica' && target.kind === 'database' && remaining.some((edge) =>
     edge.source === source.id && topology.nodes.some((node) => node.id === edge.target && node.kind === 'database'))) {

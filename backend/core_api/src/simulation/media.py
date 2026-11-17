@@ -6,9 +6,8 @@ from src.simulation.catalog import (
     MINUTES_PER_TICK,
     OPERATIONS,
 )
-from src.simulation.engineering import data_growth_by_domain
+from src.simulation.engineering import physical_media
 from src.simulation.models import Game, PremiumMediaQuota, ProductSettings
-from src.simulation.topology import config
 
 
 def effective_quota(
@@ -32,20 +31,13 @@ def stored_media(game: Game) -> tuple[float, ...]:
             game.free_media_storage_gb,
             *(term.media_storage_gb for term in game.subscriptions),
         )
-    # Old saves store physical volume only. Apportion Shared data as in migration.
-    growth = data_growth_by_domain(game)
-    shared_fraction = growth.get("Media", 0) / max(sum(growth.values()), 1e-20)
-    total = 0.0
-    for node in game.production.nodes:
-        if node.kind == "database":
-            fraction = {"Shared": shared_fraction, "Media": 1}.get(
-                config(node)["domain"], 0
-            )
-            total += game.storage.get(node.id, 0) * fraction
+    # Old saves store physical volume only. Use the same estimate as the migration planner.
+    total = sum(physical_media(game).values())
     if not game.audience:
         return (total, *(0.0 for _ in game.subscriptions))
     return tuple(
-        total * users / game.audience for users in media_populations(game, game.audience)
+        total * users / game.audience
+        for users in media_populations(game, game.audience)
     )
 
 
@@ -75,7 +67,9 @@ def media_demand(
             operations.get(op, 0) * OPERATIONS[op]["storage"]
             for op in sorted(MEDIA_OPERATIONS)
         )
-        * MINUTES_PER_TICK * 60 * load_scale
+        * MINUTES_PER_TICK
+        * 60
+        * load_scale
     )
     if not upload_gb or not audience:
         return MediaDemand(stored)
@@ -83,7 +77,10 @@ def media_demand(
     standard = product.media_quota_gb
     quotas = (
         standard,
-        *(effective_quota(standard, term.media_quota_gb) for term in game.subscriptions),
+        *(
+            effective_quota(standard, term.media_quota_gb)
+            for term in game.subscriptions
+        ),
     )
     qualities = (
         product.media_quality,

@@ -116,6 +116,16 @@ COMPONENTS: dict[Kind, dict] = {
         },
         "description": "Serves persistent reads and writes. Throughput depends on CPU, memory, and disk. The connection pool limits admission.",
     },
+    "object_storage": {
+        "name": "Object Storage",
+        "category": "Data",
+        "monthly": 140,
+        "fields": {
+            "storage": number("Storage (GB)", 128, 8, 100000, 8),
+            "network": number("Object transfer (MB/s)", 40, 1, 1000),
+        },
+        "description": "Stores attachment bytes. The API still writes attachment metadata to a database.",
+    },
     "replica": {
         "name": "Read replica",
         "category": "Data",
@@ -385,6 +395,7 @@ OPERATIONS = {
     "files": operation(
         "File transfers", 0.00035, 1.6, write=1, mb=4.2, jobs=1.4, storage=0.00028
     ),
+    "download": operation("Attachment downloads", 0.00045, 0.7, read=0.5, mb=0.45),
     "calls": operation("Voice calls", 0.00085, 2.2, mb=1.7, connections=42),
     "ad": operation("Ad delivery", 0, 0.65, mb=0.045),
     "feed": operation("Feed reads", 0.008, 1.1, read=3, mb=0.08),
@@ -511,6 +522,7 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
     "api": {
         "api": "identity",
         "database": "queries",
+        "object_storage": "objects",
         "shard_router": "queries",
         "replica": "reads",
         "cache": "cache",
@@ -526,6 +538,7 @@ CONNECTIONS: dict[Kind, dict[Kind, str]] = {
     "replica": {"database": "replication", "monitor": "telemetry"},
     "shard_router": {"database": "queries", "monitor": "telemetry"},
     "database": {"monitor": "telemetry"},
+    "object_storage": {"monitor": "telemetry"},
     "queue": {"worker": "jobs", "monitor": "telemetry"},
     "worker": {"monitor": "telemetry"},
     "monitor": {},

@@ -5,13 +5,15 @@
     Trash2, Undo2, X } from '@lucide/svelte';
   import Modal from '../Modal.svelte';
   import Meter from '../Meter.svelte';
-  import { componentNotes } from './details';
+  import { componentNotes, migrationProgress } from './details';
   import TopologyGraph from './TopologyGraph.svelte';
   import DatabaseForecast from './DatabaseForecast.svelte';
   import Configuration from './Configuration.svelte';
   import Forecast from './Forecast.svelte';
   import Select from '../controls/Select.svelte';
   import { Alert, Badge, Button, Checkbox, Disclosure, Form, Switch, TextInput, Tooltip } from '@service-unavailable/ui';
+  import MigrationPanel from './MigrationPanel.svelte';
+  import ShardKeys from './ShardKeys.svelte';
   import DeploymentComparison from './DeploymentComparison.svelte';
   import { api } from '../api';
   import { inspectorPreference } from './layout-sync';
@@ -41,6 +43,7 @@
     inspectorPreference(width);
   }
 
+  let migrationFocus = $state('');
   let layout = $state<'canvas' | 'list'>('canvas');
   let showProduction = $state(false);
   let selected = $state('api');
@@ -62,7 +65,7 @@
     setMapPreferences(visible ? hiddenConnections.filter((item) => item !== category) : [...hiddenConnections, category], alignment);
   }
   let inspectorTab = $state<'configuration' | 'metrics'>('configuration');
-  let dialog = $state<'deployed' | 'map-settings' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect'>();
+  let dialog = $state<'deployed' | 'map-settings' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect' | 'migration' | 'shards'>();
   let drawer = $state<{ dismiss: (after?: () => void) => void }>();
   let source = $state('');
   let target = $state('');
@@ -82,6 +85,11 @@
   let editError = $state('');
   let localRevision = -1;
   let editingDraft = false;
+  const canUseObjects = $derived(game.engineering.some((item) => item.id === 'object_storage' && item.state === 'completed'));
+  const migrationPercent = $derived(game.migration ? migrationProgress(game.migration) : null);
+  const migrationLabel = $derived(game.migration?.blocked ? t('Migration needs attention')
+    : game.migration?.pace === 'paused' ? t('Migration paused')
+    : migrationPercent === null ? t('Architecture migration') : t('Migration · {0}%', [migrationPercent]));
   const canShard = $derived(game.engineering.some((item) => item.id === 'sharding' && item.state === 'completed'));
   let canvas: HTMLDivElement | undefined = $state();
   let placement = $state.raw<CanvasTools>();
@@ -236,7 +244,8 @@
   const monitors = $derived(game.snapshot.monitors ?? {});
   const connections = $derived(topology.edges.filter((item) => item.source === selected || item.target === selected));
   const activeConfig = $derived(active && Object.fromEntries(Object.entries(catalog.components[active.kind].fields).map(([key, field]) => [key, active.config[key] ?? field.default])));
-  const removed = $derived(viewingDraft ? game.production.nodes.filter((node) => !topology.nodes.some((item) => item.id === node.id)) : []);
+  const draftBase = $derived(game.migration?.topology ?? game.production);
+  const removed = $derived(viewingDraft ? draftBase.nodes.filter((node) => !topology.nodes.some((item) => item.id === node.id)) : []);
   const visibleGroups = $derived(diagram.groups.filter((item) => groupComponents(item, diagram.groups)
     .some((id) => topology.nodes.some((node) => node.id === id))));
   const kinds = $derived((Object.keys(catalog.components) as Kind[]).filter((kind) => kind !== 'source'));
@@ -253,20 +262,23 @@
   const delta = $derived(Object.entries(game.draft_costs).reduce((sum, [, cost]) => sum + cost, 0) - game.economy.daily_infrastructure);
   const pendingChanges = $derived.by(() => {
     if (!viewingDraft) return [];
-    const live = new Map(game.production.nodes.map((node) => [node.id, node]));
+    const live = new Map(draftBase.nodes.map((node) => [node.id, node]));
     const items: { label: string; note: string; tone: string }[] = [];
     for (const node of topology.nodes) {
       const before = live.get(node.id);
       if (!before) { items.push({ label: node.name, note: 'Component added', tone: 'good' }); continue; }
       const fields = catalog.components[node.kind].fields;
       const settings = Object.keys(fields).filter((key) => (before.config[key] ?? fields[key].default) !== (node.config[key] ?? fields[key].default));
+      if (JSON.stringify(draftBase.shard_owners?.[node.id] ?? {}) !== JSON.stringify(topology.shard_owners?.[node.id] ?? {})) {
+        items.push({ label: node.name, note: 'Shard key ownership changed', tone: 'warn' });
+      }
       if (before.name !== node.name || settings.length) items.push({ label: node.name, note: settings.map((key) => t(fields[key].label)).join(', ') || 'Name changed', tone: 'warn' });
     }
     for (const node of removed) items.push({ label: node.name, note: 'Component removed', tone: 'bad' });
-    const oldEdges = new Set(game.production.edges.map(edgeKey));
+    const oldEdges = new Set(draftBase.edges.map(edgeKey));
     const draftEdges = new Set(topology.edges.map(edgeKey));
     const connected = topology.edges.filter((edge) => !oldEdges.has(edgeKey(edge))).length;
-    const disconnected = game.production.edges.filter((edge) => !draftEdges.has(edgeKey(edge))).length;
+    const disconnected = draftBase.edges.filter((edge) => !draftEdges.has(edgeKey(edge))).length;
     if (connected) items.push({ label: 'Connections added', note: `${connected}`, tone: 'good' });
     if (disconnected) items.push({ label: 'Connections removed', note: `${disconnected}`, tone: 'bad' });
     return items;
@@ -373,6 +385,12 @@
     if (!state?.draft) return false;
     const before = state.draft;
     const after = change(before);
+    if (after.shard_owners) {
+      const links = new Set(after.edges.map(edgeKey));
+      after.shard_owners = Object.fromEntries(Object.entries(after.shard_owners)
+        .map(([router, owners]) => [router, Object.fromEntries(Object.entries(owners).filter(([, owner]) => links.has(`${router}:${owner}`)))])
+        .filter(([, owners]) => Object.keys(owners).length));
+    }
     if (JSON.stringify(before) === JSON.stringify(after)) return true;
     editingDraft = true;
     const result = await act('/draft', { revision: state.revision, topology: after }, 'PUT');
@@ -450,7 +468,7 @@
     } else if (active && active.kind !== 'source') {
       const id = active.id;
       if (await edit((value) => ({
-        nodes: value.nodes.filter((node) => node.id !== id),
+        ...value, nodes: value.nodes.filter((node) => node.id !== id),
         edges: value.edges.filter((item) => item.source !== id && item.target !== id)
       }))) selected = '';
     }
@@ -582,9 +600,9 @@
           {@const Icon = componentIcon[kind]}
           <div class="catalog-row">
             <Button class="catalog-item" data-tutorial={kind === 'monitor' ? guideTarget.collector : undefined}
-              disabled={busy || (kind === 'shard_router' && !canShard)} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
+              disabled={busy || (kind === 'shard_router' && !canShard) || (kind === 'object_storage' && !canUseObjects)} onclick={() => add(kind)}><Icon size={19} /><span>{t(catalog.components[kind].name)}</span></Button>
             <Tooltip label={t("About {0}", [t(catalog.components[kind].name)])}
-              text={kind === 'shard_router' && !canShard ? t('Complete Database Sharding research before using a shard router.')
+              text={kind === 'object_storage' && !canUseObjects ? t('Complete Object Storage research before adding this component.') : kind === 'shard_router' && !canShard ? t('Complete Database Sharding research before using a shard router.')
                 : t("{0} Base cost {1} per day.", [t(catalog.components[kind].description), preciseMoney(catalog.components[kind].daily)])}
               onclick={() => { helpKind = kind; referenceReturn = 'catalog'; changeDialog('reference'); }} />
           </div>
@@ -729,6 +747,7 @@
             {:else if metric.backlog}<div><dt>{t('Estimated wait to start')}</dt><dd>{t('No active processing capacity')}</dd></div>{/if}
             {#if metric.jobs_dropped != null}<div><dt>{t('Rejected jobs per step')}</dt><dd>{num(metric.jobs_dropped)}</dd></div>{/if}
             {#if metric.jobs_expired != null}<div><dt>{t('Expired jobs per step')}</dt><dd>{num(metric.jobs_expired)}</dd></div>{/if}
+            {#if metric.transfer_mbps != null}<div><dt>{t("Object transfer (MB/s)")}</dt><dd>{num(metric.transfer_mbps)}</dd></div>{/if}
             {#if metric.storage_used != null}<div><dt>{t("Storage used")}</dt><dd>{num(metric.storage_used)} {t("GB")}</dd></div>{/if}
             {#if metric.replication_lag != null}<div><dt>{t("Replication lag")}</dt><dd>{t('{0} s', [num(metric.replication_lag)])}</dd></div>{/if}
             {#if metric.service_errors != null}<div><dt>{t('Service errors')}</dt><dd>{rps(metric.service_errors)}</dd></div>{/if}
@@ -787,6 +806,15 @@
           {/each}
         </div>
       {/if}
+      {#if active.kind === 'shard_router'}
+        <Button onclick={() => dialog = 'shards'}>{t('Shard key ownership')}</Button>
+      {/if}
+      {#if !viewingDraft && game.migration && ['database', 'object_storage'].includes(active.kind)}
+        {#if !game.migration.topology.nodes.some((node) => node.id === active?.id)}
+          <Badge tone="warning">{t('Removed after migration')}</Badge>
+        {/if}
+        <Button onclick={() => { migrationFocus = active?.id ?? ''; dialog = 'migration'; }}>{t('Manage migration')}</Button>
+      {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
       {#if active.kind !== 'source'}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
       {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; changeDialog(); }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
@@ -840,7 +868,14 @@
     <div class="drawing">
       <div class="canvas-bar row spread wrap" data-tutorial={guideTarget.canvasTools} class:editing={viewingDraft}>
         <div class="row wrap">
-          <Badge tone="success"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</Badge>
+          {#if game.migration}
+            <Button class="migration-status" title={migrationLabel} onclick={() => { migrationFocus = ''; dialog = 'migration'; }}>
+              <span class="migration-status-text">{migrationLabel}</span>
+            </Button>
+          {/if}
+          {#if !game.migration || (viewingDraft && pendingChanges.length)}
+            <Badge tone="success"><i class="dot"></i>{viewingDraft ? t("Editing draft / {0} changes", [pendingChanges.length]) : t("Production")}</Badge>
+          {/if}
         </div>
         <div class="row wrap">
           {#if layoutFailed}<Button variant="danger" onclick={retryDiagram}>{t("Retry saving layout")}</Button>{/if}
@@ -1035,6 +1070,20 @@
     {#if error}<p class="notice error" role="alert">{message(error)}</p>{/if}
     {#snippet footer()}<div class="row spread"><Button onclick={() => dialog = undefined}>{t("Cancel")}</Button><Button variant="danger" disabled={busy} onclick={() => finish(false)}>{t("Discard draft")}</Button></div>{/snippet}
   </Modal>
+{:else if dialog === 'migration' && game.migration}
+  <MigrationPanel {game} {catalog} {act} {busy} initialNode={migrationFocus} close={() => dialog = undefined} />
+{:else if dialog === 'shards' && active?.kind === 'shard_router'}
+  <ShardKeys router={active} {topology} {game} {busy} editable={viewingDraft}
+    close={() => dialog = undefined} openDraft={draft}
+    move={(keys, owner) => edit((value) => ({
+      ...value, shard_owners: {
+        ...value.shard_owners,
+        ...Object.fromEntries(value.nodes.filter((node) => node.kind === 'shard_router' && (node.config.domain ?? 'Messages') === (active?.config.domain ?? 'Messages')
+          && value.edges.some((edge) => edge.source === node.id && edge.target === owner)).map((node) => [
+          node.id, { ...value.shard_owners?.[node.id], ...Object.fromEntries(keys.map((key) => [key, owner])) }
+        ]))
+      }
+    }))} />
 {:else if dialog === 'review'}
   <Modal title={t("Deployment review")} subtitle={t("Validate the draft and check its impact before deploying.")} wide close={() => dialog = undefined}>
     <div class="stack">
@@ -1058,6 +1107,17 @@
           <div class="row spread"><span>{t("One-time deployment cost")}</span><strong>{preciseMoney(review.install)}</strong></div>
         </div>
         {#if review.migration_ticks}<p class="notice warn">{t('Migration preparation: {0} ticks. Included transfer cost: {1}. Production stays live until completion.', [review.migration_ticks, preciseMoney(review.migration_cost ?? 0)])} <a href={guideArticleHref(guideHref, 'architecture-migration')}>{t('Architecture Migration')}</a></p>{/if}
+      {#if Object.keys(review.migration_database_sources ?? {}).length}
+        <h3>{t('Database transfer')}</h3>
+        <ul>{#each Object.entries(review.migration_database_sources ?? {}) as [id, volume]}
+          <li>{t(game.production.nodes.find((node) => node.id === id)?.name ?? id)} · {num(volume)} {t('GB')}</li>
+        {/each}</ul>
+      {/if}
+      {#if Object.keys(review.migration_media_sources ?? {}).length}
+        <ul>{#each Object.entries(review.migration_media_sources ?? {}) as [id, volume]}
+          <li>{t(game.production.nodes.find((node) => node.id === id)?.name ?? id)} → {t(topology.nodes.find((node) => node.id === review?.migration_media_target)?.name ?? 'Object Storage')} · {num(volume)} {t('GB')}</li>
+        {/each}</ul>
+      {/if}
       {#each review.warnings as warning}<p class="notice warn">{message(warning)}</p>{/each}
         {#if review.forecast}
           <div data-tutorial={guideTarget.capacityForecast}><Forecast forecast={review.forecast} /></div>
@@ -1069,8 +1129,8 @@
     </div>
     {#snippet footer()}
       <div class="row spread wrap"><Button onclick={() => dialog = undefined}>{t("Back to draft")}</Button>
-        <Button variant="primary" data-tutorial={guideTarget.deploy} disabled={busy || !review || review.errors.length > 0 || !Object.values(review.changes).some((items) => items.length)}
-          onclick={() => finish(true)}>{t(review?.migration_ticks ? "Start migration" : "Deploy changes")} <ArrowRight size={15} /></Button>
+        <Button variant="primary" data-tutorial={guideTarget.deploy} disabled={busy || !!game.migration || !review || review.errors.length > 0 || !Object.values(review.changes).some((items) => items.length)}
+          onclick={() => finish(true)}>{t(game.migration ? "Deploy after migration" : review?.migration_ticks ? "Start migration" : "Deploy changes")} <ArrowRight size={15} /></Button>
       </div>
     {/snippet}
   </Modal>
@@ -1110,6 +1170,8 @@
   .search :global(input) { border: 0; background: none; min-height: 35px; font-size: 12px; padding-left: 5px; }
   .drawing { min-width: 0; min-height: 550px; position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--background); }
   .canvas-bar { z-index: 1; padding: 11px 15px; min-height: 55px; border-bottom: 1px solid var(--border); }
+  .canvas-bar :global(.migration-status) { inline-size: 11rem; justify-content: start; }
+  .migration-status-text { min-inline-size: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .canvas-bar.editing { background: #223323; }
   .draft-summary { border-top: 1px solid var(--border); padding-top: 12px; gap: 8px; }
   .draft-summary h2 { margin-top: 4px; }

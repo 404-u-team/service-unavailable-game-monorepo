@@ -13,8 +13,13 @@ from src.simulation.database import WARNING, DatabaseLoad
 from src.simulation.demand import active_incidents, workload
 from src.simulation.engineering import (
     DOMAINS,
+    MIGRATION_PACES,
     data_targets,
+    migration_topology,
+    object_copy_speed,
+    object_target,
     partition_weights,
+    physical_media,
     supports,
 )
 from src.simulation.models import (
@@ -49,6 +54,7 @@ class Evaluation:
     queues: dict[str, float] = field(default_factory=dict)
     storage: dict[str, float] = field(default_factory=dict)
     media_storage: tuple[float, ...] = ()
+    media_by_node: dict[str, float] = field(default_factory=dict)
     replication: dict[str, float] = field(default_factory=dict)
     daily_active_users: float = 0
     ad_impressions_per_second: float = 0
@@ -71,7 +77,8 @@ def evaluate(
     overview: bool = False,
     load_scale: float = 1,
 ) -> Evaluation:
-    topology = topology or game.production
+    live = topology is None or topology is game.production
+    topology = migration_topology(game) if live else topology
     graph = inspect_graph(topology)
     activity = workload(game, audience, boost, overview=overview, load_scale=load_scale)
     workloads = {key: rate * load_scale for key, rate in activity.operations.items()}
@@ -115,10 +122,17 @@ def evaluate(
         elif event.target and event.kind == "degradation":
             factors[event.target] *= event.factor
 
-    if game.migration:
+    pending = game.migration if live else None
+    if pending:
+        reserve = 0.1 * MIGRATION_PACES[pending.pace] if not pending.blocked else 0
         for n in game.production.nodes:
-            if n.kind == "database":
-                factors[n.id] *= 0.9
+            if n.kind == "database" and (
+                pending.database_sources is None
+                or n.id in pending.database_sources
+                or n.id in pending.media_sources
+                and (game.media_by_node or {}).get(n.id, 0) > 0
+            ):
+                factors[n.id] *= 1 - reserve
 
     # A cohort is an operation and its originating API. Cohorts merge at each node,
     # keeping the calculation proportional to the graph rather than the request count.
@@ -131,6 +145,23 @@ def evaluate(
     completed: dict[tuple[str, str], Batch] = {}
     queues = {}
     storage = dict(game.storage)
+    media_by_node = physical_media(game)
+    media_locations = dict(media_by_node)
+    object_routes = {
+        node.id: (
+            pending.media_target
+            if pending and pending.media_target in graph.targets[node.id]
+            else object_target(graph, node.id)
+        )
+        for node in topology.nodes
+        if node.kind == "api"
+    }
+
+    def stored_per_request(op: str, origin: str) -> float:
+        if op in MEDIA_OPERATIONS and object_routes.get(origin):
+            return 0.0000005
+        return operations[op]["storage"]
+
     media_written = 0.0
     replication = {}
     committed_writes: dict[str, float] = defaultdict(float)
@@ -257,7 +288,9 @@ def evaluate(
             return
         routes = graph.primary_routes(api)
         weights = (
-            partition_weights(DOMAINS[key[0]], primaries)
+            partition_weights(
+                DOMAINS[op], primaries, graph.shard_owners.get(routes[primaries[0]])
+            )
             if len(primaries) > 1
             else [1.0]
         )
@@ -291,11 +324,60 @@ def evaluate(
                 api, destinations, key, primary, partition_rate, partition_latency
             )
 
+    def route_download(
+        api: str, key: tuple[str, str], rate: float, latency: float
+    ) -> None:
+        routes = graph.primary_routes(api)
+        metadata = data_targets(graph, api, "download")
+        if not metadata:
+            return
+        weights = partition_weights(
+            "Media", metadata, graph.shard_owners.get(routes[metadata[0]])
+        )
+        metadata_available = sum(
+            weight
+            for primary, weight in zip(metadata, weights)
+            if not failures[primary] and not failures[routes[primary]]
+        )
+        locations = {
+            target: volume
+            for target, volume in media_locations.items()
+            if target in routes
+            or target in graph.targets[api]
+            and graph.nodes[target].kind == "object_storage"
+        }
+        total = sum(media_locations.values())
+        if total > 0:
+            for target, volume in sorted(locations.items()):
+                if graph.nodes[target].kind == "object_storage":
+                    forward(
+                        api,
+                        [target],
+                        key,
+                        rate * metadata_available * volume / total,
+                        latency,
+                    )
+                else:
+                    forward_partition(
+                        api,
+                        [routes[target]],
+                        key,
+                        target,
+                        rate * volume / total,
+                        latency,
+                    )
+
     for op, rate in workloads.items():
         add(incoming["traffic"], (op, ""), rate, 18)
 
     # Process primaries before replicas so replicas can replay this step's writes.
-    data_order = {"database": 1, "replica": 2}
+    data_order = {
+        "object_storage": 1,
+        "cache": 2,
+        "shard_router": 2,
+        "database": 3,
+        "replica": 4,
+    }
     for node_id in sorted(
         graph.order, key=lambda item: data_order.get(graph.nodes[item].kind, 0)
     ):
@@ -336,7 +418,11 @@ def evaluate(
                     if optimized and field == "write" and key[0] in {"send", "groups"}
                     else 1
                 )
-                * operations[key[0]][field]
+                * (
+                    stored_per_request(*key)
+                    if field == "storage"
+                    else operations[key[0]][field]
+                )
                 * batch.rate
                 for key, batch in cohorts.items()
             )
@@ -384,6 +470,22 @@ def evaluate(
             usage = {"Routing capacity": rate / cfg["routing_capacity"]}
             details["data_domain"] = cfg["domain"]
             base = 3
+        elif kind == "object_storage":
+            used = storage.get(node_id, 0)
+            copy_bandwidth = (
+                object_copy_speed(node) * MIGRATION_PACES[pending.pace] * 1000 / seconds
+                if pending
+                and pending.media_target == node_id
+                and not pending.blocked
+                and any(
+                    media_locations.get(source, 0) > 0
+                    for source in pending.media_sources
+                )
+                else 0
+            )
+            usage = {"Network": (load("mb") + copy_bandwidth) / cfg["network"]}
+            details["storage_used"] = used
+            base = 8
         elif kind in {"database", "replica"}:
             primary = primary_for[node_id] if kind == "replica" else None
             pending = 0.0
@@ -416,7 +518,7 @@ def evaluate(
             usage = {"CPU": rate / (160 + cfg["memory"] * 35)}
             base = 4
 
-        if kind in data_order:
+        if kind in {"database", "replica"}:
             usage = database.utilization()
         else:
             usage = {
@@ -444,12 +546,39 @@ def evaluate(
             base = latency = 2
 
         write_share = 1.0
+        object_write_share = 1.0
+        if kind == "object_storage":
+            foreground = load("mb")
+            if foreground:
+                share = min(
+                    share,
+                    max(0, cfg["network"] * capacity - copy_bandwidth) / foreground,
+                )
+            free = max(0, cfg["storage"] - used)
+            additional = (
+                sum(
+                    operations[op]["storage"] * batch.rate
+                    for (op, _), batch in cohorts.items()
+                )
+                * share
+                * seconds
+            )
+            if additional:
+                object_write_share = min(1, free / additional)
+            usage["Storage"] = used / cfg["storage"]
+            details["transfer_mbps"] = sum(
+                operations[op]["mb"]
+                * batch.rate
+                * share
+                * (object_write_share if op in MEDIA_OPERATIONS else 1)
+                for (op, _), batch in cohorts.items()
+            ) + copy_bandwidth * bool(capacity)
         if kind == "database":
             free = max(0, cfg["storage"] - database.stored)
             additional = database.storage_rate * share * seconds
             write_share = min(1, free / additional) if additional else float(free > 0)
 
-        if kind in data_order:
+        if kind in {"database", "replica"}:
             replayed = 0.0
             if kind == "replica" and primary:
                 replayed = database.writes * share
@@ -499,6 +628,8 @@ def evaluate(
             if kind == "limiter" and applies(cfg["scope"], op):
                 accepted *= limited_rate
                 rejected += batch.rate * share * (1 - limited_rate)
+            if kind == "object_storage" and op in MEDIA_OPERATIONS:
+                accepted *= object_write_share
             if kind == "database" and operation["write"]:
                 accepted *= write_share
             if kind == "replica" and operation["write"]:
@@ -509,10 +640,20 @@ def evaluate(
                 add(completed, key, accepted, total_latency)
                 if kind == "database":
                     committed_writes[node_id] += accepted * operation["write"]
-                    written = accepted * operation["storage"] * seconds
+                    written = accepted * stored_per_request(op, origin) * seconds
                     storage[node_id] = storage.get(node_id, 0) + written
-                    if op in MEDIA_OPERATIONS:
-                        media_written += written
+                    if op in MEDIA_OPERATIONS and accepted:
+                        target = object_routes.get(origin) or node_id
+                        payload = accepted * operation["storage"] * seconds
+                        media_by_node[target] = media_by_node.get(target, 0) + payload
+                        if target != node_id:
+                            storage[target] = storage.get(target, 0) + payload
+                        media_written += payload
+            elif kind == "object_storage":
+                if op == "download":
+                    add(completed, key, accepted, total_latency)
+                else:
+                    route_data(origin, key, accepted, total_latency)
             elif kind == "api":
                 key = (op, node_id)
                 if not supports(node, op):
@@ -529,8 +670,16 @@ def evaluate(
                     forward(
                         node_id, accounts, ("identity", node_id), accepted * 0.02, 0
                     )
-                if operation["write"] or "search_index" in enforced.get(op, ()):
-                    route_data(node_id, key, accepted, total_latency)
+                if op == "download":
+                    route_download(node_id, key, accepted, total_latency)
+                elif operation["write"] or "search_index" in enforced.get(op, ()):
+                    target = (
+                        object_routes.get(node_id) if op in MEDIA_OPERATIONS else None
+                    )
+                    if target:
+                        forward(node_id, [target], key, accepted, total_latency)
+                    else:
+                        route_data(node_id, key, accepted, total_latency)
                 elif operation["read"]:
                     route_data(node_id, key, accepted, total_latency, reads=True)
                 else:
@@ -878,6 +1027,7 @@ def evaluate(
         snapshot=snapshot,
         queues=queues,
         storage=storage,
+        media_by_node=media_by_node,
         media_storage=tuple(
             stored + media_written * media.storage_shares[index]
             if media.storage_shares

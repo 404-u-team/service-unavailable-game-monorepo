@@ -1337,3 +1337,57 @@ test('monetization controls, revenue history and server time render in both lang
     if (visualDir) await page.screenshot({ path: `${visualDir}/monetized-${section}-ru-390.png`, fullPage: true });
   }
 });
+
+test('migration progress stays in the editor and a retiring database can be upgraded', async ({ page }) => {
+  const originalId = await create(page, false, false);
+  const portable = await (await page.request.get(`/api/games/${originalId}/export`)).json();
+  portable.game.balance = 100_000;
+  portable.game.storage.db = 1800;
+  portable.game.production.nodes.find((node: { id: string }) => node.id === 'db').config.storage = 3000;
+  const response = await page.request.post('/api/games/import', { data: portable });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const { id } = await response.json();
+  const mutate = async (path: string, method: string, data: object) => {
+    const response = await page.request.fetch(`/api/games/${id}${path}`, {
+      method, data: { request_id: crypto.randomUUID(), ...data }
+    });
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return await response.json() as Game;
+  };
+  const opened = await mutate('/draft', 'POST', { revision: (await state(page, id)).revision });
+  const topology = opened.draft!;
+  const primary = topology.nodes.find((node) => node.id === 'db')!;
+  primary.id = 'new-db';
+  primary.name = 'Replacement database';
+  topology.edges.find((edge) => edge.target === 'db')!.target = primary.id;
+  const edited = await mutate('/draft', 'PUT', { revision: opened.revision, topology });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/game/${id}?view=build`);
+  await page.getByRole('button', { name: 'Review deployment' }).click();
+  const review = page.getByRole('dialog', { name: 'Deployment review' });
+  await expect(review).toContainText('1,800 GB');
+  await review.getByRole('button', { name: 'Start migration' }).click();
+  const status = page.getByRole('button', { name: /Migration · 0%/ });
+  await expect(status).toBeVisible();
+  expect((await state(page, id)).revision).toBeGreaterThan(edited.revision);
+  await status.click();
+
+  const panel = page.getByRole('dialog', { name: 'Architecture migration' });
+  await expect(panel.getByRole('meter')).toBeVisible();
+  await panel.getByRole('button', { name: 'Pause migration' }).click();
+  await expect(panel).toContainText('Migration paused');
+  await choose(panel.getByRole('combobox', { name: 'Component' }), 'db');
+  await expect(panel).toContainText('Removed after migration');
+  await panel.getByRole('spinbutton', { name: 'New capacity' }).fill('4000');
+  await panel.getByRole('button', { name: 'Check upgrade cost' }).click();
+  await panel.getByRole('button', { name: /Buy upgrade for/ }).click();
+  await expect.poll(async () => (await state(page, id)).production.nodes.find((node) => node.id === 'db')?.config.storage).toBe(4000);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.keyboard.press('Escape');
+  await expect(panel).not.toBeVisible();
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect.poll(async () => (await state(page, id)).draft?.nodes.some((node) => node.id === 'new-db')).toBeTruthy();
+  await page.getByRole('button', { name: 'Review deployment' }).click();
+  await expect(page.getByRole('button', { name: 'Deploy after migration' })).toBeDisabled();
+});

@@ -71,6 +71,26 @@ class VersionedAction(Action):
     revision: int = Field(ge=0)
 
 
+class MigrationPace(VersionedAction):
+    pace: Literal["gentle", "normal", "fast", "paused"]
+
+
+class MigrationUpgradeRequest(Model):
+    revision: int = Field(ge=0)
+    side: Literal["production", "destination"]
+    node_id: NodeId
+    field: Literal["cpu", "memory", "storage", "network"]
+    value: float = Field(gt=0)
+
+
+class MigrationUpgrade(MigrationUpgradeRequest, Action):
+    pass
+
+
+class MigrationUpgradeQuote(Model):
+    cost: float
+
+
 class UpdateDraft(VersionedAction):
     topology: Topology
 
@@ -97,7 +117,9 @@ class SettingsAction(Action):
     settings: GameSettings
 
 
-ResearchId = Literal["decomposition", "domains", "queries", "sharding", "autoscaling"]
+ResearchId = Literal[
+    "decomposition", "domains", "queries", "sharding", "autoscaling", "object_storage"
+]
 
 
 class ResearchAction(Action):
@@ -243,6 +265,9 @@ class Modification(Model):
 class DraftReview(Model):
     migration_ticks: int = 0
     migration_cost: float = 0
+    migration_media_sources: dict[str, float] = Field(default_factory=dict)
+    migration_media_target: str | None = None
+    migration_database_sources: dict[str, float] = Field(default_factory=dict)
     revision: int
     errors: list[str]
     warnings: list[str]
@@ -399,6 +424,8 @@ class GameView(SaveSummary):
     draft_costs: dict[str, float]
     engineering: list[ResearchView]
     migration: ArchitectureMigration | None = None
+    shard_keys: dict[str, list[str]] = Field(default_factory=dict)
+    draft_shard_keys: dict[str, list[str]] = Field(default_factory=dict)
     engineering_lesson: int = 0
     features: list[FeatureView]
     product: ProductSettings

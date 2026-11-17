@@ -1,6 +1,6 @@
 import type { TutorialProgress } from './workbench/onboarding';
 
-export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'shard_router' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
+export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'object_storage' | 'shard_router' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
 export type Speed = 0 | 1 | 3 | 5;
 export const difficulties = ['beginner', 'standard', 'expert'] as const;
 export type Difficulty = typeof difficulties[number];
@@ -8,7 +8,7 @@ export type Point = { x: number; y: number };
 export type Setting = string | number;
 export type Component = { id: string; kind: Kind; name: string; position: Point; config: Record<string, Setting> };
 export type Connection = { source: string; target: string };
-export type Topology = { nodes: Component[]; edges: Connection[] };
+export type Topology = { nodes: Component[]; edges: Connection[]; shard_owners?: Record<string, Record<string, string>> };
 export type DiagramGroup = { id: string; name: string; members: string[]; collapsed: boolean };
 export type DiagramViewport = Point & { zoom: number };
 export type Diagram = { positions: Record<string, Point>; routes: Record<string, Point[]>; groups: DiagramGroup[]; viewports?: Partial<Record<'compact' | 'wide', DiagramViewport>> };
@@ -30,7 +30,7 @@ export type ComponentMetrics = {
   status: 'healthy' | 'warning' | 'overloaded' | 'failed' | 'idle';
   rps: number; throughput: number; latency: number; utilization: Record<string, number>;
   cache_hit: number | null; backlog: number | null; active_instances: number | null; storage_used: number | null; replication_lag: number | null;
-  database?: DatabaseTelemetry | null;
+  database?: DatabaseTelemetry | null; transfer_mbps?: number | null;
   queue_wait_minutes: number | null; jobs_dropped: number | null; jobs_expired: number | null;
 };
 export type MonitorCoverage = { capacity: number; history: boolean; covered: string[]; dropped: string[]; failed: boolean };
@@ -92,9 +92,18 @@ export type Deployment = { id: string; tick: number; summary: string; cost: numb
   capacity_before?: number | null; capacity_after?: number | null;
   pressure_before?: ResourcePressure | null; pressure_after?: ResourcePressure | null;
 } | null };
+export type MigrationPace = 'gentle' | 'normal' | 'fast' | 'paused';
+export type Migration = {
+  request_id: string; ready_at: number; topology: Topology; cost: number; start_tick?: number | null;
+  remaining_work?: number | null; total_work?: number | null; pace?: MigrationPace; blocked?: boolean; blocked_reason?: string | null;
+  database_sources?: Record<string, number> | null;
+  media_target?: string | null; media_sources?: Record<string, number>; media_copied?: number;
+};
+export type MigrationResource = 'cpu' | 'memory' | 'storage' | 'network';
+export type MigrationUpgrade = { side: 'production' | 'destination'; node_id: string; field: MigrationResource; value: number };
 export type Game = Save & {
   engineering: Research[]; engineering_lesson: number;
-  migration: { request_id: string; ready_at: number; topology: Topology; cost: number } | null;
+  migration: Migration | null; shard_keys?: Record<string, string[]>; draft_shard_keys?: Record<string, string[]>;
   start_minute: number; speed: Speed; difficulty: Difficulty; satisfaction: number; production: Topology; draft: Topology | null; revision: number;
   diagram: Diagram;
   snapshot: Snapshot; history: History[]; business_history: Pick<History, 'tick' | 'audience' | 'balance'>[]; economy: Economy; component_costs: Record<string, number>; draft_costs: Record<string, number>; features: Feature[]; campaigns: Campaign[]; markets: Market[]; languages: ProductLanguage[];
@@ -127,7 +136,7 @@ export type DatabaseForecast = {
 };
 export type Forecast = { rps: Interval; latency: Interval; availability: Interval; audience: Interval; confidence: 'low' | 'medium' | 'high'; plan?: CampaignPlan | null; databases?: Record<string, DatabaseForecast> };
 export type Review = {
-  migration_ticks?: number; migration_cost?: number;
+  migration_ticks?: number; migration_cost?: number; migration_media_sources?: Record<string, number>; migration_media_target?: string | null; migration_database_sources?: Record<string, number>;
   revision: number; errors: string[]; warnings: string[]; changes: Record<string, string[]>;
   details: { component: string; field: string; before: Setting; after: Setting }[];
   daily_before: number; daily_after: number; install: number; forecast: Forecast | null;

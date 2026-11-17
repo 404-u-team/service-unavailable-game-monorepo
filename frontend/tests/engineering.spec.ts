@@ -153,12 +153,59 @@ test('manual sharding accepts a cache link and switches production after copying
   expect((await current()).production).toEqual(game.production);
   await start.click();
   await expect(review).toBeHidden();
-  await expect(page.getByText('Production serves traffic while data is copied.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: /^Migration ·/ }).click();
+  const migration = page.getByRole('dialog', { name: 'Architecture migration' });
+  await expect(migration.getByText('Production serves traffic while data is copied.')).toBeVisible();
   expect((await current()).production).toEqual(game.production);
-  await page.getByRole('button', { name: 'Run migration' }).click();
+  await migration.getByRole('button', { name: 'Run game clock' }).click();
   await expect.poll(async () => (await current()).migration, { timeout: 15_000 }).toBeNull();
   const deployed = await current();
   expect(deployed.production.nodes.filter((node: { kind: string }) => node.kind === 'shard_router')).toHaveLength(1);
   expect(deployed.production.nodes.filter((node: { config: { partition?: string } }) => node.config.partition === 'Partition')).toHaveLength(2);
   expect(deployed.production.edges).toContainEqual({ source: 'cache', target: 'router' });
+
+  const hotOwner = deployed.shard_keys.router[0];
+  const destination = hotOwner === 'db' ? 'shard-2' : 'db';
+  await page.goto(`/game/${game.id}?view=build&component=router`);
+  await page.getByRole('button', { name: 'Shard key ownership' }).click();
+  const keys = page.getByRole('dialog', { name: 'Shard key ownership' });
+  await keys.getByRole('button', { name: 'Edit in draft' }).click();
+  await choose(keys.getByRole('combobox', { name: 'Source shard' }), hotOwner);
+  await keys.getByRole('checkbox', { name: '0 · Hot key' }).check();
+  await choose(keys.getByRole('combobox', { name: 'Destination shard' }), destination);
+  await keys.getByRole('button', { name: 'Move shard keys' }).click();
+  await expect.poll(async () => (await current()).draft_shard_keys.router[0]).toBe(destination);
+  expect((await current()).shard_keys.router[0]).toBe(hotOwner);
+});
+
+test('Object Storage is a separate research project that unlocks the data component', async ({ page }) => {
+  const game = await preparedGame(page, false);
+  await page.goto(`/game/${game.id}?view=build`);
+  await page.getByRole('button', { name: 'Add node' }).click();
+  const library = page.getByRole('dialog', { name: 'Component library' });
+  await expect(library.getByRole('button', { name: 'Object Storage', exact: true })).toBeDisabled();
+
+  await page.goto(`/game/${game.id}?view=product&engineering=1`);
+  const project = page.getByRole('listitem').filter({
+    has: page.getByRole('heading', { name: 'Object Storage', exact: true })
+  });
+  const researchStarted = page.waitForResponse((response) => response.url().endsWith('/engineering/object_storage'));
+  await project.getByRole('button', { name: 'Start research' }).click();
+  const started = await researchStarted;
+  expect(started.ok(), await started.text()).toBeTruthy();
+  await expect(project.getByText('In development', { exact: true })).toBeVisible();
+
+  const save = await (await page.request.get(`/api/games/${game.id}/export`)).json();
+  save.game.engineering.object_storage = save.game.tick;
+  const imported = await page.request.post('/api/games/import', { data: save });
+  expect(imported.ok(), await imported.text()).toBeTruthy();
+  const { id } = await imported.json();
+  await page.goto(`/game/${id}?view=build`);
+  await page.getByRole('button', { name: 'Add node' }).click();
+  await library.getByRole('button', { name: 'Object Storage', exact: true }).click();
+  await expect(library).toBeHidden();
+
+  const current = await (await page.request.get(`/api/games/${id}`)).json();
+  expect(current.draft.nodes).toContainEqual(expect.objectContaining({ kind: 'object_storage' }));
+  expect(current.production.nodes).not.toContainEqual(expect.objectContaining({ kind: 'object_storage' }));
 });

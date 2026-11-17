@@ -2,7 +2,6 @@ from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-
 from src.simulation.onboarding import TUTORIAL_STEPS, TutorialStep
 
 Kind = Literal[
@@ -10,6 +9,7 @@ Kind = Literal[
     "balancer",
     "api",
     "database",
+    "object_storage",
     "shard_router",
     "replica",
     "cache",
@@ -61,6 +61,9 @@ class Edge(Model):
 class Topology(Model):
     nodes: list[Node] = Field(max_length=80)
     edges: list[Edge] = Field(max_length=240)
+    shard_owners: dict[NodeId, dict[int, NodeId]] = Field(
+        default_factory=dict, max_length=80
+    )
 
 
 class DiagramGroup(Model):
@@ -128,7 +131,14 @@ class DatabaseDiagnostic(Model):
     resources: list[str]
     upgrades: list[
         Literal[
-            "cpu", "memory", "connections", "storage", "ssd", "nvme", "nvme_array", "legacy"
+            "cpu",
+            "memory",
+            "connections",
+            "storage",
+            "ssd",
+            "nvme",
+            "nvme_array",
+            "legacy",
         ]
     ]
     limiting: list[str] = Field(default_factory=list)
@@ -170,6 +180,7 @@ class ComponentMetrics(Model):
     jobs_expired: float | None = None
     active_instances: float | None = None
     storage_used: float | None = None
+    transfer_mbps: float | None = None
     replication_lag: float | None = None
     database: DatabaseTelemetry | None = None
 
@@ -387,6 +398,18 @@ class ArchitectureMigration(Model):
     ready_at: int = Field(ge=0)
     topology: Topology
     cost: float = Field(default=0, ge=0)
+    start_tick: int | None = Field(default=None, ge=0)
+    remaining_work: float | None = Field(default=None, ge=0)
+    total_work: float | None = Field(default=None, gt=0)
+    pace: Literal["gentle", "normal", "fast", "paused"] = "normal"
+    database_sources: dict[NodeId, Annotated[float, Field(ge=0)]] | None = None
+    media_target: NodeId | None = None
+    media_sources: dict[NodeId, Annotated[float, Field(ge=0)]] = Field(
+        default_factory=dict
+    )
+    media_copied: float = Field(default=0, ge=0)
+    blocked: bool = False
+    blocked_reason: str | None = Field(default=None, max_length=500)
 
 
 class AutoscaleState(Model):
@@ -451,6 +474,7 @@ class Game(Model):
     history: list[HistoryPoint] = Field(default_factory=list)
     queues: dict[str, float] = Field(default_factory=dict)
     storage: dict[str, float] = Field(default_factory=lambda: {"db": 2.0})
+    media_by_node: dict[NodeId, Annotated[float, Field(ge=0)]] | None = None
     replication: dict[NodeId, float] = Field(default_factory=dict)
     settings: GameSettings = Field(default_factory=GameSettings)
     tutorial: int = 0

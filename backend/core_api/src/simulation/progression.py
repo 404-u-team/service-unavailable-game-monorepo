@@ -65,6 +65,7 @@ def new_game(
         start_minute=START_MINUTE_UTC,
         onboarding=Onboarding(),
         free_media_storage_gb=0,
+        media_by_node={},
     )
     game.history = [history_point(game, evaluate(game).snapshot)]
     return game
@@ -180,22 +181,15 @@ def advance(game: Game, steps: int) -> None:
     product = product_settings(game)
     for _ in range(steps):
         game.tick += 1
-        if game.migration and game.tick >= game.migration.ready_at:
-            from src.services.games import deploy
+        if game.migration:
+            from src.services.games import advance_migration
 
-            pending = game.migration
-            game.migration = None
-            game.draft = pending.topology
-            deploy(
-                game,
-                game.revision,
-                pending.request_id,
-                prepared=pending,
-            )
+            advance_migration(game)
         for event in game.incidents:
             if (
                 event.kind != "capacity"
                 and event.resolution is None
+                and not (event.kind == "migration" and game.migration)
                 and game.tick >= event.end
             ):
                 event.resolution = (
@@ -266,6 +260,7 @@ def advance(game: Game, steps: int) -> None:
             del game.regional_campaigns[key]
         game.queues = result.queues
         game.storage = result.storage
+        game.media_by_node = result.media_by_node
         game.free_media_storage_gb, *paid_storage = result.media_storage
         for term, stored in zip(game.subscriptions, paid_storage):
             term.media_storage_gb = stored

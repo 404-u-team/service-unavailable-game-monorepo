@@ -4,7 +4,7 @@
   import { beforeNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ArrowDownRight, ArrowUpRight, Pause, Save as SaveIcon } from '@lucide/svelte';
-  import { Badge, Button, Alert, NavTabs, Toaster, createToasts, type NavItem } from '@service-unavailable/ui';
+  import { Badge, Button, NavTabs, Toaster, createToasts, type NavItem } from '@service-unavailable/ui';
   import Brand from '#lib/Brand.svelte';
   import Architecture from '#lib/workbench/Architecture.svelte';
   import Onboarding from '#lib/workbench/Onboarding.svelte';
@@ -151,6 +151,13 @@
     if (next.id !== currentId || (game && next.saved_at < game.saved_at)) return;
     if (next.speed) lastSpeed = next.speed;
     if (game) {
+      if (next.migration && next.migration.request_id !== game.migration?.request_id) {
+        toasts.add({ title: t('Migration started'), tone: 'info' });
+      } else if (next.migration?.pace === 'paused' && game.migration?.pace !== 'paused' && !next.migration.blocked) {
+        toasts.add({ title: t('Migration paused'), tone: 'info' });
+      } else if (!next.migration && game.migration && next.deployments.some((entry) => entry.id === game?.migration?.request_id)) {
+        toasts.add({ title: t('Migration completed'), tone: 'success' });
+      }
       reportEvents(next, game);
       // Keep structural references stable when REST replies or reconnect snapshots include them again.
       for (const key of ['production', 'draft', 'settings'] as const) {
@@ -364,14 +371,6 @@
   {:else}
     <NavTabs class="rail" variant="rail" label={t('Workbench navigation')} items={navItems([...desktop, 'saves'])} icon={navIcon} />
     <div class="main-area">
-      {#if game.migration}
-        <div class="migration"><Alert tone="warning" title={t('Architecture migration')}>
-          <div class="row spread wrap">
-            <span>{t('{0} ticks remaining', [Math.max(0, game.migration.ready_at - game.tick)])} · {t('Production serves traffic while data is copied.')}</span>
-            {#if game.speed === 0}<Button disabled={busy} onclick={() => speed(1)}>{t('Run migration')}</Button>{/if}
-          </div>
-        </Alert></div>
-      {/if}
       {#key `${game.id}:${section}`}
         {#if section === 'build'}
           <Architecture bind:this={architecture} {game} {catalog} {act} {busy} {error} tutorial={tutorialEnabled} tutorialSelect={currentView.target === target.api}
@@ -425,7 +424,6 @@
   }
   .main-area { position: relative; min-width: 0; }
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
-  .migration { margin: 8px 16px 0; }
 
   .game > :global(.mobile-navigation) { display: none; }
   @media (max-width: 1120px) {

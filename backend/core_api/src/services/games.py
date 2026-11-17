@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from math import floor
+from math import ceil, floor
 from random import SystemRandom
 from uuid import UUID, uuid4
 
@@ -49,6 +49,7 @@ from src.simulation.catalog import (
 from src.simulation.demand import (
     MINUTES_PER_DAY,
     acquire,
+    active_incidents,
     ad_forecast,
     arrival_weight,
     premium_media_gain,
@@ -57,12 +58,19 @@ from src.simulation.demand import (
 )
 from src.simulation.engine import evaluate
 from src.simulation.engineering import (
+    MIGRATION_PACES,
     RESEARCH,
     architecture_errors,
     effective_topology,
+    media_moves,
     migrated_storage,
+    migration_object,
     migration_plan,
+    object_copy_speed,
+    object_destination,
+    physical_media,
     researched,
+    shard_assignments,
     specialization_errors,
 )
 from src.simulation.models import (
@@ -288,29 +296,27 @@ def check_revision(game: Game, revision: int) -> None:
 
 def open_draft(game: Game, revision: int) -> None:
     check_revision(game, revision)
-    if game.migration is not None:
-        raise RuleError("Wait for the planned architecture migration to complete.")
     if game.draft is not None:
         raise RuleError("A draft already exists.")
-    game.draft = game.production.model_copy(deep=True)
+    base = game.migration.topology if game.migration else game.production
+    game.draft = base.model_copy(deep=True)
     game.revision += 1
 
 
 def discard_draft(game: Game, revision: int) -> None:
     check_revision(game, revision)
-    if game.migration is not None:
-        raise RuleError("Wait for the planned architecture migration to complete.")
     game.draft = None
     game.revision += 1
 
 
 def edit_draft(game: Game, revision: int, topology: Topology) -> None:
     check_revision(game, revision)
-    if game.migration is not None:
-        raise RuleError("Wait for the planned architecture migration to complete.")
     if game.draft is None:
         raise RuleError("Create a draft first.")
     graph = inspect_graph(topology)
+    validate_identity(
+        game.migration.topology if game.migration else game.production, graph.nodes
+    )
     validate_identity(game.production, graph.nodes)
     errors = architecture_errors(game, graph, partial=True)
     if errors:
@@ -344,6 +350,7 @@ def forecast(
     *,
     compare_databases: bool = False,
     projected_storage: dict[str, float] | None = None,
+    projected_media: dict[str, float] | None = None,
 ) -> Forecast:
     telemetry = evaluate(game).snapshot
     coverage = len(telemetry.components)
@@ -356,6 +363,7 @@ def forecast(
     assumed.incidents = []
     if projected_storage is not None:
         assumed.storage = projected_storage
+        assumed.media_by_node = projected_media
         assumed.production = topology
     audience = game.audience
     boost = 0.0
@@ -465,8 +473,20 @@ def review(
     prepared: bool = False,
 ) -> DraftReview:
     check_revision(game, revision)
-    if game.migration is not None:
-        raise RuleError("Wait for the planned architecture migration to complete.")
+    if game.migration:
+        base = game.migration.topology
+        placed_media = {} if game.media_by_node is not None else None
+        storage = migrated_storage(
+            game, base, validate=False, media_result=placed_media
+        )
+        game = game.model_copy(
+            update={
+                "production": base,
+                "migration": None,
+                "storage": storage,
+                "media_by_node": placed_media,
+            }
+        )
     candidate = topology if topology is not None else game.draft
     if candidate is None:
         raise RuleError("Create a draft first.")
@@ -478,6 +498,9 @@ def review(
     install = 0.0
     daily_after = topology_cost(effective_topology(game))
     migration_ticks, migration_cost = 0, 0.0
+    media_sources = {}
+    database_sources = {}
+    media_target = None
     try:
         graph = inspect_graph(candidate)
         validate_identity(game.production, graph.nodes)
@@ -519,15 +542,24 @@ def review(
                 )
             ] = "Messenger API servers receiving live requests must share one primary database."
         errors.extend(issues)
-        migration_ticks, migration_cost = migration_plan(game, candidate)
+        media_target, media_sources = media_moves(game, candidate)
+        migration_ticks, migration_cost = migration_plan(
+            game, candidate, database_sources
+        )
         projected_storage = None
+        projected_media = None
         projected = game
-        if migration_ticks:
-            projected_storage = migrated_storage(game, candidate, validate=not prepared)
+        if migration_ticks or prepared:
+            projected_media = (
+                {} if media_target or game.media_by_node is not None else None
+            )
+            projected_storage = migrated_storage(
+                game, candidate, validate=not prepared, media_result=projected_media
+            )
             projected = game.model_copy(update={"storage": projected_storage})
             install += migration_cost
             warnings.append(
-                "Data migration keeps production serving until preparation completes. Copying reserves 10% database capacity."
+                "Normal migration speed reserves 10% of the copying databases’ capacity."
             )
         for feature_id in game.infrastructure_releases:
             if feature_id not in game.enabled_features:
@@ -548,6 +580,7 @@ def review(
             candidate,
             compare_databases=True,
             projected_storage=projected_storage,
+            projected_media=projected_media,
         )
         if estimate.availability.low < 0.95:
             warnings.append("Some projected load exceeds the draft's service capacity.")
@@ -558,6 +591,9 @@ def review(
     return DraftReview(
         migration_ticks=migration_ticks,
         migration_cost=migration_cost,
+        migration_media_sources=media_sources,
+        migration_media_target=media_target,
+        migration_database_sources=database_sources,
         revision=revision,
         errors=errors,
         warnings=warnings,
@@ -590,6 +626,17 @@ def modifications(before: Topology, after: Topology) -> list[Modification]:
                         after=value if value is not None else "Automatic",
                     )
                 )
+        if before.shard_owners.get(node.id, {}) != after.shard_owners.get(node.id, {}):
+            old_keys = shard_assignments(before).get(node.id, [])
+            new_keys = shard_assignments(after).get(node.id, [])
+            records.append(
+                Modification(
+                    component=node.name,
+                    field="Shard key ownership",
+                    before="Current map",
+                    after=f"{sum(a != b for a, b in zip(old_keys, new_keys))} / 128",
+                )
+            )
         if node.name != previous.name:
             records.append(
                 Modification(
@@ -647,7 +694,10 @@ def deploy(
     *,
     prepared: ArchitectureMigration | None = None,
 ) -> None:
-    candidate = game.draft
+    check_revision(game, revision)
+    if game.migration:
+        raise RuleError("Wait for the planned architecture migration to complete.")
+    candidate = prepared.topology if prepared else game.draft
     if rollback:
         if candidate is not None:
             raise RuleError("Discard the current draft before rolling back.")
@@ -672,6 +722,23 @@ def deploy(
         )
         if prepared is None:
             raise RuleError(reason)
+        if prepared.media_target:
+            prepared.blocked = True
+            prepared.blocked_reason = reason
+            prepared.pace = "paused"
+            prepared.ready_at = game.tick + 1
+            game.migration = prepared
+            add_event(
+                game,
+                "migration-failed",
+                "Migration needs attention",
+                reason,
+                "warning",
+                0,
+            )
+            return
+        if game.draft is None:
+            game.draft = candidate
         reject_migration(game, prepared, reason)
         return
     if not prepared:
@@ -682,8 +749,22 @@ def deploy(
                 ready_at=game.tick + result.migration_ticks,
                 topology=candidate.model_copy(deep=True),
                 cost=result.install,
+                start_tick=game.tick,
+                remaining_work=result.migration_ticks,
+                total_work=result.migration_ticks,
+                media_target=(
+                    result.migration_media_target
+                    if result.migration_media_sources
+                    or result.migration_media_target
+                    != object_destination(inspect_graph(game.production))
+                    else None
+                ),
+                media_sources=result.migration_media_sources,
+                database_sources=result.migration_database_sources,
             )
-            game.draft = candidate.model_copy(deep=True)
+            if game.migration.media_target:
+                game.media_by_node = physical_media(game)
+            game.draft = None
             game.revision += 1
             add_event(
                 game,
@@ -696,9 +777,10 @@ def deploy(
             return
     if prepared is not None:
         result.install = prepared.cost
+    placed_media = {} if game.media_by_node is not None else None
     transferred = (
-        migrated_storage(game, candidate, validate=False)
-        if result.migration_ticks
+        migrated_storage(game, candidate, validate=False, media_result=placed_media)
+        if result.migration_ticks or prepared
         else None
     )
     count = sum(len(items) for key, items in result.changes.items() if key != "moved")
@@ -735,7 +817,8 @@ def deploy(
         and next_graph.primaries(replica) == previous_graph.primaries(replica)
     }
     game.production = candidate
-    game.draft = None
+    if not prepared or game.draft == prepared.topology:
+        game.draft = None
     game.revision += 1
     live = {node.id for node in game.production.nodes}
     game.queues = {key: value for key, value in game.queues.items() if key in live}
@@ -744,6 +827,14 @@ def deploy(
         if transferred is not None
         else {key: value for key, value in game.storage.items() if key in live}
     )
+    if placed_media is not None:
+        game.media_by_node = (
+            placed_media
+            if transferred is not None
+            else {
+                key: volume for key, volume in game.media_by_node.items() if key in live
+            }
+        )
     for event in game.incidents:
         if event.resolution is None and event.target and event.target not in live:
             event.resolution = "Affected component removed in deployment"
@@ -792,6 +883,178 @@ def deploy(
             )
 
 
+def migration_pace(game: Game, revision: int, pace: str) -> None:
+    check_revision(game, revision)
+    pending = game.migration
+    if pending is None:
+        raise RuleError("There is no migration in progress.")
+    if pending.remaining_work is None:
+        pending.remaining_work = max(0, pending.ready_at - game.tick)
+        pending.total_work = max(1, pending.remaining_work)
+    pending.pace = pace
+    pending.blocked = False
+    pending.blocked_reason = None
+    pending.ready_at = game.tick + max(
+        1, ceil(pending.remaining_work / (MIGRATION_PACES[pace] or 1))
+    )
+    game.revision += 1
+
+
+def migration_upgrade(
+    game: Game,
+    revision: int,
+    side: str,
+    node_id: str,
+    field: str,
+    value: float,
+    *,
+    quote: bool = False,
+) -> float:
+    check_revision(game, revision)
+    pending = game.migration
+    if pending is None:
+        raise RuleError("There is no migration in progress.")
+    topology = game.production if side == "production" else pending.topology
+    node = next((n for n in topology.nodes if n.id == node_id), None)
+    supported = {
+        "database": {"cpu", "memory", "storage"},
+        "object_storage": {"storage", "network"},
+    }
+    if node is None or field not in supported.get(node.kind, set()):
+        raise RuleError("This migration resource cannot be upgraded.")
+    old = config(node)[field]
+    if value <= old:
+        raise RuleError("Choose a larger capacity for the upgrade.")
+    upgraded = node.model_copy(update={"config": {**node.config, field: value}})
+    candidate = topology.model_copy(
+        update={"nodes": [upgraded if n.id == node_id else n for n in topology.nodes]}
+    )
+    inspect_graph(candidate)
+    cost = install_cost(topology, candidate)
+    if quote:
+        return cost
+    spend(game, cost, "deployment")
+    if side == "production":
+        game.production = candidate
+    else:
+        pending.topology = candidate
+    # Carry upgrades of shared hardware forward without overwriting explicit draft settings.
+    if side == "production":
+        inherited = next(
+            (
+                n
+                for n in pending.topology.nodes
+                if n.id == node_id and n.kind == node.kind
+            ),
+            None,
+        )
+        if inherited and config(inherited)[field] == old:
+            inherited.config[field] = value
+    if game.draft is not None:
+        inherited = next(
+            (n for n in game.draft.nodes if n.id == node_id and n.kind == node.kind),
+            None,
+        )
+        if inherited and config(inherited)[field] == old:
+            inherited.config[field] = value
+    game.revision += 1
+    return cost
+
+
+def advance_migration(game: Game) -> None:
+    pending = game.migration
+    if not pending:
+        return
+    if pending.pace == "paused":
+        pending.ready_at = max(pending.ready_at, game.tick + 1)
+        return
+    pace = MIGRATION_PACES[pending.pace]
+    if pending.remaining_work is None:
+        pending.remaining_work = max(0, pending.ready_at - game.tick + 1)
+        start = next(
+            (
+                e.start
+                for e in reversed(game.incidents)
+                if e.kind == "migration" and e.end == pending.ready_at
+            ),
+            game.tick - 1,
+        )
+        pending.start_tick = start
+        pending.total_work = max(1, pending.ready_at - start)
+    incidents = list(active_incidents(game))
+    failed = {e.target for e in incidents if e.kind == "failure"}
+    pending.blocked_reason = (
+        "A source database is unavailable."
+        if any(source in failed for source in pending.database_sources or {})
+        else None
+    )
+    if pending.media_target:
+        target = pending.media_target
+        storage = game.storage
+        media = game.media_by_node
+        node = migration_object(game)
+        damaged = {e.target: e.factor for e in incidents if e.kind == "degradation"}
+        copy_limit = (
+            min(
+                object_copy_speed(node) * pace * damaged.get(target, 1),
+                max(0, config(node)["storage"] - storage.get(target, 0)),
+            )
+            if target not in failed
+            else 0
+        )
+        for source in sorted(pending.media_sources):
+            if source in failed:
+                continue
+            amount = min(copy_limit, media.get(source, 0)) * damaged.get(source, 1)
+            if amount <= 0:
+                continue
+            media[source] -= amount
+            media[target] = media.get(target, 0) + amount
+            storage[source] = max(0, storage[source] - amount)
+            storage[target] = storage.get(target, 0) + amount
+            pending.media_copied += amount
+            copy_limit -= amount
+        remaining = sum(media.get(source, 0) for source in pending.media_sources)
+        if remaining > 1e-9:
+            if target in failed:
+                pending.blocked_reason = "The destination storage is unavailable."
+            elif storage.get(target, 0) >= config(node)["storage"]:
+                pending.blocked_reason = "The destination storage is full."
+            elif all(
+                source in failed or media.get(source, 0) <= 1e-9
+                for source in pending.media_sources
+            ):
+                pending.blocked_reason = (
+                    "The remaining attachment sources are unavailable."
+                )
+    else:
+        remaining = 0
+    pending.blocked = pending.blocked_reason is not None
+    if not pending.blocked:
+        pending.remaining_work = max(0, pending.remaining_work - pace)
+    if pending.blocked or pending.remaining_work > 0 or remaining > 1e-9:
+        pending.ready_at = game.tick + max(
+            1,
+            ceil(pending.remaining_work / pace),
+            ceil(remaining / (object_copy_speed(node) * pace))
+            if pending.media_target
+            else 0,
+        )
+        return
+    game.migration = None
+    deploy(game, game.revision, pending.request_id, prepared=pending)
+    if game.migration is None:
+        for event in reversed(game.incidents):
+            if (
+                event.kind == "migration"
+                and event.start == pending.start_tick
+                and event.resolution is None
+            ):
+                event.end = game.tick
+                event.resolution = "Migration completed"
+                break
+
+
 def reject_migration(game: Game, pending: ArchitectureMigration, reason: str) -> None:
     refund = min(pending.cost, max(0, game.deployment_spend))
     game.balance += refund
@@ -800,7 +1063,11 @@ def reject_migration(game: Game, pending: ArchitectureMigration, reason: str) ->
     for event in reversed(game.incidents):
         if (
             event.kind == "migration"
-            and event.end == pending.ready_at
+            and (
+                event.start == pending.start_tick
+                if pending.start_tick is not None
+                else event.end == pending.ready_at
+            )
             and event.resolution is None
         ):
             event.end = game.tick
@@ -1487,6 +1754,8 @@ def view(game: Game, saved_at: datetime) -> GameView:
         else {},
         engineering=[research_state(game, key) for key in RESEARCH],
         migration=game.migration,
+        shard_keys=shard_assignments(game.production),
+        draft_shard_keys=shard_assignments(game.draft) if game.draft else {},
         engineering_lesson=game.engineering_lesson,
         features=[feature_state(game, key, graph) for key in FEATURES],
         campaigns=[

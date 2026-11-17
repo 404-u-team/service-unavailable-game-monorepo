@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from src.services.games import deploy
 from src.services.save_files import export_file
+from src.simulation.progression import advance
+
 from tests.test_engineering import media_migration
 
 API_URL = os.environ.get("TEST_GAME_API_URL")
@@ -69,9 +71,26 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 201, self.game)
         self.path = f"/{self.game['id']}"
 
-    def test_engineering_projects_are_idempotent_persist_and_export(self):
+    def test_object_storage_research_starts_through_api(self):
         catalog = call(self.client, "/catalog")[1]
-        self.assertEqual(len(catalog["engineering"]), 5)
+        self.assertIn("object_storage", catalog["engineering"])
+        status, storage_research = call(
+            self.client,
+            self.path + "/engineering/object_storage",
+            "POST",
+            action(action="develop"),
+        )
+        self.assertEqual(status, 200, storage_research)
+        self.assertEqual(
+            next(
+                item["state"]
+                for item in storage_research["engineering"]
+                if item["id"] == "object_storage"
+            ),
+            "developing",
+        )
+
+    def test_engineering_projects_are_idempotent_persist_and_export(self):
         self.assertEqual(
             call(self.client, self.path + "/engineering/domains", "POST", action())[0],
             422,
@@ -452,12 +471,15 @@ class GameApiTests(TestCase):
     def test_export_recovers_paid_migration_that_cannot_cut_over(self):
         game = media_migration(existing_media=True)
         deploy(game, game.revision, uuid4())
+        draft = game.migration.topology.model_dump(mode="json")
+        advance(game, game.migration.ready_at - game.tick - 1)
         game.storage["media-db"] = 26
-        game.tick = game.migration.ready_at - 1
         game.speed = 5
         game.clock_fraction = 0.999999
         _, portable = export_file(game)
-        status, _, body = file_request(self.client, "/import", portable.model_dump_json().encode())
+        status, _, body = file_request(
+            self.client, "/import", portable.model_dump_json().encode()
+        )
         self.assertEqual(status, 201, body)
         path = "/" + json.loads(body)["id"]
 
@@ -465,14 +487,20 @@ class GameApiTests(TestCase):
         self.assertEqual(status, 200, body)
         recovered = json.loads(body)["game"]
         self.assertIsNone(recovered["migration"])
-        self.assertEqual(recovered["draft"], game.draft.model_dump(mode="json"))
-        self.assertEqual(recovered["production"], game.production.model_dump(mode="json"))
+        self.assertEqual(recovered["draft"], draft)
+        self.assertEqual(
+            recovered["production"], game.production.model_dump(mode="json")
+        )
         self.assertEqual(recovered["deployment_spend"], 0)
         self.assertEqual(recovered["revision"], game.revision + 1)
         status, current = call(self.client, path)
         self.assertEqual(status, 200, current)
         self.assertIsNone(current["migration"])
         self.assertEqual(current["revision"], recovered["revision"])
-        failures = [event for event in current["incidents"] if event["title"] == "Migration failed"]
+        failures = [
+            event
+            for event in current["incidents"]
+            if event["title"] == "Migration failed"
+        ]
         self.assertEqual(len(failures), 1)
         self.assertIn("Image attachments", failures[0]["symptom"])

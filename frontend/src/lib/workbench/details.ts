@@ -1,10 +1,11 @@
-import type { Kind } from '../types';
+import type { Kind, Migration } from '../types';
 
 export const componentNotes: Record<Kind, [string, string, string]> = {
   source: ['The service always has one traffic source. Demand grows with audience, campaigns, and releases.', 'Start with a balancer or limiter when you need more control over incoming load.', 'A source with no path to an API and primary database cannot serve write requests.'],
   balancer: ['Requires an API target to deliver requests.', 'Use multiple API targets for redundancy. Weighted capacity directs more traffic to larger instances.', 'One target leaves the service vulnerable to a single API instance failure.'],
   api: ['Link a primary database for writes and persistent reads.', 'Add a cache for repeated reads, a read replica to offload the primary, or a queue for background work.', 'More API instances cannot resolve downstream database saturation.'],
   database: ['Receives writes from an API and reads from an API or cache.', 'Add memory for reads, CPU for query processing, or faster storage for I/O pressure.', 'An oversized connection pool admits more work but does not increase processing capacity.'],
+  object_storage: ['Connect Object Storage to a Universal or Media API.', 'Keep the database connection for attachment metadata.', 'Connect a monitor to see transfer speed and storage usage.'],
   shard_router: ['Connect APIs to the shard router for one data domain.', 'Connect at least two primaries of that domain with Partition membership.', 'Each query goes to the shard that owns its key.'],
   replica: ['Subscribe to one primary database. Connect the API or cache to the replica for reads.', 'Use a replica when ordinary reads compete with writes on the primary.', 'Replica reads can trail recent primary writes. Every follower adds write overhead on the primary.'],
   cache: ['Keep a direct API connection to the primary database or shard router for writes.', 'Link the cache to the owning primary, one of its replicas, or its shard router.', 'Use cache memory and TTL to retain frequently read data.'],
@@ -49,3 +50,12 @@ export const fieldNotes: Record<string, string> = {
   delivery: 'Distribute queues share jobs. Each broadcast queue receives a copy for its connected workers.',
   search_index: 'Indexed search uses 65% fewer read units. Maintaining the index adds 20% write work.'
 };
+
+
+export function migrationProgress(migration: Migration) {
+  if (!migration.total_work) return null;
+  const timeProgress = 1 - (migration.remaining_work ?? 0) / migration.total_work;
+  const media = Object.values(migration.media_sources ?? {}).reduce((sum, gb) => sum + gb, 0);
+  const mediaProgress = media ? (migration.media_copied ?? 0) / media : 1;
+  return Math.max(0, Math.min(99, Math.floor(100 * Math.min(timeProgress, mediaProgress))));
+}

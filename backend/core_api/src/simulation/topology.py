@@ -34,13 +34,15 @@ class Graph:
     order: list[str]
     reachable: set[str]
     relationships: dict[tuple[str, str], str]
+    shard_owners: dict[str, dict[int, str]]
 
     def primaries(self, node_id: str) -> list[str]:
         return sorted(self.primary_routes(node_id))
 
     def primary_routes(self, node_id: str) -> dict[str, str]:
         routes = {
-            target: target for target in self.targets[node_id]
+            target: target
+            for target in self.targets[node_id]
             if self.nodes[target].kind == "database"
         }
         if self.nodes[node_id].kind == "api":
@@ -109,6 +111,11 @@ def inspect_graph(topology: Topology) -> Graph:
             raise RuleError(
                 "Identity dependencies must connect a specialized service to an Accounts API."
             )
+        if relationship == "objects" and config(source)["role"] not in {
+            "Universal",
+            "Media",
+        }:
+            raise RuleError("Connect Object Storage to a Universal or Media API.")
         if edge.target in targets[edge.source]:
             raise RuleError(
                 "A connection already exists between these components.",
@@ -152,7 +159,19 @@ def inspect_graph(topology: Topology) -> Graph:
                 for target in targets[node]
                 if relationships[node, target] not in {"telemetry", "replication"}
             )
-    return Graph(nodes, targets, order, reachable, relationships)
+    for router, assignments in topology.shard_owners.items():
+        if (
+            router not in nodes
+            or nodes[router].kind != "shard_router"
+            or any(
+                not 0 <= key < 128
+                or owner not in targets[router]
+                or nodes[owner].kind != "database"
+                for key, owner in assignments.items()
+            )
+        ):
+            raise RuleError("Each shard key must point to a connected primary.")
+    return Graph(nodes, targets, order, reachable, relationships, topology.shard_owners)
 
 
 def messenger_datasets(graph: Graph) -> dict[str, tuple[str, ...]]:
@@ -298,6 +317,7 @@ def diff(before: Topology, after: Topology) -> dict[str, list[str]]:
                 n.kind != old[n.id].kind
                 or n.name != old[n.id].name
                 or config(n) != config(old[n.id])
+                or before.shard_owners.get(n.id) != after.shard_owners.get(n.id)
             )
         ],
         "moved": [

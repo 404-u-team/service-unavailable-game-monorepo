@@ -683,7 +683,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "use",
         "title": "When to use it",
         "body": [
-          "Use it when splitting Shared data, moving a domain or adding and removing shards."
+          "Use it when moving data between databases, changing shard key ownership or moving attachments to Object Storage."
         ]
       },
       {
@@ -718,7 +718,7 @@ export const engineeringArticles: Record<string, Article> = {
         "id": "mistakes",
         "title": "Common mistakes",
         "body": [
-          "Leave spare storage and capacity. The pending topology is locked until preparation completes; pausing the clock also pauses migration."
+          "Open migration details from the topology toolbar to adjust speed, pause copying or upgrade either side. You can edit the next draft while the current migration runs."
         ]
       },
       {

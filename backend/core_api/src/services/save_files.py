@@ -18,8 +18,14 @@ from src.simulation.catalog import (
     SCENARIOS,
 )
 from src.simulation.demand import MINUTES_PER_DAY, game_minute
-from src.simulation.engineering import RESEARCH, architecture_errors, researched
+from src.simulation.engineering import (
+    RESEARCH,
+    architecture_errors,
+    object_destination,
+    researched,
+)
 from src.simulation.models import (
+    ArchitectureMigration,
     DeploymentComparison,
     FinanceSample,
     Game,
@@ -31,6 +37,7 @@ from src.simulation.models import (
     ProductSettings,
     RegionalCampaign,
     SubscriptionTerm,
+    Topology,
 )
 from src.simulation.topology import RuleError, deployment_warnings, inspect_graph
 
@@ -107,6 +114,22 @@ def require_complete(value: object) -> None:
                 "migration",
                 "engineering_lesson",
                 "free_media_storage_gb",
+                "media_by_node",
+            }
+        elif isinstance(value, Topology):
+            allowed_omissions = {"shard_owners"}
+        elif isinstance(value, ArchitectureMigration):
+            allowed_omissions = {
+                "start_tick",
+                "remaining_work",
+                "total_work",
+                "pace",
+                "database_sources",
+                "media_target",
+                "media_sources",
+                "media_copied",
+                "blocked",
+                "blocked_reason",
             }
         elif isinstance(value, FinanceSample):
             allowed_omissions = {"regional_ads"}
@@ -174,14 +197,56 @@ def validate_game(game: Game) -> None:
     if game.migration:
         if (
             game.migration.ready_at <= game.tick
-            or game.migration.topology != game.draft
+            or (
+                game.migration.start_tick is not None
+                and game.migration.start_tick > game.tick
+            )
+            or (
+                (game.migration.remaining_work is None)
+                != (game.migration.total_work is None)
+            )
+            or (
+                game.migration.total_work is not None
+                and game.migration.remaining_work > game.migration.total_work
+            )
             or any(d.id == game.migration.request_id for d in game.deployments)
         ):
             raise ValueError("Invalid pending migration")
-        if architecture_errors(game, inspect_graph(game.migration.topology)):
+        if any(
+            source not in graph.nodes or graph.nodes[source].kind != "database"
+            for source in game.migration.database_sources or {}
+        ):
+            raise ValueError("Invalid migration database source")
+        target_graph = inspect_graph(game.migration.topology)
+        if any(
+            graph.nodes[node_id].kind != node.kind
+            for node_id, node in target_graph.nodes.items()
+            if node_id in graph.nodes
+        ):
+            raise ValueError("Migration changes a component type")
+        if game.migration.media_target is None and (
+            game.migration.media_sources or game.migration.media_copied
+        ):
+            raise ValueError("Attachment transfer is missing a destination")
+        if game.migration.media_target and (
+            game.media_by_node is None
+            or game.migration.media_target != object_destination(target_graph)
+            or game.migration.media_target not in target_graph.nodes
+            or target_graph.nodes[game.migration.media_target].kind != "object_storage"
+            or game.migration.media_target in game.migration.media_sources
+            or not game.migration.media_sources.keys() <= graph.nodes.keys()
+            or any(
+                graph.nodes[node].kind not in {"database", "object_storage"}
+                for node in game.migration.media_sources
+            )
+            or game.migration.media_copied
+            > sum(game.migration.media_sources.values()) + 1e-8
+        ):
+            raise ValueError("Invalid migration media state")
+        if architecture_errors(game, target_graph):
             raise ValueError("Invalid migration topology")
     if any(
-        n.kind == "shard_router"
+        n.kind in {"shard_router", "object_storage"}
         or n.config.get("role", "Universal") != "Universal"
         or n.config.get("domain", "Shared") != "Shared"
         or n.config.get("partition", "Independent") != "Independent"
@@ -200,8 +265,13 @@ def validate_game(game: Game) -> None:
         draft = inspect_graph(game.draft)
         if architecture_errors(game, draft, partial=True):
             raise ValueError("Unsupported draft settings")
+        protected_nodes = {**graph.nodes}
+        if game.migration:
+            protected_nodes.update(
+                {node.id: node for node in game.migration.topology.nodes}
+            )
         if any(
-            node_id in graph.nodes and node.kind != graph.nodes[node_id].kind
+            node_id in protected_nodes and node.kind != protected_nodes[node_id].kind
             for node_id, node in draft.nodes.items()
         ):
             raise ValueError("Draft changes a component type")
@@ -210,18 +280,45 @@ def validate_game(game: Game) -> None:
 
     # Diagram entries survive removals and drafts so that undo and rollback can reuse them.
     # Diagram itself validates IDs, positions, waypoints and nested group integrity.
-    for values, kind in (
-        (game.queues, "queue"),
-        (game.storage, "database"),
-        (game.replication, "replica"),
+    for values, kinds in (
+        (game.queues, {"queue"}),
+        (game.storage, {"database", "object_storage"}),
+        (game.replication, {"replica"}),
     ):
         if any(value < 0 for value in values.values()):
             raise ValueError("Negative component state")
         if any(
-            node_id in graph.nodes and graph.nodes[node_id].kind != kind
+            node_id in graph.nodes and graph.nodes[node_id].kind not in kinds
             for node_id in values
         ):
             raise ValueError("Component state has the wrong type")
+
+    if game.media_by_node is not None:
+        staged = game.migration.media_target if game.migration else None
+        media_nodes = {
+            node.id
+            for node in graph.nodes.values()
+            if node.kind in {"database", "object_storage"}
+        }
+        object_nodes = {
+            node.id for node in graph.nodes.values() if node.kind == "object_storage"
+        }
+        if staged:
+            media_nodes.add(staged)
+            object_nodes.add(staged)
+        if any(
+            volume > game.storage.get(node_id, 0) + 1e-8
+            or (volume and node_id not in media_nodes)
+            for node_id, volume in game.media_by_node.items()
+        ) or any(
+            not isclose(
+                game.media_by_node.get(node_id, 0),
+                game.storage.get(node_id, 0),
+                abs_tol=1e-8,
+            )
+            for node_id in object_nodes
+        ):
+            raise ValueError("Invalid attachment volume")
 
     if not (
         {"text"} <= set(game.released) <= FEATURES.keys()

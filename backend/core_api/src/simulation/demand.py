@@ -20,6 +20,7 @@ from src.simulation.catalog import (
     SYNC_FREQUENCY,
     TICKS_PER_DAY,
 )
+from src.simulation.engineering import physical_media
 from src.simulation.media import MediaDemand, media_demand
 from src.simulation.models import (
     AdIntensity,
@@ -242,6 +243,8 @@ def workload(
             ]
         )
     }
+    if any(physical_media(game).values()):
+        base_rates["download"] = OPERATIONS["download"]["rate"]
     fast_subscribers = sum(
         term.subscribers for term in game.subscriptions if term.fast_sync
     )

@@ -35,6 +35,10 @@ from src.api.game_schemas import (
     GameView,
     IncidentView,
     MarketAction,
+    MigrationPace,
+    MigrationUpgrade,
+    MigrationUpgradeQuote,
+    MigrationUpgradeRequest,
     OnboardingAction,
     PatchDiagram,
     ProductAction,
@@ -65,6 +69,8 @@ from src.services.games import (
     discard_draft,
     edit_draft,
     forecast,
+    migration_pace,
+    migration_upgrade,
     open_draft,
     patch_diagram,
     review,
@@ -425,6 +431,59 @@ async def clock(game_id: UUID, body: ClockAction, owner_id: Owner, service: Serv
         body,
         "clock",
         lambda game: setattr(game, "speed", body.speed),
+    )
+
+
+@router.post("/{game_id}/migration/pace", response_model=GameView)
+async def set_migration_pace(
+    game_id: UUID, body: MigrationPace, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "migration pace",
+        lambda game: migration_pace(game, body.revision, body.pace),
+    )
+
+
+@router.post("/{game_id}/migration/upgrade/quote", response_model=MigrationUpgradeQuote)
+async def quote_migration_upgrade(
+    game_id: UUID, body: MigrationUpgradeRequest, owner_id: Owner, service: Service
+):
+    try:
+        cost = await service.read(
+            owner_id,
+            game_id,
+            lambda game, _: migration_upgrade(
+                game,
+                body.revision,
+                body.side,
+                body.node_id,
+                body.field,
+                body.value,
+                quote=True,
+            ),
+        )
+    except (SaveNotFound, RuleError) as error:
+        raise game_errors(error) from error
+    return MigrationUpgradeQuote(cost=cost)
+
+
+@router.post("/{game_id}/migration/upgrade", response_model=GameView)
+async def upgrade_migration_node(
+    game_id: UUID, body: MigrationUpgrade, owner_id: Owner, service: Service
+):
+    return await mutate(
+        service,
+        owner_id,
+        game_id,
+        body,
+        "migration upgrade",
+        lambda game: migration_upgrade(
+            game, body.revision, body.side, body.node_id, body.field, body.value
+        ),
     )
 
 

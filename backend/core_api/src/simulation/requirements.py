@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from src.simulation.catalog import topic_accepts
-from src.simulation.engineering import data_targets, supports
+from src.simulation.engineering import data_targets, object_target, supports
 from src.simulation.models import Game, Kind, Node
 from src.simulation.topology import Graph, config
 
@@ -23,7 +23,7 @@ REQUIREMENTS = {
         ("database",),
     ),
     "media_storage": Requirement(
-        "Connect each API that receives traffic to a primary database with at least 8 GB free for media.",
+        "Connect each media API to a database and provide at least 8 GB free for attachments in its database or Object Storage.",
         ("database",),
         lambda node, game: (
             config(node)["storage"] - game.storage.get(node.id, 0) >= MEDIA_FREE_GB
@@ -60,6 +60,14 @@ def requirement_met(
         and (operation is None or supports(node, operation))
     ]
     for api in apis:
+        if rule is REQUIREMENTS["media_storage"] and (
+            target := object_target(graph, api.id)
+        ):
+            if rule.qualifies(graph.nodes[target], game) and data_targets(
+                graph, api.id, operation or "upload"
+            ):
+                continue
+            return False
         candidates = {api.id}
         for kind in rule.path:
             candidates = {
