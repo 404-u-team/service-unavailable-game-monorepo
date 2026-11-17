@@ -98,7 +98,7 @@ async function deploy(page: Page) {
   await results.getByRole('button', { name: 'Done' }).click();
 }
 
-test('component actions open with a click or keyboard and copy the selected block into the draft', async ({ page }) => {
+test('left click selects a component and right click or Shift+F10 opens its actions', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = await create(page, false, false);
   const initial = await state(page, id);
@@ -106,7 +106,14 @@ test('component actions open with a click or keyboard and copy the selected bloc
   const node = page.locator('.svelte-flow__node[data-id="api"]');
   const actions = page.getByRole('group', { name: 'Component actions' });
 
+  const database = page.locator('.svelte-flow__node[data-id="db"]');
+  await database.click();
+  await expect(database).toHaveClass(/selected/);
+  await expect(actions).toHaveCount(0);
   await node.click();
+  await expect(node).toHaveClass(/selected/);
+  await expect(actions).toHaveCount(0);
+  await node.click({ button: 'right' });
   await expect(actions.getByRole('button', { name: 'Add node' })).toHaveCount(0);
   await expect(actions.getByRole('button', { name: 'Component info' })).toBeFocused();
   await actions.getByRole('button', { name: 'Component info' }).click();
@@ -114,6 +121,8 @@ test('component actions open with a click or keyboard and copy the selected bloc
   await closeInspector(page);
 
   await node.press('Enter');
+  await expect(actions).toHaveCount(0);
+  await node.press('Shift+F10');
   await actions.getByRole('button', { name: 'Copy component' }).click();
   const copy = page.locator('.svelte-flow__node[aria-label="Messenger API (copy)"]');
   await expect(copy).toHaveClass(/selected/);
@@ -125,7 +134,7 @@ test('component actions open with a click or keyboard and copy the selected bloc
   expect(copied.draft?.edges).toEqual(initial.production.edges);
   expect(copied.production).toEqual(initial.production);
 
-  await copy.click();
+  await copy.click({ button: 'right' });
   await actions.getByRole('button', { name: 'Edit configuration' }).click();
   const configuration = page.getByRole('dialog', { name: 'Component configuration' });
   await expect(configuration.getByLabel('Component name')).toHaveValue('Messenger API (copy)');
@@ -138,19 +147,23 @@ test('component actions open with a click or keyboard and copy the selected bloc
   await page.reload();
   await expect(copy).toBeVisible();
 
-  await page.locator('.svelte-flow__node[data-id="traffic"]').click();
+  await page.locator('.svelte-flow__node[data-id="traffic"]').click({ button: 'right' });
   await expect(actions.getByRole('button', { name: 'Component info' })).toBeVisible();
   await expect(actions.getByRole('button', { name: 'Copy component' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(actions).toBeHidden();
 
-  await page.locator('.svelte-flow__pane').click({ button: 'right', position: { x: 30, y: 95 } });
+  const pane = page.locator('.svelte-flow__pane');
   const canvasActions = page.getByRole('group', { name: 'Canvas actions' });
+  await pane.click({ position: { x: 30, y: 95 } });
+  await expect(page.locator('.svelte-flow__node.selected')).toHaveCount(0);
+  await expect(canvasActions).toHaveCount(0);
+  await pane.click({ button: 'right', position: { x: 30, y: 95 } });
   await expect(canvasActions.getByRole('button', { name: 'Add node' })).toBeVisible();
   await expect(canvasActions.getByRole('button', { name: 'Copy component' })).toHaveCount(0);
 });
 
-test('left-click menus create nested groups and edit membership without changing production', async ({ page }) => {
+test('right-click menus create nested groups and edit membership without changing production', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = await create(page, false, false);
   const before = await state(page, id);
@@ -160,13 +173,13 @@ test('left-click menus create nested groups and edit membership without changing
   const groupActions = page.getByRole('group', { name: 'Group actions' });
   const createGroup = page.getByRole('dialog', { name: 'Create group' });
 
-  await node('db').click();
+  await node('db').click({ button: 'right' });
   await componentActions.getByRole('button', { name: 'Create group' }).click();
   await createGroup.getByLabel('Group name').fill('Data');
   await createGroup.getByRole('button', { name: 'Save group' }).click();
   await expect(card('Data')).toBeVisible();
 
-  await page.locator('.svelte-flow__pane').click({ position: { x: 30, y: 95 } });
+  await page.locator('.svelte-flow__pane').click({ button: 'right', position: { x: 30, y: 95 } });
   await page.getByRole('group', { name: 'Canvas actions' }).getByRole('button', { name: 'Create group' }).click();
   await createGroup.getByLabel('Group name').fill('Compute');
   await createGroup.getByRole('checkbox', { name: 'Messenger API' }).check();
@@ -174,6 +187,9 @@ test('left-click menus create nested groups and edit membership without changing
   await expect(card('Compute')).toBeVisible();
 
   await card('Data').locator('.group-header strong').click();
+  await expect(card('Data')).toHaveClass(/selected/);
+  await expect(groupActions).toHaveCount(0);
+  await card('Data').locator('.group-header strong').click({ button: 'right' });
   await groupActions.getByRole('button', { name: 'Create parent group' }).click();
   await createGroup.getByLabel('Group name').fill('Backend');
   await expect(createGroup.getByRole('checkbox', { name: 'Data', exact: true })).toBeChecked();
@@ -185,30 +201,37 @@ test('left-click menus create nested groups and edit membership without changing
     return groups.find((group) => group.name === 'Backend')?.members.map((id) => groups.find((group) => group.id === id)?.name);
   }).toEqual(['Data', 'Compute']);
 
-  await node('edge').click();
+  await node('edge').click({ button: 'right' });
   await componentActions.getByRole('button', { name: 'Add to group' }).click();
   const destination = page.getByRole('dialog', { name: 'Add to group' });
   await choose(destination.getByRole('combobox', { name: 'Destination group' }), { label: 'Compute' });
   await destination.getByRole('button', { name: 'Add to group' }).click();
   const computeMembers = async () => (await state(page, id)).diagram.groups.find((group) => group.name === 'Compute')?.members;
   await expect.poll(computeMembers).toEqual(['api', 'edge']);
-  await node('edge').click();
+  await node('edge').click({ button: 'right' });
   await componentActions.getByRole('button', { name: 'Remove from group' }).click();
   await expect.poll(computeMembers).toEqual(['api']);
   await expect(node('edge')).toBeVisible();
 
-  await card('Compute').press('Enter');
+  await card('Compute').press('Shift+F10');
   await groupActions.getByRole('button', { name: 'Edit group' }).click();
   const edit = page.getByRole('dialog', { name: 'Edit group' });
   await expect(edit.getByRole('checkbox', { name: 'Backend' })).toHaveCount(0);
   await edit.getByRole('button', { name: 'Close dialog' }).click();
 
-  await card('Backend').locator('.group-header strong').click();
+  await card('Backend').locator('.group-header strong').click({ button: 'right' });
   await groupActions.getByRole('button', { name: 'Ungroup' }).click();
   await expect.poll(async () => (await state(page, id)).diagram.groups.map((group) => group.name)).toEqual(['Data', 'Compute']);
   await page.reload();
   await expect(card('Data')).toBeVisible();
   await expect(card('Compute')).toBeVisible();
+  await setMapView(page, 'list');
+  const row = page.getByRole('button', { name: 'Compute Expanded' });
+  await row.click();
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(groupActions).toHaveCount(0);
+  await row.click({ button: 'right' });
+  await expect(groupActions.getByRole('button', { name: 'Edit group' })).toBeVisible();
   const after = await state(page, id);
   expect(after.production).toEqual(before.production);
   expect(after.draft).toBeNull();
@@ -532,15 +555,19 @@ test('E · failed instance reduces availability and redundancy restores service'
 test.describe('Mobile workbench', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: process.env.TEST_BROWSER !== 'firefox' });
 
-  test('tapping a block opens component actions within the viewport', async ({ page }) => {
+  test('tapping a block selects it and its inspector offers component actions', async ({ page }) => {
     await create(page, true, false);
     const node = page.locator('.svelte-flow__node[data-id="api"]');
     await node.tap();
-    const actions = page.getByRole('group', { name: 'Component actions' });
-    await expect(actions.getByRole('button', { name: 'Copy component' })).toBeVisible();
-    await expect(actions).toBeInViewport({ ratio: 1 });
-    await actions.getByRole('button', { name: 'Component info' }).tap();
-    await expect(page.getByRole('dialog', { name: 'Component inspector' }).getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+    await expect(node).toHaveClass(/selected/);
+    await expect(page.getByRole('group', { name: 'Component actions' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Open component', exact: true }).tap();
+    const inspector = page.getByRole('dialog', { name: 'Component inspector' });
+    await expect(inspector.getByRole('heading', { name: 'Messenger API' })).toBeVisible();
+    await expect(inspector.getByRole('button', { name: 'Copy component' })).toBeVisible();
+    await inspector.getByRole('button', { name: 'Create group' }).tap();
+    const group = page.getByRole('dialog', { name: 'Create group' });
+    await expect(group.getByRole('checkbox', { name: 'Messenger API' })).toBeChecked();
   });
 
   test('the minimap stays in the bottom-right corner on narrow screens', async ({ page }) => {
@@ -683,9 +710,10 @@ test.describe('Mobile workbench', () => {
     await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(false);
     await closeInspector(page);
     await page.getByRole('button', { name: 'Data path Expanded' }).tap();
-    const actions = page.getByRole('group', { name: 'Group actions' });
-    await expect(actions.getByRole('button', { name: 'Edit group' })).toBeVisible();
-    await actions.getByRole('button', { name: 'Close menu' }).tap();
+    await expect(page.getByRole('group', { name: 'Group actions' })).toHaveCount(0);
+    const inspector = await openInspector(page, 'Inspect selection');
+    await expect(inspector.getByRole('button', { name: 'Create parent group' })).toBeVisible();
+    await closeInspector(page);
 
     await page.getByRole('button', { name: 'Add node' }).tap();
     await library.getByRole('button', { name: 'Monitoring', exact: true }).tap();

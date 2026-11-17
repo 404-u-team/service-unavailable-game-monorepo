@@ -391,13 +391,17 @@
     const element = event.target;
     if (!(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
     const id = element.dataset.id;
+    if (id && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+      if (allGroups.has(id)) menu(event, { kind: 'group', id });
+      else if (components[id]) menu(event, { kind: 'component', id });
+      return;
+    }
     if ((event.key === 'Enter' || event.key === ' ') && id && (components[id] || allGroups.has(id))) {
       event.preventDefault();
       event.stopPropagation();
-      if (allGroups.has(id)) menu(event, { kind: 'group', id });
+      if (allGroups.has(id)) selectGroup(id);
       else if (id === guideApi && !touchSelect) inspect(id);
-      else if (touchSelect) select(id);
-      else menu(event, { kind: 'component', id });
+      else select(id);
       return;
     }
     if (!delta) return;
@@ -442,7 +446,7 @@
     'minimap.ariaLabel': t('Minimap'),
     'handle.ariaLabel': t('Connection port'),
     'node.a11yDescription.default': t('Use arrow keys to move the selected node.'),
-    'node.a11yDescription.keyboardDisabled': t('Use Enter to open component actions.'),
+    'node.a11yDescription.keyboardDisabled': t('Use Shift+F10 to open the context menu.'),
     'node.a11yDescription.ariaLiveMessage': ({ x, y }: Point) => t('Moved to {0}, {1}.', [Math.round(x), Math.round(y)]),
     'edge.a11yDescription.default': t('Use Enter to select a connection.')
   });
@@ -478,13 +482,11 @@
   onnodeclick={({ node, event }) => {
     if (node.type === 'groupCard') {
       if (event.target instanceof Element && event.target.closest('button')) return;
-      if ('clientX' in event) menu(event, { kind: 'group', id: node.id });
-      else selectGroup(node.id);
+      selectGroup(node.id);
     }
     else if (components[node.id] && !(event.target instanceof Element && event.target.closest('.svelte-flow__handle'))) {
       if ('ctrlKey' in event && (event.ctrlKey || event.metaKey || event.shiftKey)) return;
-      if (touchSelect || !('clientX' in event)) select(node.id);
-      else menu(event, { kind: 'component', id: node.id });
+      select(node.id);
     }
   }}
   onselectionchange={({ nodes: items, edges: chosen }) => untrack(() => {
@@ -503,10 +505,9 @@
   onmoveend={(event, viewport) => {
     if (event || (viewportReady && !transientMove)) saveViewport(viewport);
   }}
-  onpaneclick={({ event }) => {
+  onpaneclick={() => {
     linkFeedback = '';
     clear();
-    if (!touchSelect && !event.shiftKey && !event.ctrlKey && !event.metaKey) menu(event);
   }}
   onnodecontextmenu={({ event, node }) => {
     if (node.type === 'groupCard') menu(event, { kind: 'group', id: node.id });

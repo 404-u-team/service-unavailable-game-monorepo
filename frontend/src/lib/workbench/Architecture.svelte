@@ -179,6 +179,7 @@
     selected = '';
     selectedEdge = '';
     selection = [];
+    context = undefined;
   }
 
   function selectMany(ids: string[]) {
@@ -198,7 +199,7 @@
     groupMembers = current ? [...current.members] : [...members];
     groupParent = current ? diagram.groups.find((item) => item.members.includes(current.id))?.id ?? '' : '';
     closeMenu(true);
-    dialog = 'group';
+    changeDialog('group');
   }
 
   function checkGroupMember(id: string, checked: boolean) {
@@ -461,7 +462,7 @@
     }))) {
       saveDiagram({ ...savedDiagram, positions: { ...savedDiagram.positions, [id]: position } });
       select(id);
-      if (dialog === 'catalog') changeDialog();
+      if (dialog === 'catalog' || dialog === 'inspector') changeDialog();
       await tick();
       placement?.reveal(position);
     }
@@ -571,14 +572,15 @@
   }
 
   async function openMenu(event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component' | 'group'; id: string }) {
+    if (event.type !== 'contextmenu' && !('key' in event && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')))) return;
     event.preventDefault();
     if (subject?.kind === 'component') select(subject.id);
     if (subject?.kind === 'edge') selectEdge(subject.id);
     if (subject?.kind === 'group') chooseGroup(subject.id);
     const origin = event.target instanceof Element ? event.target.closest<HTMLElement>('button, .svelte-flow__node') ?? undefined : undefined;
     const bounds = origin?.getBoundingClientRect();
-    const point = 'clientX' in event && event.detail !== 0 || event.type === 'contextmenu'
-      ? { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY }
+    const point = 'clientX' in event && (event.clientX || event.clientY)
+      ? { x: event.clientX, y: event.clientY }
       : { x: bounds?.left ?? 8, y: bounds?.bottom ?? 8 };
     const kind = subject?.kind ?? 'canvas';
     context = { ...point, kind, origin };
@@ -605,10 +607,6 @@
     }
     if (event.key === 'Delete' && viewingDraft) { event.preventDefault(); void remove(); }
     if (event.key === 'Escape') { if (context) closeMenu(true); else select(''); }
-    if (event.key === 'Enter' && event.target instanceof HTMLElement) {
-      const node = event.target.closest<HTMLElement>('.svelte-flow__node');
-      if (node?.dataset.id) select(node.dataset.id);
-    }
   }
 </script>
 
@@ -682,6 +680,24 @@
         {/each}
       </div>
     </section>
+  {/if}
+{/snippet}
+
+{#snippet componentGroupActions(id: string)}
+  <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog('', [id])}>{t("Create group")}</Button>
+  {#if diagram.groups.some((item) => !item.members.includes(id) && item.members.length < maxGroupMembers)}
+    <Button onclick={() => {
+      memberToAdd = id;
+      destinationGroup = destinationOptions[0]?.id ?? '';
+      closeMenu(true);
+      changeDialog('add-to-group');
+    }}>{t("Add to group")}</Button>
+  {/if}
+  {#if diagram.groups.some((item) => item.members.includes(id))}
+    <Button onclick={() => {
+      changeDiagram({ ...savedDiagram, groups: detachMember(savedDiagram.groups, id) });
+      closeMenu(true);
+    }}>{t("Remove from group")}</Button>
   {/if}
 {/snippet}
 
@@ -851,6 +867,13 @@
       {/if}
       <div class="row spread cost"><span class="eyebrow">{t("Daily cost")}</span><strong>{preciseMoney((viewingDraft ? game.draft_costs : game.component_costs)[active.id] ?? 0)}</strong></div>
       {#if active.kind !== 'source'}<Button variant="primary" block class="large" data-tutorial={active.id === guideApi ? guideTarget.edit : undefined} disabled={busy} onclick={configure}>{t("Edit configuration")} <ArrowRight size={15} /></Button>{/if}
+      <div class="row wrap">
+        {#if active.kind !== 'source'}
+          {@const component = active}
+          <Button disabled={busy} onclick={() => copyComponent(component)}><Copy size={14} />{t('Copy component')}</Button>
+        {/if}
+        {@render componentGroupActions(active.id)}
+      </div>
       {#if Number(activeConfig?.instances) > 1}<Button block aria-pressed={cluster} onclick={() => { cluster = !cluster; changeDialog(); }}>{cluster ? t("Collapse instances") : t("Expand instances")}</Button>{/if}
       {#if viewingDraft}
         <div class="row wrap"><Button onclick={openConnect} disabled={busy || !catalog.connections[active.kind].length}>{t("Connect component")}</Button>
@@ -863,6 +886,7 @@
         'component', 'components', ['компонент', 'компонента', 'компонентов'])}</p>
       <Button onclick={() => toggleGroup(group.id)}>{group.collapsed ? t("Expand group") : t("Collapse group")}</Button>
       <Button onclick={() => groupDialog(group.id)}>{t("Edit group")}</Button>
+      <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog('', [group.id])}>{t("Create parent group")}</Button>
       <Button onclick={() => disband(group.id)}>{t("Ungroup")}</Button>
     </div>
   {:else if edge}
@@ -942,14 +966,18 @@
       {:else}
         <div class="component-list stack">
           {#each visibleGroups as item (item.id)}
-            <Button aria-pressed={groupSelected === item.id} onclick={(event) => openMenu(event, { kind: 'group', id: item.id })}>
+            <Button aria-pressed={groupSelected === item.id} onclick={() => chooseGroup(item.id)}
+              oncontextmenu={(event) => openMenu(event, { kind: 'group', id: item.id })}
+              onkeydown={(event) => openMenu(event, { kind: 'group', id: item.id })}>
               {item.name} <span class="muted">{item.collapsed ? t('Collapsed') : t('Expanded')}</span>
             </Button>
           {/each}
           {#each [...topology.nodes, ...removed] as node (node.id)}
             {@const Icon = componentIcon[node.kind]}
             <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)}
-              onclick={(event) => { if (touchSelect || (tutorialSelect && node.id === guideApi)) select(node.id); else openMenu(event, { kind: 'component', id: node.id }); }}
+              onclick={() => select(node.id)}
+              oncontextmenu={(event) => { if (!removed.includes(node)) openMenu(event, { kind: 'component', id: node.id }); }}
+              onkeydown={(event) => openMenu(event, { kind: 'component', id: node.id })}
               ondblclick={() => inspectComponent(node.id)}>
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
             </Button>
@@ -986,21 +1014,7 @@
         <Button disabled={busy} onclick={() => { closeMenu(true); void configure(); }}><SlidersHorizontal size={14} />{t('Edit configuration')}</Button>
         {#if viewingDraft}<Button variant="danger" disabled={busy} onclick={() => { closeMenu(true); void remove(); }}><Trash2 size={14} />{t('Remove selected')}</Button>{/if}
       {/if}
-      <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog()}>{t("Create group")}</Button>
-      {#if diagram.groups.some((item) => !item.members.includes(component.id) && item.members.length < maxGroupMembers)}
-        <Button onclick={() => {
-          memberToAdd = component.id;
-          destinationGroup = destinationOptions[0]?.id ?? '';
-          closeMenu(true);
-          dialog = 'add-to-group';
-        }}>{t("Add to group")}</Button>
-      {/if}
-      {#if diagram.groups.some((item) => item.members.includes(component.id))}
-        <Button onclick={() => {
-          changeDiagram({ ...savedDiagram, groups: detachMember(savedDiagram.groups, component.id) });
-          closeMenu(true);
-        }}>{t("Remove from group")}</Button>
-      {/if}
+      {@render componentGroupActions(component.id)}
     {:else if context.kind === 'group' && group}
       {@const item = group}
       <Button onclick={() => { closeMenu(true); toggleGroup(item.id); }}>{item.collapsed ? t("Expand group") : t("Collapse group")}</Button>

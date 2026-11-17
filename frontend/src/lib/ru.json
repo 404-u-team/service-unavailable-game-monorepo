@@ -820,7 +820,7 @@
   "Undo draft edit": "Отменить правку черновика",
   "Ungroup": "Разгруппировать",
   "Updated canvas layout": "Обновлена схема",
-  "Use Enter to open component actions.": "Нажмите Enter, чтобы открыть действия с блоком.",
+  "Use Shift+F10 to open the context menu.": "Нажмите Shift+F10, чтобы открыть контекстное меню.",
   "Use Enter to select a connection.": "Нажмите Enter, чтобы выбрать соединение.",
   "Use a limit and burst allowance to protect downstream capacity during demand spikes.": "Настройте лимит и допуск всплеска, чтобы защитить ресурсы при росте спроса.",
   "Use a replica when repeated reads compete with writes on the primary.": "Используйте реплику, когда чтение конкурирует с записью на основной базе.",
