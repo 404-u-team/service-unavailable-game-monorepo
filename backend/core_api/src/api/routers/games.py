@@ -248,7 +248,7 @@ async def list_games(owner_id: Owner, service: Service):
 async def create_game(body: CreateGame, owner_id: Owner, service: Service):
     try:
         return await service.create(owner_id, body)
-    except RuleError as error:
+    except (RuleError, SaveNotFound) as error:
         raise game_errors(error) from error
 
 
@@ -304,6 +304,15 @@ async def get_game(game_id: UUID, owner_id: Owner, service: Service):
         return await service.read(owner_id, game_id, view)
     except SaveNotFound as error:
         raise game_errors(error) from error
+
+
+@router.delete("/{game_id}", status_code=204, response_class=Response)
+async def delete_game(game_id: UUID, owner_id: Owner, service: Service) -> Response:
+    try:
+        await service.delete(owner_id, game_id)
+    except SaveNotFound as error:
+        raise game_errors(error) from error
+    return Response(status_code=204)
 
 
 @router.websocket("/{game_id}/live")

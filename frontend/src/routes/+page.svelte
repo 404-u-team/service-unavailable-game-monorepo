@@ -2,17 +2,17 @@
   import NumberInput from '#lib/controls/NumberInput.svelte';
   import { Button, Checkbox, FilePicker, Form, FormField, Switch, TextInput, Toaster, createToasts } from '@service-unavailable/ui';
   import { apiMessage, locale, message, t } from '#lib/i18n.svelte.ts';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { Activity, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Database, Diamond, Download, GitFork, Radio, Server, Upload } from '@lucide/svelte';
+  import { Activity, ArrowLeft, ArrowRight, BookOpen, ChevronRight, Database, Diamond, Download, GitFork, Radio, Server, Trash2, Upload } from '@lucide/svelte';
   import Language from '#lib/Language.svelte';
   import Brand from '#lib/Brand.svelte';
   import Guide from '#lib/Guide.svelte';
   import DashboardLayouts from '#lib/workbench/DashboardLayouts.svelte';
   import { applyDefaultDashboardLayout } from '#lib/workbench/dashboard-layouts.ts';
   import Modal from '#lib/Modal.svelte';
-  import { createGame, downloadSave, importSave, loadCatalog, previewSave, saves as listSaves } from '#lib/api.ts';
+  import { ApiError, createGame, deleteSave, downloadSave, importSave, loadCatalog, previewSave, saves as listSaves } from '#lib/api.ts';
   import { money, num, preciseMoney } from '#lib/format.ts';
   import type { Catalog, Difficulty, Save, SavePreview, Settings } from '#lib/types.ts';
 
@@ -26,6 +26,10 @@
   let importFile = $state<File>();
   let preview = $state<SavePreview>();
   let importing = $state(false);
+  let saveToDelete = $state<Save>();
+  let deleting = $state(false);
+  let deleteError = $state<unknown>();
+  let savesHeading = $state<HTMLHeadingElement>();
   const toasts = createToasts();
   let name = $state('Pulse Messenger');
   let difficulty = $state<Difficulty>('beginner');
@@ -68,6 +72,28 @@
     try { await downloadSave(id); }
     catch (reason) { transferError = reason; }
     finally { exportId = ''; }
+  }
+
+  function closeDelete() {
+    if (deleting) return;
+    saveToDelete = undefined;
+    deleteError = undefined;
+  }
+
+  async function confirmDelete() {
+    if (!saveToDelete || deleting) return;
+    const { id } = saveToDelete;
+    deleting = true;
+    deleteError = undefined;
+    try { await deleteSave(id); }
+    catch (reason) {
+      deleteError = reason;
+      return;
+    } finally { deleting = false; }
+    saves = saves.filter((save) => save.id !== id);
+    closeDelete();
+    await tick();
+    savesHeading?.focus({ preventScroll: true });
   }
 
   async function selectSaveFile(selected: File) {
@@ -176,7 +202,7 @@
       </Form>
     {:else if current === 'saves'}
       <div class="intro row spread wrap">
-        <div><h1>{t("Saved games")}</h1><p class="muted">{t("Use save files to move a game between browsers or devices.")}</p></div>
+        <div><h1 bind:this={savesHeading} tabindex="-1">{t("Saved games")}</h1><p class="muted">{t("Use save files to move a game between browsers or devices.")}</p></div>
         <FilePicker variant="primary" accept=".json,application/json" label={t('Select a save file')}
           disabled={loading || importing} onchange={selectSaveFile}>
           <Upload size={15} /> {importing && !preview ? t('Checking save…') : t('Import save')}
@@ -195,14 +221,31 @@
                 <ChevronRight size={17} />
               </a>
               <div><span class="mono">{num(save.audience)} {t("users")}</span><small>{money(save.balance)} {t("balance")}</small></div>
-              <Button type="button" disabled={Boolean(exportId)} onclick={() => exportGame(save.id)}
-                aria-label={t('Export {0}', [save.name])}>
-                <Download size={15} /> {exportId === save.id ? t('Exporting…') : t('Export')}
-              </Button>
+              <div class="row wrap save-actions">
+                <Button type="button" disabled={Boolean(exportId)} onclick={() => exportGame(save.id)}
+                  aria-label={t('Export {0}', [save.name])}>
+                  <Download size={15} /> {exportId === save.id ? t('Exporting…') : t('Export')}
+                </Button>
+                <Button type="button" disabled={importing} onclick={() => saveToDelete = save} aria-label={t('Delete {0}', [save.name])}>
+                  <Trash2 size={15} /> {t('Delete')}
+                </Button>
+              </div>
             </div>
           {/each}
         {/if}
       </section>
+      {#if saveToDelete}
+        <Modal title={t('Delete save')} close={closeDelete}>
+          <p class="delete-confirmation">{t('Permanently delete the save “{0}”?', [saveToDelete.name])}</p>
+          {#if deleteError}<p class="notice error" role="alert">{deleteError instanceof ApiError ? apiMessage(deleteError) : t('Could not delete the save. Try again.')}</p>{/if}
+          {#snippet footer()}
+            <div class="row spread wrap">
+              <Button disabled={deleting} onclick={closeDelete}>{t('Cancel')}</Button>
+              <Button variant="danger" disabled={deleting} onclick={confirmDelete}>{deleting ? t('Deleting…') : t('Delete save')}</Button>
+            </div>
+          {/snippet}
+        </Modal>
+      {/if}
       {#if preview}
         <Modal title={t('Import preview')} close={closeImport}>
           <div class="stack">
@@ -330,13 +373,13 @@
   .save-row > a { min-width: 0; overflow-wrap: anywhere; }
   .save-row > a:hover { color: var(--primary); }
   .save-row > a :global(svg) { flex-shrink: 0; margin-left: 8px; }
+  .save-actions { justify-content: flex-end; }
+  .delete-confirmation { overflow-wrap: anywhere; }
   .import-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
   .import-preview dt { color: var(--muted); font-size: 13px; }
   .import-preview dd { overflow-wrap: anywhere; }
   @media (max-width: 530px) {
-    .save-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-    .save-row > a { grid-column: 1 / -1; }
-    .save-row > :global(button) { grid-row: 2; grid-column: 2; }
+    .save-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   }
   fieldset { min-width: 0; display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
   legend { margin-bottom: 6px; }

@@ -45,6 +45,14 @@ class GameRepository:
             elapsed,
         )
 
+    async def delete(self, owner: str, game_id: UUID) -> bool:
+        deleted = await self.pool.fetchval(
+            "DELETE FROM games WHERE owner = $1 AND id = $2 RETURNING id",
+            owner,
+            game_id,
+        )
+        return deleted is not None
+
     @asynccontextmanager
     async def lock(
         self, owner: str, game_id: UUID

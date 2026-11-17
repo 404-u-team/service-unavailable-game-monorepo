@@ -33,6 +33,12 @@ async function throwApiError(response: Response): Promise<never> {
 
 export const saves = () => api<Save[]>('');
 
+export async function deleteSave(id: string): Promise<void> {
+  const response = await fetch(`/api/games/${id}`, { method: 'DELETE', cache: 'no-store' });
+  if (response.ok || (response.status === 404 && response.headers.get('x-game-error-code') === 'save_not_found')) return;
+  await throwApiError(response);
+}
+
 async function uploadSave<T>(file: File, preview: boolean): Promise<T> {
   if (file.size > MAX_SAVE_BYTES) throw new ApiError(413, '', 'save_file_too_large');
   const response = await fetch(`/api/games/import${preview ? '/preview' : ''}`, {

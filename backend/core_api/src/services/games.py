@@ -31,7 +31,7 @@ from src.api.game_schemas import (
     SaveSummary,
     TutorialProgressAction,
 )
-from src.repositories.games import GameRepository
+from src.repositories.games import GameRepository, SaveNotFound
 from src.services.markets import campaign_state, languages, markets
 from src.simulation.catalog import (
     ADVERTISING,
@@ -158,6 +158,10 @@ class GameService:
         game.settings = request.settings
         await self.repository.create(owner, game)
         return await self.read(owner, request.id, view)
+
+    async def delete(self, owner: str, game_id: UUID) -> None:
+        if not await self.repository.delete(owner, game_id):
+            raise SaveNotFound
 
     async def read[T](
         self,

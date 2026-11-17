@@ -2,6 +2,59 @@ import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import type { Game } from '../src/lib/types';
 
+for (const mobile of [false, true]) {
+  test.describe(mobile ? 'touch in Russian' : 'keyboard', () => {
+    test.use({ hasTouch: mobile });
+    test('deleting a save after confirmation', async ({ page }) => {
+      if (mobile) {
+        await page.addInitScript(() => localStorage.setItem('workbench-language', 'ru'));
+        await page.setViewportSize({ width: 320, height: 800 });
+      }
+      const name = 'Old Messenger';
+      const keep = 'Current Messenger';
+      const savedIds: string[] = [];
+      for (const serviceName of [keep, name]) {
+        const id = crypto.randomUUID();
+        expect((await page.request.post('/api/games', { data: { id, name: serviceName } })).status()).toBe(201);
+        savedIds.push(id);
+      }
+      await page.goto('/?view=saves');
+      const remove = page.getByRole('button', { name: mobile ? `Удалить «${name}»` : `Delete ${name}` });
+      const title = mobile ? 'Удалить сохранение' : 'Delete save';
+      const dialog = page.getByRole('dialog', { name: title });
+      const confirm = dialog.getByRole('button', { name: title, exact: true });
+      const open = () => mobile ? remove.tap() : remove.press('Enter');
+      await open();
+      await expect(dialog.getByText(name, { exact: false })).toBeVisible();
+      if (mobile) await dialog.getByRole('button', { name: 'Отмена' }).tap();
+      else await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+      await expect(remove).toBeVisible();
+      if (!mobile) await expect(remove).toBeFocused();
+
+      const path = `/api/games/${savedIds[1]}`;
+      await page.route(path, (route) => route.fulfill({
+        status: 503,
+        headers: { 'x-game-error-code': 'upstream_unavailable' },
+        json: { detail: 'The game server is unavailable. Try again shortly.' }
+      }), { times: 1 });
+      await open();
+      const submit = () => mobile ? confirm.tap() : confirm.press('Enter');
+      await submit();
+      await expect(dialog.getByRole('alert')).toBeVisible();
+      expect((await page.request.get(path)).status()).toBe(200);
+      await submit();
+      await expect(dialog).toBeHidden();
+      await expect(remove).toHaveCount(0);
+      await expect(page.getByRole('heading', { level: 1 })).toBeFocused();
+      await page.reload();
+      await expect(page.getByRole('link', { name: new RegExp(keep) })).toBeVisible();
+      await expect(remove).toHaveCount(0);
+      expect((await page.request.get(path)).status()).toBe(404);
+    });
+  });
+}
+
 for (const locale of ['en', 'ru'] as const) {
   for (const width of [1440, 390]) {
     test(`save file transfer in ${locale} at ${width}px`, async ({ browser, baseURL }) => {

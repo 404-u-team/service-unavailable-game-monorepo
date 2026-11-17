@@ -13,7 +13,6 @@ from uuid import uuid4
 from src.services.games import deploy
 from src.services.save_files import export_file
 from src.simulation.progression import advance
-
 from tests.test_engineering import media_migration
 
 API_URL = os.environ.get("TEST_GAME_API_URL")
@@ -33,6 +32,8 @@ def call(client, path="", method="GET", payload=None):
     )
     try:
         with client.open(request, timeout=8) as response:
+            if response.status == 204:
+                return response.status, None
             return response.status, json.load(response)
     except HTTPError as error:
         with error:
@@ -159,6 +160,24 @@ class GameApiTests(TestCase):
             payload=self.create_body | {"scenario": "social"},
         )
         self.assertEqual(status, 422, error)
+
+    def test_delete_is_scoped_to_the_owner_and_removes_the_save(self):
+        other = session()
+        self.assertEqual(call(other, self.path, "DELETE")[0], 404)
+        self.assertEqual(
+            call(self.client, self.path + "/save", "POST", action())[0], 200
+        )
+        self.assertEqual(call(other, method="POST", payload=self.create_body)[0], 201)
+
+        self.assertEqual(call(self.client, self.path, "DELETE"), (204, None))
+        self.assertEqual(call(self.client)[1], [])
+        self.assertEqual(call(self.client, self.path)[0], 404)
+        self.assertEqual(call(self.client, self.path + "/export")[0], 404)
+        self.assertEqual(
+            call(self.client, self.path + "/save", "POST", action())[0], 404
+        )
+        self.assertEqual(call(self.client, self.path, "DELETE")[0], 404)
+        self.assertEqual(call(other, self.path)[0], 200)
 
     def test_portable_save_transfer_uses_new_owner_and_preserves_state(self):
         draft = call(self.client, self.path + "/draft", "POST", action(revision=0))[1]

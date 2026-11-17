@@ -36,7 +36,7 @@ const proxy: RequestHandler = async ({ request, params, url }) => {
         body.set(chunk, offset);
         offset += chunk.byteLength;
       }
-    } else if (request.method !== 'GET') {
+    } else if (request.body) {
       body = await request.arrayBuffer();
     }
     const upstream = await fetch(target, {
@@ -65,3 +65,4 @@ export const GET = proxy;
 export const POST = proxy;
 export const PUT = proxy;
 export const PATCH = proxy;
+export const DELETE = proxy;
