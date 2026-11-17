@@ -20,7 +20,7 @@
   import { guideArticleHref, resourceArticle } from '../guide';
   import { target as guideTarget, tutorialApi, type TutorialArchitecture, type TutorialEvent } from './onboarding';
   import { findPlacement, type CanvasTools } from './placement';
-  import { groupComponents, nestedGroups, removeGroup } from './groups';
+  import { detachMember, groupComponents, maxDiagramGroups, maxGroupMembers, nestedGroups, putGroup, removeGroup } from './groups';
   import { connectionCategory, connectionError, connectionKind, connectionLabels, connectionStyles, type ConnectionCategory } from './connections';
   import { componentIcon, statusLabel } from '../labels';
   import { ms, num, pct, preciseMoney, rps } from '../format';
@@ -44,7 +44,10 @@
   }
 
   let migrationFocus = $state('');
-  let layout = $state<'canvas' | 'list'>('canvas');
+  let preferredLayout = $state<'canvas' | 'list'>('canvas');
+  let listAtFastSpeed = $state(true);
+  const autoList = $derived(listAtFastSpeed && game.speed >= 20);
+  const layout = $derived(autoList ? 'list' : preferredLayout);
   let showProduction = $state(false);
   let selected = $state('api');
   let selectedEdge = $state('');
@@ -54,10 +57,11 @@
   let alignment = $state(false);
   const mapPreferenceKey = 'workbench-map-preferences';
 
-  function setMapPreferences(hidden: ConnectionCategory[], guides: boolean) {
+  function setMapPreferences(hidden: ConnectionCategory[], guides: boolean, fast = listAtFastSpeed) {
     hiddenConnections = hidden;
     alignment = guides;
-    try { localStorage.setItem(mapPreferenceKey, JSON.stringify({ hidden, guides })); }
+    listAtFastSpeed = fast;
+    try { localStorage.setItem(mapPreferenceKey, JSON.stringify({ hidden, guides, listAtFastSpeed: fast })); }
     catch { /* Preferences still apply for this session. */ }
   }
 
@@ -65,7 +69,7 @@
     setMapPreferences(visible ? hiddenConnections.filter((item) => item !== category) : [...hiddenConnections, category], alignment);
   }
   let inspectorTab = $state<'configuration' | 'metrics'>('configuration');
-  let dialog = $state<'deployed' | 'map-settings' | 'reference' | 'group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect' | 'migration' | 'shards'>();
+  let dialog = $state<'deployed' | 'map-settings' | 'reference' | 'group' | 'add-to-group' | 'catalog' | 'inspector' | 'configuration' | 'review' | 'discard' | 'connect' | 'migration' | 'shards'>();
   let drawer = $state<{ dismiss: (after?: () => void) => void }>();
   let source = $state('');
   let target = $state('');
@@ -79,7 +83,7 @@
   let configurationReturn: 'inspector' | undefined;
   let referenceReturn: 'catalog' | undefined;
   let reviewing = $state(false);
-  let context = $state<{ x: number; y: number; kind: 'canvas' | 'edge' | 'component'; origin?: HTMLElement }>();
+  let context = $state<{ x: number; y: number; kind: 'canvas' | 'edge' | 'component' | 'group'; origin?: HTMLElement }>();
   let contextPanel = $state<HTMLDivElement>();
   let cluster = $state(false);
   let editError = $state('');
@@ -99,7 +103,7 @@
     if (!guideApi) return;
     if (touchSelect) touchSelect = false;
     if (!canvas?.querySelector(`[data-tutorial="${guideTarget.api}"]`)) {
-      layout = 'list';
+      preferredLayout = 'list';
       return;
     }
     placement?.revealNode(guideApi);
@@ -124,14 +128,30 @@
   let selection = $state.raw(['api']);
   let touchSelect = $state(false);
   let helpKind = $state<Kind>('api');
+  let editedGroupId = $state('');
   let groupName = $state('');
   let groupMembers = $state.raw<string[]>([]);
   let groupParent = $state('');
+  let memberToAdd = $state('');
+  let destinationGroup = $state('');
   let replacedEdge = $state('');
   const diagram = $derived(previewRoute
     ? { ...savedDiagram, routes: { ...savedDiagram.routes, [previewRoute.key]: previewRoute.points } }
     : savedDiagram);
   const group = $derived(diagram.groups.find((item) => item.id === groupSelected));
+  const editedGroup = $derived(diagram.groups.find((item) => item.id === editedGroupId));
+  const childCandidates = $derived(diagram.groups.filter((item) => item.id !== editedGroupId
+    && !nestedGroups(item, diagram.groups).has(editedGroupId)));
+  const coveredMembers = $derived(new Set(diagram.groups.filter((item) => groupMembers.includes(item.id))
+    .flatMap((item) => [...nestedGroups(item, diagram.groups), ...groupComponents(item, diagram.groups)])));
+  const parentCandidates = $derived(diagram.groups.filter((item) => item.id !== editedGroupId
+    && !groupMembers.includes(item.id) && !coveredMembers.has(item.id)
+    && item.members.filter((id) => id !== editedGroupId && !groupMembers.includes(id)).length < maxGroupMembers));
+  const canSaveGroup = $derived(Boolean(groupName.trim()) && groupMembers.length <= maxGroupMembers
+    && (editedGroupId ? Boolean(editedGroup) : groupMembers.length > 0 && diagram.groups.length < maxDiagramGroups)
+    && (!groupParent || parentCandidates.some((item) => item.id === groupParent)));
+  const destinationOptions = $derived(diagram.groups.filter((item) =>
+    !item.members.includes(memberToAdd) && item.members.length < maxGroupMembers));
 
   function changeDiagram(next: Diagram) {
     diagramHistory = [...diagramHistory, savedDiagram].slice(-50);
@@ -171,30 +191,40 @@
     }
   }
 
-  function groupDialog(editing: boolean) {
-    groupName = editing ? group?.name ?? '' : '';
-    groupMembers = editing ? [...(group?.members ?? [])] : [...selection];
-    groupParent = editing ? diagram.groups.find((item) => item.members.includes(group?.id ?? ''))?.id ?? '' : '';
+  function groupDialog(editId = '', members = selection) {
+    editedGroupId = editId;
+    const current = editedGroup;
+    groupName = current?.name ?? '';
+    groupMembers = current ? [...current.members] : [...members];
+    groupParent = current ? diagram.groups.find((item) => item.members.includes(current.id))?.id ?? '' : '';
+    closeMenu(true);
     dialog = 'group';
   }
 
+  function checkGroupMember(id: string, checked: boolean) {
+    const child = diagram.groups.find((item) => item.id === id);
+    const covered = child && new Set([...nestedGroups(child, diagram.groups), ...groupComponents(child, diagram.groups)]);
+    groupMembers = checked ? [...groupMembers.filter((member) => !covered?.has(member)), id]
+      : groupMembers.filter((member) => member !== id);
+    if (groupParent && !parentCandidates.some((item) => item.id === groupParent)) groupParent = '';
+  }
+
   function saveGroup() {
-    if (!groupName.trim() || !groupMembers.length) return;
-    const current = group;
-    const members = new Set(groupMembers);
+    if (!canSaveGroup) return;
+    const current = editedGroup;
     const id = current?.id ?? crypto.randomUUID();
-    const groups = savedDiagram.groups.filter((item) => item.id !== id)
-      .map((item) => ({
-        ...item,
-        members: [...item.members.filter((member) => member !== id && !members.has(member)), ...(item.id === groupParent ? [id] : [])]
-      }));
-    groups.push({ id, name: groupName.trim(), members: groupMembers, collapsed: current?.collapsed ?? false });
-    let clean = groups;
-    while (clean.some((item) => item.members.length === 0)) {
-      const empty = new Set(clean.filter((item) => !item.members.length).map((item) => item.id));
-      clean = clean.filter((item) => !empty.has(item.id)).map((item) => ({ ...item, members: item.members.filter((member) => !empty.has(member)) }));
-    }
-    changeDiagram({ ...savedDiagram, groups: clean });
+    const next = { id, name: groupName.trim(), members: groupMembers, collapsed: current?.collapsed ?? false };
+    changeDiagram({ ...savedDiagram, groups: putGroup(savedDiagram.groups, next, groupParent) });
+    chooseGroup(groupMembers.length ? id : '');
+    dialog = undefined;
+  }
+
+  function addToGroup(id: string) {
+    const destination = destinationOptions.find((item) => item.id === id);
+    if (!destination || !topology.nodes.some((node) => node.id === memberToAdd)) return;
+    const parent = diagram.groups.find((item) => item.members.includes(id))?.id ?? '';
+    const next = { ...destination, members: [...destination.members, memberToAdd] };
+    changeDiagram({ ...savedDiagram, groups: putGroup(savedDiagram.groups, next, parent) });
     chooseGroup(id);
     dialog = undefined;
   }
@@ -204,9 +234,10 @@
     chooseGroup(id);
   }
 
-  function disband() {
-    changeDiagram({ ...savedDiagram, groups: removeGroup(groupSelected, savedDiagram.groups) });
+  function disband(id: string) {
+    changeDiagram({ ...savedDiagram, groups: removeGroup(id, savedDiagram.groups) });
     chooseGroup('');
+    closeMenu();
   }
 
   function updateRoute(key: string, points: Point[], save: boolean) {
@@ -299,6 +330,7 @@
       if (Array.isArray(preferences?.hidden)) hiddenConnections = Object.keys(connectionStyles)
         .filter((category): category is ConnectionCategory => preferences.hidden.includes(category));
       alignment = preferences?.guides === true;
+      listAtFastSpeed = preferences?.listAtFastSpeed !== false;
     } catch { /* Keep the default preferences if browser storage is unavailable. */ }
     if (focusId && topology.nodes.some((item) => item.id === focusId)) {
       select(focusId, false);
@@ -538,13 +570,15 @@
     if (restoreFocus) origin?.focus({ preventScroll: true });
   }
 
-  async function openMenu(event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component'; id: string }) {
+  async function openMenu(event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component' | 'group'; id: string }) {
     event.preventDefault();
     if (subject?.kind === 'component') select(subject.id);
     if (subject?.kind === 'edge') selectEdge(subject.id);
-    const origin = event.target instanceof Element ? event.target.closest<HTMLElement>('.svelte-flow__node-workbench') ?? undefined : undefined;
+    if (subject?.kind === 'group') chooseGroup(subject.id);
+    const origin = event.target instanceof Element ? event.target.closest<HTMLElement>('button, .svelte-flow__node') ?? undefined : undefined;
     const bounds = origin?.getBoundingClientRect();
-    const point = 'clientX' in event ? { x: event.clientX, y: event.clientY }
+    const point = 'clientX' in event && event.detail !== 0 || event.type === 'contextmenu'
+      ? { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY }
       : { x: bounds?.left ?? 8, y: bounds?.bottom ?? 8 };
     const kind = subject?.kind ?? 'canvas';
     context = { ...point, kind, origin };
@@ -828,8 +862,8 @@
       <p>{count(groupComponents(group, diagram.groups).filter((id) => topology.nodes.some((node) => node.id === id)).length,
         'component', 'components', ['компонент', 'компонента', 'компонентов'])}</p>
       <Button onclick={() => toggleGroup(group.id)}>{group.collapsed ? t("Expand group") : t("Collapse group")}</Button>
-      <Button onclick={() => groupDialog(true)}>{t("Edit group")}</Button>
-      <Button onclick={disband}>{t("Ungroup")}</Button>
+      <Button onclick={() => groupDialog(group.id)}>{t("Edit group")}</Button>
+      <Button onclick={() => disband(group.id)}>{t("Ungroup")}</Button>
     </div>
   {:else if edge}
     {@const from = topology.nodes.find((node) => node.id === edge?.source)}
@@ -880,7 +914,7 @@
         <div class="row wrap">
           {#if layoutFailed}<Button variant="danger" onclick={retryDiagram}>{t("Retry saving layout")}</Button>{/if}
           <Button aria-pressed={touchSelect} onclick={() => touchSelect = !touchSelect}>{t("Select multiple")}</Button>
-          {#if selection.length > 1}<Button onclick={() => { groupSelected = ''; groupDialog(false); }}>{t("Create group")}</Button>{/if}
+          {#if selection.length > 1}<Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog()}>{t("Create group")}</Button>{/if}
           {#if layout === 'canvas'}
             <Button iconOnly aria-label={t('Fit view')} title={t('Fit view')} disabled={!placement} onclick={() => placement?.fit()}><Scan size={16} /></Button>
           {/if}
@@ -908,13 +942,15 @@
       {:else}
         <div class="component-list stack">
           {#each visibleGroups as item (item.id)}
-            <Button aria-pressed={groupSelected === item.id} onclick={() => chooseGroup(item.id)}>
+            <Button aria-pressed={groupSelected === item.id} onclick={(event) => openMenu(event, { kind: 'group', id: item.id })}>
               {item.name} <span class="muted">{item.collapsed ? t('Collapsed') : t('Expanded')}</span>
             </Button>
           {/each}
           {#each [...topology.nodes, ...removed] as node (node.id)}
             {@const Icon = componentIcon[node.kind]}
-            <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)} onclick={() => select(node.id)} ondblclick={() => inspectComponent(node.id)}>
+            <Button class="row spread" data-tutorial={node.id === guideApi ? guideTarget.api : undefined} aria-pressed={selection.includes(node.id)} disabled={removed.includes(node)}
+              onclick={(event) => { if (touchSelect || (tutorialSelect && node.id === guideApi)) select(node.id); else openMenu(event, { kind: 'component', id: node.id }); }}
+              ondblclick={() => inspectComponent(node.id)}>
               <span class="row"><Icon size={17} /> {t(node.name)}</span><span class="muted">{removed.includes(node) ? t("Pending removal") : t(catalog.components[node.kind].name)}</span>
             </Button>
           {/each}
@@ -940,7 +976,7 @@
 </section>
 
 {#if context}
-  <div class="context panel stack" role="group" aria-label={t(context.kind === 'component' ? 'Component actions' : context.kind === 'edge' ? 'Connection actions' : 'Canvas actions')}
+  <div class="context panel stack" role="group" aria-label={t(context.kind === 'component' ? 'Component actions' : context.kind === 'edge' ? 'Connection actions' : context.kind === 'group' ? 'Group actions' : 'Canvas actions')}
     bind:this={contextPanel} style:left={`${context.x}px`} style:top={`${context.y}px`}>
     {#if context.kind === 'component' && active}
       {@const component = active}
@@ -950,12 +986,34 @@
         <Button disabled={busy} onclick={() => { closeMenu(true); void configure(); }}><SlidersHorizontal size={14} />{t('Edit configuration')}</Button>
         {#if viewingDraft}<Button variant="danger" disabled={busy} onclick={() => { closeMenu(true); void remove(); }}><Trash2 size={14} />{t('Remove selected')}</Button>{/if}
       {/if}
+      <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog()}>{t("Create group")}</Button>
+      {#if diagram.groups.some((item) => !item.members.includes(component.id) && item.members.length < maxGroupMembers)}
+        <Button onclick={() => {
+          memberToAdd = component.id;
+          destinationGroup = destinationOptions[0]?.id ?? '';
+          closeMenu(true);
+          dialog = 'add-to-group';
+        }}>{t("Add to group")}</Button>
+      {/if}
+      {#if diagram.groups.some((item) => item.members.includes(component.id))}
+        <Button onclick={() => {
+          changeDiagram({ ...savedDiagram, groups: detachMember(savedDiagram.groups, component.id) });
+          closeMenu(true);
+        }}>{t("Remove from group")}</Button>
+      {/if}
+    {:else if context.kind === 'group' && group}
+      {@const item = group}
+      <Button onclick={() => { closeMenu(true); toggleGroup(item.id); }}>{item.collapsed ? t("Expand group") : t("Collapse group")}</Button>
+      <Button onclick={() => groupDialog(item.id)}>{t("Edit group")}</Button>
+      <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog('', [item.id])}>{t("Create parent group")}</Button>
+      <Button variant="danger" onclick={() => disband(item.id)}>{t("Ungroup")}</Button>
     {:else if context.kind === 'edge' && edge}
       <Button onclick={() => { addWaypoint(); context = undefined; }}>{t("Add waypoint")}</Button>
       {#if diagram.routes[selectedEdge]?.length}<Button onclick={() => { updateRoute(selectedEdge, [], true); context = undefined; }}>{t("Reset route")}</Button>{/if}
       {#if viewingDraft}<Button variant="danger" disabled={busy} onclick={() => { closeMenu(); void remove(); }}>{t("Remove selected")}</Button>{/if}
     {:else if context.kind === 'canvas'}
       <Button disabled={busy} onclick={() => { search = ''; dialog = 'catalog'; closeMenu(); }}><Plus size={14} />{t("Add node")}</Button>
+      <Button disabled={diagram.groups.length >= maxDiagramGroups} onclick={() => groupDialog('', [])}>{t("Create group")}</Button>
     {/if}
     <Button variant="ghost" onclick={() => closeMenu(true)}><X size={14} /> {t("Close menu")}</Button>
   </div>
@@ -971,9 +1029,15 @@
     <div class="map-settings stack">
       <section class="stack">
         <h3>{t('Map view')}</h3>
-        <Button block data-tutorial={guideTarget.list} onclick={() => { layout = layout === 'canvas' ? 'list' : 'canvas'; changeDialog(); }}>
+        <Button block data-tutorial={guideTarget.list} onclick={() => {
+          preferredLayout = layout === 'canvas' ? 'list' : 'canvas';
+          if (autoList) setMapPreferences(hiddenConnections, alignment, false);
+          changeDialog();
+        }}>
           {#if layout === 'canvas'}<List size={16} />{t('Show component list')}{:else}<MousePointer2 size={16} />{t('Show topology canvas')}{/if}
         </Button>
+        <Switch label={t('Show component list at 20× and 50×')} checked={listAtFastSpeed}
+          onchange={({ currentTarget }) => setMapPreferences(hiddenConnections, alignment, currentTarget.checked)} />
         <Switch label={t('Alignment guides')} checked={alignment}
           onchange={({ currentTarget }) => setMapPreferences(hiddenConnections, currentTarget.checked)} />
         <small>{t('Snap cards to the edges and centers of nearby components while dragging.')}</small>
@@ -1005,20 +1069,37 @@
     {@render connectionReference()}
   </Modal>
 {:else if dialog === 'group'}
-  <Modal title={group ? t("Edit group") : t("Create group")} close={() => dialog = undefined}>
+  <Modal title={editedGroupId ? t("Edit group") : t("Create group")} close={() => dialog = undefined}>
     <Form id="diagram-group" class="stack" onsubmit={(event) => { event.preventDefault(); saveGroup(); }}>
       <label class="field"><span>{t("Group name")}</span><TextInput bind:value={groupName} maxlength={60} required /></label>
-      {#if diagram.groups.length > (group ? 1 : 0)}
+      {#if parentCandidates.length}
         <div class="field"><span>{t('Parent group')}</span><Select label={t('Parent group')} bind:value={groupParent}
-          options={[{ value: '', label: t('None') }, ...diagram.groups.filter((item) => item.id !== group?.id && !(group && nestedGroups(group, diagram.groups).has(item.id))).map((item) => ({ value: item.id, label: item.name }))]} /></div>
+          options={[{ value: '', label: t('None') }, ...parentCandidates.map((item) => ({ value: item.id, label: item.name }))]} /></div>
+      {/if}
+      {#if childCandidates.length}
+        <fieldset class="stack"><legend>{t("Subgroups")}</legend>
+          {#each childCandidates as item (item.id)}
+            <Checkbox label={item.name} disabled={coveredMembers.has(item.id)} checked={coveredMembers.has(item.id) || groupMembers.includes(item.id)}
+              onchange={({ currentTarget }) => checkGroupMember(item.id, currentTarget.checked)} />
+          {/each}
+        </fieldset>
       {/if}
       <fieldset class="stack"><legend>{t("Components")}</legend>
         {#each topology.nodes as node (node.id)}
-          <Checkbox label={t(node.name)} checked={groupMembers.includes(node.id)} onchange={({ currentTarget }) => groupMembers = currentTarget.checked ? [...groupMembers, node.id] : groupMembers.filter((id) => id !== node.id)} />
+          <Checkbox label={t(node.name)} disabled={coveredMembers.has(node.id)} checked={coveredMembers.has(node.id) || groupMembers.includes(node.id)}
+            onchange={({ currentTarget }) => checkGroupMember(node.id, currentTarget.checked)} />
         {/each}
       </fieldset>
+      {#if editedGroupId && !groupMembers.length}<p>{t("Saving an empty group removes it.")}</p>{/if}
     </Form>
-    {#snippet footer()}<Button variant="primary" form="diagram-group" type="submit" disabled={!groupMembers.length}>{t("Save group")}</Button>{/snippet}
+    {#snippet footer()}<Button variant="primary" form="diagram-group" type="submit" disabled={!canSaveGroup}>{t("Save group")}</Button>{/snippet}
+  </Modal>
+{:else if dialog === 'add-to-group'}
+  <Modal title={t("Add to group")} close={() => dialog = undefined}>
+    <Select label={t('Destination group')} bind:value={destinationGroup}
+      options={destinationOptions.map((item) => ({ value: item.id, label: item.name }))} />
+    {#snippet footer()}<Button variant="primary" disabled={!destinationOptions.some((item) => item.id === destinationGroup)}
+      onclick={() => addToGroup(destinationGroup)}>{t("Add to group")}</Button>{/snippet}
   </Modal>
 {:else if dialog === 'catalog'}
   <Modal bind:this={drawer} title={t("Component library")} side="start" subtitle={t("Add a component to the architecture draft.")} close={() => dialog = undefined}>

@@ -28,7 +28,7 @@
     selectMany: (ids: string[]) => void; connect: (edge: Connection, replaces?: string) => void;
     move: (positions: Record<string, Point>) => void; toggleGroup: (id: string) => void;
     updateRoute: (key: string, waypoints: Point[], save: boolean) => void;
-    menu: (event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component'; id: string }) => void;
+    menu: (event: MouseEvent | KeyboardEvent, subject?: { kind: 'edge' | 'component' | 'group'; id: string }) => void;
     clear: () => void; cluster: boolean; container: HTMLElement;
     bindPlacement: (tools?: CanvasTools) => void;
     saveViewport: (viewport: Viewport) => void;
@@ -391,10 +391,11 @@
     const element = event.target;
     if (!(element instanceof HTMLElement) || !element.classList.contains('svelte-flow__node')) return;
     const id = element.dataset.id;
-    if ((event.key === 'Enter' || event.key === ' ') && id && components[id]) {
+    if ((event.key === 'Enter' || event.key === ' ') && id && (components[id] || allGroups.has(id))) {
       event.preventDefault();
       event.stopPropagation();
-      if (id === guideApi && !touchSelect) inspect(id);
+      if (allGroups.has(id)) menu(event, { kind: 'group', id });
+      else if (id === guideApi && !touchSelect) inspect(id);
       else if (touchSelect) select(id);
       else menu(event, { kind: 'component', id });
       return;
@@ -475,7 +476,11 @@
   onclickconnectstart={startConnection} onclickconnectend={finishConnection}
   onreconnectend={() => { linkStart = undefined; reconnectKey = ''; }}
   onnodeclick={({ node, event }) => {
-    if (node.type === 'groupCard') selectGroup(node.id);
+    if (node.type === 'groupCard') {
+      if (event.target instanceof Element && event.target.closest('button')) return;
+      if ('clientX' in event) menu(event, { kind: 'group', id: node.id });
+      else selectGroup(node.id);
+    }
     else if (components[node.id] && !(event.target instanceof Element && event.target.closest('.svelte-flow__handle'))) {
       if ('ctrlKey' in event && (event.ctrlKey || event.metaKey || event.shiftKey)) return;
       if (touchSelect || !('clientX' in event)) select(node.id);
@@ -498,9 +503,13 @@
   onmoveend={(event, viewport) => {
     if (event || (viewportReady && !transientMove)) saveViewport(viewport);
   }}
-  onpaneclick={() => { linkFeedback = ''; clear(); }}
+  onpaneclick={({ event }) => {
+    linkFeedback = '';
+    clear();
+    if (!touchSelect && !event.shiftKey && !event.ctrlKey && !event.metaKey) menu(event);
+  }}
   onnodecontextmenu={({ event, node }) => {
-    if (node.type === 'groupCard') { selectGroup(node.id); menu(event); }
+    if (node.type === 'groupCard') menu(event, { kind: 'group', id: node.id });
     else if (components[node.id]) menu(event, { kind: 'component', id: node.id });
   }}
   onpanecontextmenu={({ event }) => menu(event)}

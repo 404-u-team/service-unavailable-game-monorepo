@@ -150,6 +150,105 @@ test('component actions open with a click or keyboard and copy the selected bloc
   await expect(canvasActions.getByRole('button', { name: 'Copy component' })).toHaveCount(0);
 });
 
+test('left-click menus create nested groups and edit membership without changing production', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await create(page, false, false);
+  const before = await state(page, id);
+  const node = (id: string) => page.locator(`.svelte-flow__node-workbench[data-id="${id}"]`);
+  const card = (name: string) => page.locator(`.svelte-flow__node-groupCard[aria-label="${name}"]`);
+  const componentActions = page.getByRole('group', { name: 'Component actions' });
+  const groupActions = page.getByRole('group', { name: 'Group actions' });
+  const createGroup = page.getByRole('dialog', { name: 'Create group' });
+
+  await node('db').click();
+  await componentActions.getByRole('button', { name: 'Create group' }).click();
+  await createGroup.getByLabel('Group name').fill('Data');
+  await createGroup.getByRole('button', { name: 'Save group' }).click();
+  await expect(card('Data')).toBeVisible();
+
+  await page.locator('.svelte-flow__pane').click({ position: { x: 30, y: 95 } });
+  await page.getByRole('group', { name: 'Canvas actions' }).getByRole('button', { name: 'Create group' }).click();
+  await createGroup.getByLabel('Group name').fill('Compute');
+  await createGroup.getByRole('checkbox', { name: 'Messenger API' }).check();
+  await createGroup.getByRole('button', { name: 'Save group' }).click();
+  await expect(card('Compute')).toBeVisible();
+
+  await card('Data').locator('.group-header strong').click();
+  await groupActions.getByRole('button', { name: 'Create parent group' }).click();
+  await createGroup.getByLabel('Group name').fill('Backend');
+  await expect(createGroup.getByRole('checkbox', { name: 'Data', exact: true })).toBeChecked();
+  await createGroup.getByRole('checkbox', { name: 'Compute' }).check();
+  await expect(createGroup.getByRole('checkbox', { name: 'Messenger API' })).toBeDisabled();
+  await createGroup.getByRole('button', { name: 'Save group' }).click();
+  await expect.poll(async () => {
+    const groups = (await state(page, id)).diagram.groups;
+    return groups.find((group) => group.name === 'Backend')?.members.map((id) => groups.find((group) => group.id === id)?.name);
+  }).toEqual(['Data', 'Compute']);
+
+  await node('edge').click();
+  await componentActions.getByRole('button', { name: 'Add to group' }).click();
+  const destination = page.getByRole('dialog', { name: 'Add to group' });
+  await choose(destination.getByRole('combobox', { name: 'Destination group' }), { label: 'Compute' });
+  await destination.getByRole('button', { name: 'Add to group' }).click();
+  const computeMembers = async () => (await state(page, id)).diagram.groups.find((group) => group.name === 'Compute')?.members;
+  await expect.poll(computeMembers).toEqual(['api', 'edge']);
+  await node('edge').click();
+  await componentActions.getByRole('button', { name: 'Remove from group' }).click();
+  await expect.poll(computeMembers).toEqual(['api']);
+  await expect(node('edge')).toBeVisible();
+
+  await card('Compute').press('Enter');
+  await groupActions.getByRole('button', { name: 'Edit group' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit group' });
+  await expect(edit.getByRole('checkbox', { name: 'Backend' })).toHaveCount(0);
+  await edit.getByRole('button', { name: 'Close dialog' }).click();
+
+  await card('Backend').locator('.group-header strong').click();
+  await groupActions.getByRole('button', { name: 'Ungroup' }).click();
+  await expect.poll(async () => (await state(page, id)).diagram.groups.map((group) => group.name)).toEqual(['Data', 'Compute']);
+  await page.reload();
+  await expect(card('Data')).toBeVisible();
+  await expect(card('Compute')).toBeVisible();
+  const after = await state(page, id);
+  expect(after.production).toEqual(before.production);
+  expect(after.draft).toBeNull();
+  expect(after.revision).toBe(before.revision);
+});
+
+test('fast clock shortcuts suspend canvas rendering and allow an override on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  const id = await create(page, false, false);
+  const canvas = page.locator('.svelte-flow');
+  const speeds = page.getByRole('group', { name: 'Game speed' });
+  const speed = (value: number) => speeds.getByRole('button', { name: `Fast speed (${value}×)` });
+  await expect(canvas).toBeVisible();
+  await speed(10).click();
+  await expect(speed(10)).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toBeVisible();
+  await page.keyboard.press('5');
+  await expect(speed(20)).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Messenger API API server' })).toBeVisible();
+  await speed(50).click();
+  await expect(speed(50)).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toHaveCount(0);
+  await expect.poll(async () => (await state(page, id)).speed).toBe(50);
+  expect((await state(page, id)).tick).toBeGreaterThan(0);
+  expect(await speed(50).evaluate((button) => button.getBoundingClientRect().right)).toBeLessThan(320);
+
+  await setMapView(page, 'canvas');
+  await expect(canvas).toBeVisible();
+  await page.reload();
+  await expect(speed(50)).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toBeVisible();
+  const settings = await mapSettings(page);
+  await settings.getByRole('switch', { name: 'Show component list at 20× and 50×' }).click();
+  await expect(canvas).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Close dialog' }).click();
+  await pause(page);
+  await expect(canvas).toBeVisible();
+});
+
 test('the connection line and its rate label show the same request breakdown', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await create(page, false, false);
@@ -583,6 +682,10 @@ test.describe('Mobile workbench', () => {
     await page.getByRole('button', { name: 'Expand group', exact: true }).tap();
     await expect.poll(async () => (await state(page, id)).diagram.groups[0]?.collapsed).toBe(false);
     await closeInspector(page);
+    await page.getByRole('button', { name: 'Data path Expanded' }).tap();
+    const actions = page.getByRole('group', { name: 'Group actions' });
+    await expect(actions.getByRole('button', { name: 'Edit group' })).toBeVisible();
+    await actions.getByRole('button', { name: 'Close menu' }).tap();
 
     await page.getByRole('button', { name: 'Add node' }).tap();
     await library.getByRole('button', { name: 'Monitoring', exact: true }).tap();

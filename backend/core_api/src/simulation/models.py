@@ -18,7 +18,7 @@ Kind = Literal[
     "worker",
     "monitor",
 ]
-Speed = Literal[0, 1, 3, 5]
+Speed = Literal[0, 1, 3, 5, 10, 20, 50]
 Difficulty = Literal["beginner", "standard", "expert"]
 NodeId = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]{1,48}$")]
 Name = Annotated[

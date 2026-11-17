@@ -2,7 +2,12 @@ from datetime import UTC, datetime, timedelta
 from unittest import TestCase
 from uuid import uuid4
 
-from src.api.game_schemas import OnboardingAction, PatchDiagram, TutorialProgressAction
+from src.api.game_schemas import (
+    ClockAction,
+    OnboardingAction,
+    PatchDiagram,
+    TutorialProgressAction,
+)
 from src.services.games import (
     RevisionConflict,
     advance_clock,
@@ -53,22 +58,29 @@ class WorkbenchFeatures(TestCase):
         self.assertEqual(game.diagram.positions["api"].y, 400)
         self.assertEqual(game.production, baseline)
 
-    def test_five_times_clock_and_live_history_patch(self):
-        game = fixture()
-        anchor = datetime.now(UTC)
-        first, raw = live_frame(view(game, anchor), None, 1)
-        game.speed = 5
-        now = anchor + timedelta(seconds=2)
-        self.assertEqual(advance_clock(game, anchor, now)[1], 5)
-        delta, updated = live_frame(view(game, now), raw, 2)
-        self.assertEqual(first["type"], "snapshot")
-        self.assertEqual(delta["changes"]["tick"], 5)
-        self.assertNotIn("production", delta["changes"])
-        for name, section in (("business_history", None), ("finance", "economy")):
-            before = raw[section]["history"] if section else raw[name]
-            after = updated[section]["history"] if section else updated[name]
-            patch = delta["histories"][name]
-            self.assertEqual(before[patch["drop"] :] + patch["append"], after)
+    def test_fast_clock_and_live_history_patch(self):
+        for speed in (5, 10, 20, 50):
+            with self.subTest(speed=speed):
+                game = fixture()
+                anchor = datetime.now(UTC)
+                first, raw = live_frame(view(game, anchor), None, 1)
+                game.speed = ClockAction(request_id=uuid4(), speed=speed).speed
+                game = type(game).model_validate_json(game.model_dump_json())
+                now = anchor + timedelta(seconds=2)
+                self.assertEqual(advance_clock(game, anchor, now), (now, speed))
+                delta, updated = live_frame(view(game, now), raw, 2)
+                self.assertEqual(first["type"], "snapshot")
+                self.assertEqual(delta["changes"]["tick"], speed)
+                self.assertEqual(delta["changes"]["speed"], speed)
+                self.assertNotIn("production", delta["changes"])
+                for name, section in (
+                    ("business_history", None),
+                    ("finance", "economy"),
+                ):
+                    before = raw[section]["history"] if section else raw[name]
+                    after = updated[section]["history"] if section else updated[name]
+                    patch = delta["histories"][name]
+                    self.assertEqual(before[patch["drop"] :] + patch["append"], after)
 
     def test_replica_must_use_same_primary_as_its_readers(self):
         game = fixture()

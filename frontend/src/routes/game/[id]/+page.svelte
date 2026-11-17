@@ -117,7 +117,10 @@
     { value: 0, label: 'Pause simulation', shortcut: 'Space' },
     { value: 1, label: 'Run simulation at normal speed', shortcut: '1' },
     { value: 3, label: 'Fast speed (3×)', shortcut: '2' },
-    { value: 5, label: 'Fast speed (5×)', shortcut: '3' }
+    { value: 5, label: 'Fast speed (5×)', shortcut: '3' },
+    { value: 10, label: 'Fast speed (10×)', shortcut: '4' },
+    { value: 20, label: 'Fast speed (20×)', shortcut: '5' },
+    { value: 50, label: 'Fast speed (50×)', shortcut: '6' }
   ];
 
   onMount(() => {
@@ -426,13 +429,17 @@
   .fallback { grid-column: 1 / -1; padding: 32px; max-width: 680px; }
 
   .game > :global(.mobile-navigation) { display: none; }
+  @media (min-width: 851px) and (max-width: 1220px), (max-width: 440px) {
+    .speed-group { display: grid; grid-template-columns: repeat(4, 1fr); }
+    .speed-group :global(.sui-button) { min-height: 28px; }
+  }
   @media (max-width: 1120px) {
     .topbar { grid-template-columns: minmax(205px, 1fr) minmax(290px, 1.3fr) auto; padding-inline: 12px; }
 
     .controls :global(.online) { display: none; }
   }
   @media (max-width: 850px) {
-    .game { grid-template: 66px 1fr / minmax(0, 1fr); padding-bottom: calc(69px + env(safe-area-inset-bottom)); }
+    .game { grid-template: minmax(66px, auto) 1fr / minmax(0, 1fr); padding-bottom: calc(69px + env(safe-area-inset-bottom)); }
     .topbar { display: flex; justify-content: space-between; padding: 0 16px; min-height: 66px; }
     .topbar :global(.brand) { font-size: 14px; }
     .game :global(.primary-nav), .game :global(.rail), .time { display: none; }
@@ -448,5 +455,8 @@
       padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--background); border-top: 1px solid var(--border);
     }
 
+  }
+  @media (max-width: 440px) {
+    .topbar { min-height: 76px; }
   }
 </style>

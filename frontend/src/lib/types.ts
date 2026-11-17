@@ -1,7 +1,8 @@
 import type { TutorialProgress } from './workbench/onboarding';
 
 export type Kind = 'source' | 'balancer' | 'api' | 'database' | 'object_storage' | 'shard_router' | 'replica' | 'cache' | 'limiter' | 'queue' | 'worker' | 'monitor';
-export type Speed = 0 | 1 | 3 | 5;
+export const speeds = [0, 1, 3, 5, 10, 20, 50] as const;
+export type Speed = typeof speeds[number];
 export const difficulties = ['beginner', 'standard', 'expert'] as const;
 export type Difficulty = typeof difficulties[number];
 export type Point = { x: number; y: number };

@@ -27,7 +27,7 @@
   import { api } from '../api';
   import { more, sections, statusLabel, type Section } from '../labels';
   import { clock, duration, money, ms, num, pct, preciseMoney, rps, when } from '../format';
-  import type { Catalog, Feature, Game, Forecast, Incident } from '../types';
+  import { speeds, type Catalog, type Feature, type Game, type Forecast, type Incident } from '../types';
 
   let { section, game, catalog, link, act, busy, error, tutorialAction, toasts }: {
     section: Section; game: Game; catalog: Catalog; link: (section: Section, focus?: string) => string;
@@ -642,15 +642,15 @@
           <Language />
           <div><h2>{t("Game preferences")}</h2><p class="muted">{t("Settings are saved automatically.")}</p></div>
           <div><p class="eyebrow">{t("Game speed")}</p><div class="row wrap option-row">
-            {#each [{ speed: 0, label: 'Paused' }, { speed: 1, label: '1×' }, { speed: 3, label: '3×' }] as option}
-              <Button aria-pressed={game.speed === option.speed} disabled={busy} onclick={() => act('/clock', { speed: option.speed }, 'PUT')}>{t(option.label)}</Button>
+            {#each speeds as speed}
+              <Button aria-pressed={game.speed === speed} disabled={busy} onclick={() => act('/clock', { speed }, 'PUT')}>{speed ? t('{0}×', [speed]) : t('Paused')}</Button>
             {/each}
           </div></div>
           <Switch label={t("Show onboarding prompts")} description={t("Display the current tutorial step in the workbench.")} checked={game.settings.show_tutorial} disabled={busy} onchange={({ currentTarget }) => act('/settings', { settings: { ...game.settings, show_tutorial: currentTarget.checked } }, 'PUT')} />
           <TutorialControls {game} {busy} change={tutorialAction} />
           <div class="stack"><h3>{t('Keyboard shortcuts')}</h3>
             <dl class="breakdown">
-              {#each [['Ctrl/Cmd + S', 'Save game'], ['Space', 'Pause or resume'], ['1 / 2 / 3', 'Set speed to 1× / 3× / 5×'], ['Escape', 'Close a dialog or clear selection']] as [key, label]}
+              {#each [['Ctrl/Cmd + S', 'Save game'], ['Space', 'Pause or resume'], ['1–6', 'Set speed to 1× / 3× / 5× / 10× / 20× / 50×'], ['Escape', 'Close a dialog or clear selection']] as [key, label]}
                 <div><dt>{t(label)}</dt><dd><kbd>{t(key)}</kbd></dd></div>
               {/each}
             </dl>

@@ -5,6 +5,7 @@ import type { Diagram, Game } from '../src/lib/types';
 import { alignCard } from '../src/lib/workbench/alignment';
 import { connectionPorts } from '../src/lib/workbench/routing';
 import { diagramPatch, mergeLayout } from '../src/lib/workbench/diagram';
+import { detachMember, groupComponents, putGroup, removeGroup } from '../src/lib/workbench/groups';
 import { findPlacement } from '../src/lib/workbench/placement';
 import { spotlightBounds } from '../src/lib/workbench/spotlight';
 
@@ -27,6 +28,20 @@ test('layout diffs contain only local changes, including undo and viewport chang
   expect(diagramPatch(base, next)).toEqual({ positions: { api: null }, routes: {}, viewports: next.viewports! });
   expect(mergeLayout({ ...base, positions: { ...base.positions, db: { x: 50, y: 30 } } }, base, next).positions)
     .toEqual({ db: { x: 50, y: 30 } });
+});
+
+test('moving items and ungrouping preserve child groups and remove empty groups', () => {
+  const left = { id: 'left', name: 'Left', members: ['api'], collapsed: true };
+  const right = { id: 'right', name: 'Right', members: ['db'], collapsed: false };
+  const inner = { id: 'inner', name: 'Inner', members: ['left', 'right'], collapsed: false };
+  const outer = { id: 'outer', name: 'Outer', members: ['inner'], collapsed: false };
+  const grouped = putGroup([left, right, outer], inner, 'outer');
+  expect(groupComponents(outer, grouped)).toEqual(['api', 'db']);
+  expect(removeGroup('inner', grouped)).toEqual([left, right, { ...outer, members: ['left', 'right'] }]);
+  const moved = putGroup(grouped, { ...right, members: ['db', 'api'] }, 'inner');
+  expect(moved).toEqual([{ ...right, members: ['db', 'api'] }, outer, { ...inner, members: ['right'] }]);
+  expect(detachMember(moved, 'api')[0]).toEqual(right);
+  expect(detachMember(detachMember(moved, 'api'), 'db')).toEqual([]);
 });
 
 test('live deltas preserve topology identity, append history, and reject gaps', () => {

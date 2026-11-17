@@ -1,5 +1,8 @@
 import type { DiagramGroup } from '../types';
 
+export const maxDiagramGroups = 80;
+export const maxGroupMembers = 80;
+
 export function groupComponents(group: DiagramGroup, groups: DiagramGroup[]): string[] {
   const byId = new Map(groups.map((item) => [item.id, item]));
   const ids = [...group.members];
@@ -33,6 +36,37 @@ export function removeGroup(id: string, groups: DiagramGroup[]): DiagramGroup[] 
   if (!group) return groups;
   return groups.filter((item) => item.id !== id)
     .map((item) => item.members.includes(id)
-      ? { ...item, members: item.members.flatMap((member) => member === id ? group.members : [member]) }
+      ? { ...item, members: item.members.flatMap((member) => member === id
+        ? group.members.slice(0, maxGroupMembers - item.members.length + 1) : [member]) }
       : item);
+}
+
+export function putGroup(groups: DiagramGroup[], group: DiagramGroup, parent: string): DiagramGroup[] {
+  const members = new Set(group.members);
+  const next = groups.map((item) => item.id === group.id ? group : {
+    ...item,
+    members: [
+      ...item.members.filter((id) => id !== group.id && !members.has(id)),
+      ...(item.id === parent ? [group.id] : [])
+    ]
+  });
+  if (!groups.some((item) => item.id === group.id)) next.push(group);
+  return dropEmptyGroups(next);
+}
+
+export function detachMember(groups: DiagramGroup[], id: string): DiagramGroup[] {
+  return dropEmptyGroups(groups.map((item) => item.members.includes(id)
+    ? { ...item, members: item.members.filter((member) => member !== id) }
+    : item));
+}
+
+function dropEmptyGroups(groups: DiagramGroup[]): DiagramGroup[] {
+  let remaining = groups;
+  let empty = new Set(remaining.filter((item) => !item.members.length).map((item) => item.id));
+  while (empty.size) {
+    remaining = remaining.filter((item) => !empty.has(item.id))
+      .map((item) => ({ ...item, members: item.members.filter((id) => !empty.has(id)) }));
+    empty = new Set(remaining.filter((item) => !item.members.length).map((item) => item.id));
+  }
+  return remaining;
 }
